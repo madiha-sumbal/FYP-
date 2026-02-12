@@ -41,7 +41,7 @@ const COLORS = {
 };
 
 // API Base URL - Update this to your server IP
-const API_BASE_URL = 'http://192.168.10.6:3000/api';
+const API_BASE_URL = 'http://192.168.10.8:3000/api';
 
 // ==================== API SERVICE ====================
 const apiService = {

@@ -12,7 +12,7 @@ import {
 } from "react-native";
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const API_BASE_URL = 'http://192.168.10.6:3000/api';
+const API_BASE_URL = 'http://192.168.10.8:3000/api';
 
 export default function TransporterLoginScreen({ navigation }) {
   const [email, setEmail] = useState("");

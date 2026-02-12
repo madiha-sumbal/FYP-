@@ -11,20 +11,42 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
-  RefreshControl
+  RefreshControl,
+  ActivityIndicator
 } from "react-native";
 import Icon from "react-native-vector-icons/Ionicons";
-import MapView, { Marker } from "react-native-maps";
+import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import styles from "../../styles/PassengerDashboardStyle";
 import { LinearGradient } from 'expo-linear-gradient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// Use your actual IP address
-const API_BASE_URL = "http://192.168.10.6:3000/api";
+// ==================== API BASE URL ====================
+const API_BASE_URL = "http://192.168.10.10:3000/api";
+const GOOGLE_MAPS_API_KEY = "AIzaSyDiZhjAhYniDLe4Ndr1u87NdDfIdZS6SME";
 
 export default function PassengerDashboard({ navigation }) {
-  const [showTravelAlert, setShowTravelAlert] = useState(true);
-  const [showArrivalAlert, setShowArrivalAlert] = useState(true);
+  // ==================== STATE VARIABLES ====================
+  
+  // Poll & Response States
+  const [activePolls, setActivePolls] = useState([]);
+  const [showPollModal, setShowPollModal] = useState(false);
+  const [selectedPoll, setSelectedPoll] = useState(null);
+  const [selectedTimeSlot, setSelectedTimeSlot] = useState('');
+  const [pickupPoint, setPickupPoint] = useState('');
+  const [travelResponse, setTravelResponse] = useState(''); // 'yes' or 'no'
+  
+  // Morning Confirmation States
+  const [showMorningConfirmation, setShowMorningConfirmation] = useState(false);
+  const [morningConfirmationTrip, setMorningConfirmationTrip] = useState(null);
+  
+  // Route & Trip States
+  const [assignedRoute, setAssignedRoute] = useState(null);
+  const [currentTrip, setCurrentTrip] = useState(null);
+  const [tripStatus, setTripStatus] = useState('pending'); // pending, started, picked, completed
+  const [driverLocation, setDriverLocation] = useState(null);
+  const [estimatedArrival, setEstimatedArrival] = useState('Calculating...');
+  
+  // UI States
   const [callModalVisible, setCallModalVisible] = useState(false);
   const [chatModalVisible, setChatModalVisible] = useState(false);
   const [chatMessages, setChatMessages] = useState([]);
@@ -32,9 +54,21 @@ export default function PassengerDashboard({ navigation }) {
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
-  const [dashboardData, setDashboardData] = useState(null);
-  const [driverLocation, setDriverLocation] = useState(null);
+  const [loading, setLoading] = useState(false);
+  
+  // Auth States
   const [userToken, setUserToken] = useState(null);
+  const [userId, setUserId] = useState(null);
+  const [userProfile, setUserProfile] = useState(null);
+  
+  // Driver Info
+  const [driverInfo, setDriverInfo] = useState({
+    name: "Driver",
+    rating: 4.8,
+    vehicleNumber: "N/A",
+    vehicleModel: "Van",
+    phone: "N/A"
+  });
 
   // Animation refs
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -43,102 +77,384 @@ export default function PassengerDashboard({ navigation }) {
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const mapMarkerAnim = useRef(new Animated.Value(0)).current;
   const callRingAnim = useRef(new Animated.Value(0)).current;
-  const travelAlertSlideAnim = useRef(new Animated.Value(-100)).current;
-  const arrivalAlertSlideAnim = useRef(new Animated.Value(-100)).current;
-  const travelAlertPulseAnim = useRef(new Animated.Value(1)).current;
-  const arrivalAlertPulseAnim = useRef(new Animated.Value(1)).current;
+  const pollAlertSlideAnim = useRef(new Animated.Value(-100)).current;
+  const morningConfirmSlideAnim = useRef(new Animated.Value(-100)).current;
+  const pollAlertPulseAnim = useRef(new Animated.Value(1)).current;
+  const morningConfirmPulseAnim = useRef(new Animated.Value(1)).current;
   const flatListRef = useRef(null);
 
-  // Sample data
-  const nextTrip = {
-    startTime: "7:30 AM",
-    route: "DHA Phase 5 → Saddar",
-    pickupPoint: "Main Gate, DHA Phase 5",
-    estimatedArrival: "5 mins",
-  };
-
-  const driver = {
-    name: "Muhammad Hassan",
-    rating: 4.8,
-    vehicleNumber: "KHI-2024",
-    vehicleModel: "Toyota Hiace 2022",
-    totalTrips: 1250,
-    phone: "+92 300 1234567",
-  };
-
-  // Load token on mount
+  // ==================== LOAD AUTH DATA ====================
+  
   useEffect(() => {
-    loadToken();
+    loadAuthData();
   }, []);
 
-  const loadToken = async () => {
+  const loadAuthData = async () => {
     try {
-      const token = await AsyncStorage.getItem('userToken');
-      if (token) {
+      const token = await AsyncStorage.getItem('authToken');
+      const userId = await AsyncStorage.getItem('userId');
+      const userDataStr = await AsyncStorage.getItem('userData');
+      
+      if (token && userId) {
         setUserToken(token);
-        console.log("✅ Token loaded for dashboard");
+        setUserId(userId);
+        
+        if (userDataStr) {
+          const userData = JSON.parse(userDataStr);
+          setUserProfile(userData);
+          setPickupPoint(userData.pickupPoint || '');
+        }
+        
+        console.log("✅ Auth data loaded for passenger");
+        
+        // Load all data
+        fetchActivePolls();
+        fetchNotifications();
+        fetchCurrentTrip();
+        
+        // Set up polling for real-time updates
+        const pollInterval = setInterval(() => {
+          fetchActivePolls();
+          fetchNotifications();
+          fetchCurrentTrip();
+        }, 10000); // Every 10 seconds
+        
+        return () => clearInterval(pollInterval);
       } else {
-        console.log("⚠️ No token found");
+        console.log("⚠️ No auth data found, redirecting to login");
+        navigation.reset({
+          index: 0,
+          routes: [{ name: 'PassengerLogin' }],
+        });
       }
     } catch (error) {
-      console.error("❌ Error loading token:", error);
+      console.error("❌ Error loading auth data:", error);
     }
   };
 
-  // API Functions
-  const fetchNotifications = async () => {
+  // ==================== API CALLS ====================
+  
+  const getHeaders = () => ({
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${userToken}`
+  });
+
+  // Fetch Active Polls
+  const fetchActivePolls = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/notifications`);
+      const response = await fetch(`${API_BASE_URL}/polls/active`, {
+        headers: getHeaders()
+      });
+      const data = await response.json();
+      
+      console.log("📊 Active Polls Response:", data);
+      
+      if (data.success && data.polls && data.polls.length > 0) {
+        setActivePolls(data.polls);
+        
+        // Show poll notification if there are new polls
+        const newPolls = data.polls.filter(p => !p.hasResponded);
+        if (newPolls.length > 0) {
+          setShowPollModal(true);
+          setSelectedPoll(newPolls[0]);
+          
+          // Animate poll alert
+          Animated.parallel([
+            Animated.timing(pollAlertSlideAnim, {
+              toValue: 0,
+              duration: 600,
+              useNativeDriver: true,
+            }),
+            Animated.loop(
+              Animated.sequence([
+                Animated.timing(pollAlertPulseAnim, { 
+                  toValue: 1.05, 
+                  duration: 800, 
+                  useNativeDriver: true 
+                }),
+                Animated.timing(pollAlertPulseAnim, { 
+                  toValue: 1, 
+                  duration: 800, 
+                  useNativeDriver: true 
+                }),
+              ])
+            )
+          ]).start();
+        }
+      }
+    } catch (error) {
+      console.error("❌ Error fetching active polls:", error);
+    }
+  };
+
+  // Submit Poll Response
+  const submitPollResponse = async () => {
+    if (!selectedPoll) return;
+    
+    if (travelResponse === 'yes' && (!selectedTimeSlot || !pickupPoint)) {
+      Alert.alert("Missing Information", "Please select a time slot and confirm your pickup point");
+      return;
+    }
+    
+    try {
+      setLoading(true);
+      
+      const response = await fetch(`${API_BASE_URL}/polls/${selectedPoll._id}/respond`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          response: travelResponse,
+          selectedTimeSlot: travelResponse === 'yes' ? selectedTimeSlot : null,
+          pickupPoint: travelResponse === 'yes' ? pickupPoint : null
+        })
+      });
+      
+      const data = await response.json();
+      
+      console.log("✅ Poll Response Submitted:", data);
+      
+      if (data.success) {
+        Alert.alert(
+          "Response Submitted", 
+          travelResponse === 'yes' 
+            ? `Thank you! You've confirmed travel for tomorrow at ${selectedTimeSlot}.` 
+            : "You've confirmed that you won't be traveling tomorrow.",
+          [{ text: "OK", onPress: () => {
+            setShowPollModal(false);
+            setSelectedPoll(null);
+            setTravelResponse('');
+            setSelectedTimeSlot('');
+            dismissPollAlert();
+            fetchActivePolls();
+          }}]
+        );
+      } else {
+        Alert.alert("Error", data.message || "Failed to submit response");
+      }
+    } catch (error) {
+      console.error("❌ Error submitting poll response:", error);
+      Alert.alert("Error", "Failed to submit your response. Please try again.");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fetch Current Trip
+  const fetchCurrentTrip = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/trips`, {
+        headers: getHeaders()
+      });
+      const data = await response.json();
+      
+      if (data.success && data.trips && data.trips.length > 0) {
+        // Find trips for current user
+        const myTrips = data.trips.filter(trip => 
+          trip.passengers && trip.passengers.some(p => 
+            p._id?.toString() === userId || p._id?._id?.toString() === userId
+          )
+        );
+        
+        // Find active trip (Scheduled or En Route)
+        const activeTrip = myTrips.find(t => 
+          t.status === 'Scheduled' || t.status === 'En Route' || t.status === 'Ready'
+        );
+        
+        if (activeTrip) {
+          setCurrentTrip(activeTrip);
+          setTripStatus(activeTrip.status);
+          
+          // Get passenger status
+          const myPassenger = activeTrip.passengers.find(p => 
+            p._id?.toString() === userId || p._id?._id?.toString() === userId
+          );
+          
+          if (myPassenger) {
+            if (myPassenger.status === 'picked') {
+              setTripStatus('picked');
+            }
+            
+            // Check if morning confirmation is needed
+            if (activeTrip.status === 'Ready' && !myPassenger.confirmedMorning) {
+              setShowMorningConfirmation(true);
+              setMorningConfirmationTrip(activeTrip);
+              
+              // Animate morning confirmation alert
+              Animated.parallel([
+                Animated.timing(morningConfirmSlideAnim, {
+                  toValue: 0,
+                  duration: 600,
+                  useNativeDriver: true,
+                }),
+                Animated.loop(
+                  Animated.sequence([
+                    Animated.timing(morningConfirmPulseAnim, { 
+                      toValue: 1.05, 
+                      duration: 800, 
+                      useNativeDriver: true 
+                    }),
+                    Animated.timing(morningConfirmPulseAnim, { 
+                      toValue: 1, 
+                      duration: 800, 
+                      useNativeDriver: true 
+                    }),
+                  ])
+                )
+              ]).start();
+            }
+          }
+          
+          // Update driver info
+          if (activeTrip.driverId) {
+            setDriverInfo({
+              name: activeTrip.driverName || "Driver",
+              vehicleNumber: activeTrip.vehicleNumber || "N/A",
+              vehicleModel: activeTrip.vehicleType || "Van",
+              rating: 4.8,
+              phone: activeTrip.driverId.phone || "N/A"
+            });
+          }
+          
+          // Update location if available
+          if (activeTrip.currentLocation) {
+            setDriverLocation(activeTrip.currentLocation);
+            calculateETA(activeTrip.currentLocation);
+          }
+        }
+      }
+    } catch (error) {
+      console.error("❌ Error fetching current trip:", error);
+    }
+  };
+
+  // Submit Morning Confirmation
+  const submitMorningConfirmation = async (willTravel) => {
+    if (!morningConfirmationTrip) return;
+    
+    try {
+      setLoading(true);
+      
+      const response = await fetch(
+        `${API_BASE_URL}/trips/${morningConfirmationTrip._id}/confirm-passenger`, 
+        {
+          method: 'POST',
+          headers: getHeaders(),
+          body: JSON.stringify({
+            traveling: willTravel
+          })
+        }
+      );
+      
       const data = await response.json();
       
       if (data.success) {
-        setNotifications(data.notifications);
-        setUnreadCount(data.counts.unread);
+        Alert.alert(
+          "Confirmation Submitted",
+          willTravel 
+            ? "Thank you! Your driver has been notified that you're traveling." 
+            : "You've confirmed that you won't be traveling today.",
+          [{ text: "OK", onPress: () => {
+            setShowMorningConfirmation(false);
+            setMorningConfirmationTrip(null);
+            dismissMorningConfirmAlert();
+            fetchCurrentTrip();
+          }}]
+        );
+      } else {
+        Alert.alert("Error", data.message || "Failed to submit confirmation");
       }
     } catch (error) {
-      console.error("Error fetching notifications:", error);
+      console.error("❌ Error submitting morning confirmation:", error);
+      Alert.alert("Error", "Failed to submit confirmation. Please try again.");
+    } finally {
+      setLoading(false);
     }
   };
 
+  // Calculate ETA
+  const calculateETA = (driverLocation) => {
+    if (!userProfile || !userProfile.latitude || !userProfile.longitude) {
+      setEstimatedArrival("Calculating...");
+      return;
+    }
+    
+    // Simple calculation - in production, use Google Directions API
+    const distance = Math.sqrt(
+      Math.pow(driverLocation.latitude - userProfile.latitude, 2) +
+      Math.pow(driverLocation.longitude - userProfile.longitude, 2)
+    );
+    
+    const estimatedMinutes = Math.max(1, Math.round(distance * 100 * 2)); // Rough estimate
+    setEstimatedArrival(`${estimatedMinutes} min`);
+  };
+
+  // Fetch Notifications
+  const fetchNotifications = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/notifications`, {
+        headers: getHeaders()
+      });
+      const data = await response.json();
+      
+      if (data.success) {
+        setNotifications(data.notifications || []);
+        setUnreadCount(data.counts?.unread || 0);
+      }
+    } catch (error) {
+      console.error("❌ Error fetching notifications:", error);
+    }
+  };
+
+  // Mark Notification as Read
   const markNotificationAsRead = async (notificationId) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/notifications/${notificationId}/read`, {
+      await fetch(`${API_BASE_URL}/notifications/${notificationId}/read`, {
         method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json'
-        }
+        headers: getHeaders()
       });
-      
-      if (response.ok) {
-        fetchNotifications();
-      }
+      fetchNotifications();
     } catch (error) {
-      console.error("Error marking notification as read:", error);
+      console.error("❌ Error marking notification as read:", error);
     }
   };
 
-  const markAllNotificationsAsRead = async () => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/notifications/mark-all-read`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json'
-        }
-      });
-      
-      if (response.ok) {
-        fetchNotifications();
-      }
-    } catch (error) {
-      console.error("Error marking all notifications as read:", error);
-    }
+  // ==================== UI HELPER FUNCTIONS ====================
+  
+  const dismissPollAlert = () => {
+    pollAlertPulseAnim.stopAnimation();
+    Animated.timing(pollAlertPulseAnim, {
+      toValue: 0,
+      duration: 200,
+      useNativeDriver: true,
+    }).start();
+
+    Animated.timing(pollAlertSlideAnim, {
+      toValue: -100,
+      duration: 300,
+      useNativeDriver: true,
+    }).start();
   };
 
-  const sendChatMessage = async (message) => {
-    try {
+  const dismissMorningConfirmAlert = () => {
+    morningConfirmPulseAnim.stopAnimation();
+    Animated.timing(morningConfirmPulseAnim, {
+      toValue: 0,
+      duration: 200,
+      useNativeDriver: true,
+    }).start();
+
+    Animated.timing(morningConfirmSlideAnim, {
+      toValue: -100,
+      duration: 300,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const sendMessage = () => {
+    if (inputText.trim()) {
       const newMsg = {
         id: Date.now(),
-        text: message,
+        text: inputText,
         fromDriver: false,
         time: new Date().toLocaleTimeString('en-US', { 
           hour: '2-digit', 
@@ -147,75 +463,42 @@ export default function PassengerDashboard({ navigation }) {
       };
       
       setChatMessages(prev => [...prev, newMsg]);
+      setInputText("");
       
       setTimeout(() => {
-        const driverMsg = {
-          id: Date.now() + 1,
-          text: "I'll be there in 5 minutes!",
-          fromDriver: true,
-          time: new Date().toLocaleTimeString('en-US', { 
-            hour: '2-digit', 
-            minute: '2-digit' 
-          }),
-        };
-        setChatMessages(prev => [...prev, driverMsg]);
-      }, 2000);
-      
-    } catch (error) {
-      console.error("Error sending message:", error);
+        flatListRef.current?.scrollToEnd({ animated: true });
+      }, 100);
     }
   };
 
-  const confirmTravel = async () => {
-    try {
-      if (userToken) {
-        const response = await fetch(`${API_BASE_URL}/travel/confirm`, {
-          method: 'POST',
-          headers: {
-            'Authorization': `Bearer ${userToken}`,
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify({
-            tripDate: new Date().toISOString().split('T')[0],
-            confirmed: true
-          })
-        });
-
-        if (response.ok) {
-          console.log("Travel confirmed successfully");
-        }
-      }
-
-      travelAlertPulseAnim.stopAnimation();
-      Animated.timing(travelAlertPulseAnim, {
-        toValue: 0,
-        duration: 200,
-        useNativeDriver: true,
-      }).start();
-      
-      Animated.timing(travelAlertSlideAnim, {
-        toValue: -100,
-        duration: 300,
-        useNativeDriver: true,
-      }).start(() => setShowTravelAlert(false));
-      
-      Alert.alert("Success", "Travel confirmed for tomorrow!");
-    } catch (error) {
-      console.error("Error confirming travel:", error);
-      Alert.alert("Error", "Failed to confirm travel");
-    }
+  const handleAlertNavigation = () => {
+    navigation.navigate('AlertScreen', { 
+      notifications,
+      onMarkAsRead: markNotificationAsRead
+    });
   };
 
-  // Enhanced Animations
+  const onRefresh = async () => {
+    setRefreshing(true);
+    await Promise.all([
+      fetchActivePolls(),
+      fetchNotifications(),
+      fetchCurrentTrip()
+    ]);
+    setRefreshing(false);
+  };
+
+  // ==================== ANIMATIONS ====================
+  
   useEffect(() => {
-    // Fade in animation
+    // Initial fade in
     Animated.timing(fadeAnim, {
       toValue: 1,
       duration: 800,
       useNativeDriver: true,
     }).start();
 
-    // Card slide up animation
+    // Card slide up
     Animated.spring(cardAnim, {
       toValue: 1,
       tension: 50,
@@ -223,39 +506,7 @@ export default function PassengerDashboard({ navigation }) {
       useNativeDriver: true,
     }).start();
 
-    // Alert slide in animations
-    Animated.timing(travelAlertSlideAnim, {
-      toValue: 0,
-      duration: 600,
-      useNativeDriver: true,
-    }).start();
-
-    Animated.timing(arrivalAlertSlideAnim, {
-      toValue: 0,
-      duration: 600,
-      useNativeDriver: true,
-    }).start();
-
-    // Alert pulse animations
-    if (showTravelAlert) {
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(travelAlertPulseAnim, { toValue: 1.05, duration: 800, useNativeDriver: true }),
-          Animated.timing(travelAlertPulseAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
-        ])
-      ).start();
-    }
-
-    if (showArrivalAlert) {
-      Animated.loop(
-        Animated.sequence([
-          Animated.timing(arrivalAlertPulseAnim, { toValue: 1.05, duration: 800, useNativeDriver: true }),
-          Animated.timing(arrivalAlertPulseAnim, { toValue: 1, duration: 800, useNativeDriver: true }),
-        ])
-      ).start();
-    }
-
-    // Blink animation for alerts
+    // Blink animation for notifications
     Animated.loop(
       Animated.sequence([
         Animated.timing(blinkAnim, { toValue: 1, duration: 800, useNativeDriver: false }),
@@ -263,7 +514,7 @@ export default function PassengerDashboard({ navigation }) {
       ])
     ).start();
 
-    // Pulse animation for map marker
+    // Pulse animation
     Animated.loop(
       Animated.sequence([
         Animated.timing(pulseAnim, { toValue: 1.3, duration: 1000, useNativeDriver: true }),
@@ -278,9 +529,6 @@ export default function PassengerDashboard({ navigation }) {
         Animated.timing(mapMarkerAnim, { toValue: 0, duration: 500, useNativeDriver: true }),
       ])
     ).start();
-
-    // Load initial data
-    fetchNotifications();
   }, []);
 
   // Call ring animation
@@ -312,65 +560,11 @@ export default function PassengerDashboard({ navigation }) {
     outputRange: [1, 1.1],
   });
 
-  const dismissTravelAlert = () => {
-    travelAlertPulseAnim.stopAnimation();
-    Animated.timing(travelAlertPulseAnim, {
-      toValue: 0,
-      duration: 200,
-      useNativeDriver: true,
-    }).start();
-
-    Animated.timing(travelAlertSlideAnim, {
-      toValue: -100,
-      duration: 300,
-      useNativeDriver: true,
-    }).start(() => setShowTravelAlert(false));
-  };
-
-  const dismissArrivalAlert = () => {
-    arrivalAlertPulseAnim.stopAnimation();
-    Animated.timing(arrivalAlertPulseAnim, {
-      toValue: 0,
-      duration: 200,
-      useNativeDriver: true,
-    }).start();
-
-    Animated.timing(arrivalAlertSlideAnim, {
-      toValue: -100,
-      duration: 300,
-      useNativeDriver: true,
-    }).start(() => setShowArrivalAlert(false));
-  };
-
-  const sendMessage = () => {
-    if (inputText.trim()) {
-      sendChatMessage(inputText);
-      setInputText("");
-      setTimeout(() => {
-        flatListRef.current?.scrollToEnd({ animated: true });
-      }, 100);
-    }
-  };
-
-  const handleAlertNavigation = () => {
-       navigation.navigate('AlertScreen', { 
-     notifications,
-     onMarkAsRead: markNotificationAsRead,
-     onMarkAllAsRead: markAllNotificationsAsRead
-     });
-  };
-
-  const onRefresh = async () => {
-    setRefreshing(true);
-    await Promise.all([
-      fetchNotifications()
-    ]);
-    setRefreshing(false);
-  };
-
+  // ==================== RENDER ====================
+  
   return (
     <View style={styles.container}>
-      {/* Header with Gradient */}
+      {/* Header */}
       <LinearGradient
         colors={['#A1D826', '#8BC220']}
         start={{ x: 0, y: 0 }}
@@ -386,7 +580,7 @@ export default function PassengerDashboard({ navigation }) {
           onPress={handleAlertNavigation} 
         >
           <Icon name="notifications" size={26} color="#fff" />
-          {(unreadCount > 0 || showTravelAlert || showArrivalAlert) && (
+          {(unreadCount > 0 || showPollModal || showMorningConfirmation) && (
             <Animated.View style={[styles.blinkDot, { opacity: blinkOpacity }]} />
           )}
           {unreadCount > 0 && (
@@ -409,15 +603,16 @@ export default function PassengerDashboard({ navigation }) {
           />
         }
       >
-        {/* Enhanced Alerts with Independent Animations */}
-        {showTravelAlert && (
+        {/* Poll Response Alert */}
+        {showPollModal && selectedPoll && (
           <Animated.View style={{ 
             opacity: fadeAnim, 
             transform: [
-              { translateY: travelAlertSlideAnim },
+              { translateY: pollAlertSlideAnim },
               { translateY: cardTranslateY },
-              { scale: travelAlertPulseAnim }
-            ] 
+              { scale: pollAlertPulseAnim }
+            ],
+            marginTop: 20
           }}>
             <LinearGradient
               colors={['#FF6B6B', '#EE5A52']}
@@ -426,38 +621,105 @@ export default function PassengerDashboard({ navigation }) {
               style={styles.alertBox}
             >
               <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
-                <Icon name="time" size={26} color="#fff" />
+                <Icon name="help-circle" size={26} color="#fff" />
               </Animated.View>
               <View style={styles.alertTextBox}>
-                <Text style={styles.alertTitle}>Tomorrow Travel Confirmation</Text>
-                <Text style={styles.alertText}>Will you travel tomorrow?</Text>
+                <Text style={styles.alertTitle}>{selectedPoll.title}</Text>
+                <Text style={styles.alertText}>
+                  {selectedPoll.question || "Will you travel tomorrow?"}
+                </Text>
+                <Text style={styles.alertText}>
+                  Closes at: {selectedPoll.closesAt}
+                </Text>
                 <View style={styles.alertButtons}>
-                  <TouchableOpacity style={styles.confirmBtn} onPress={confirmTravel}>
+                  <TouchableOpacity 
+                    style={styles.confirmBtn} 
+                    onPress={() => {
+                      setTravelResponse('yes');
+                      // Keep modal open to select time slot
+                    }}
+                  >
                     <Icon name="checkmark-circle" size={18} color="#fff" />
-                    <Text style={styles.btnText}>Yes, Confirm</Text>
+                    <Text style={styles.btnText}>Yes, I'll Travel</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={styles.smallCancelBtn}
-                    onPress={dismissTravelAlert}
+                    onPress={() => {
+                      setTravelResponse('no');
+                      submitPollResponse();
+                    }}
                   >
                     <Icon name="close-circle" size={18} color="#fff" />
                     <Text style={styles.btnText}>No</Text>
                   </TouchableOpacity>
                 </View>
+                
+                {/* Time Slot Selection (if Yes) */}
+                {travelResponse === 'yes' && (
+                  <View style={{ marginTop: 12 }}>
+                    <Text style={[styles.alertText, { fontWeight: '700', marginBottom: 8 }]}>
+                      Select Time Slot:
+                    </Text>
+                    {selectedPoll.timeSlots?.map((slot, index) => (
+                      <TouchableOpacity
+                        key={index}
+                        style={[
+                          styles.timeSlotBtn,
+                          selectedTimeSlot === slot && styles.timeSlotBtnSelected
+                        ]}
+                        onPress={() => setSelectedTimeSlot(slot)}
+                      >
+                        <Text style={[
+                          styles.timeSlotText,
+                          selectedTimeSlot === slot && styles.timeSlotTextSelected
+                        ]}>
+                          {slot}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                    
+                    <Text style={[styles.alertText, { fontWeight: '700', marginTop: 12, marginBottom: 8 }]}>
+                      Pickup Point:
+                    </Text>
+                    <TextInput
+                      style={styles.pickupInput}
+                      placeholder="Enter pickup point"
+                      placeholderTextColor="#ccc"
+                      value={pickupPoint}
+                      onChangeText={setPickupPoint}
+                    />
+                    
+                    <TouchableOpacity
+                      style={[styles.confirmBtn, { marginTop: 12 }]}
+                      onPress={submitPollResponse}
+                      disabled={loading || !selectedTimeSlot || !pickupPoint}
+                    >
+                      {loading ? (
+                        <ActivityIndicator size="small" color="#fff" />
+                      ) : (
+                        <>
+                          <Icon name="checkmark-done" size={18} color="#fff" />
+                          <Text style={styles.btnText}>Confirm Response</Text>
+                        </>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                )}
               </View>
             </LinearGradient>
           </Animated.View>
         )}
 
-        {showArrivalAlert && (
+        {/* Morning Confirmation Alert */}
+        {showMorningConfirmation && morningConfirmationTrip && (
           <Animated.View style={{ 
             opacity: fadeAnim, 
             transform: [
-              { translateY: arrivalAlertSlideAnim },
+              { translateY: morningConfirmSlideAnim },
               { translateY: cardTranslateY },
-              { scale: arrivalAlertPulseAnim }
+              { scale: morningConfirmPulseAnim }
             ],
-            marginTop: showTravelAlert ? 15 : 20
+            marginTop: showPollModal ? 15 : 20
           }}>
             <LinearGradient
               colors={['#FF6B6B', '#EE5A52']}
@@ -469,17 +731,34 @@ export default function PassengerDashboard({ navigation }) {
                 <Icon name="bus" size={26} color="#fff" />
               </Animated.View>
               <View style={styles.alertTextBox}>
-                <Text style={styles.alertTitle}>Van Arriving Soon!</Text>
+                <Text style={styles.alertTitle}>Final Travel Confirmation</Text>
                 <Text style={styles.alertText}>
-                  Your van is {nextTrip.estimatedArrival} away. Please be ready!
+                  Are you still traveling today? Van will start soon!
                 </Text>
-                <TouchableOpacity
-                  style={styles.smallConfirmBtn}
-                  onPress={dismissArrivalAlert}
-                >
-                  <Icon name="checkmark-done" size={18} color="#fff" />
-                  <Text style={styles.btnText}>I'm Ready</Text>
-                </TouchableOpacity>
+                <View style={styles.alertButtons}>
+                  <TouchableOpacity 
+                    style={styles.confirmBtn} 
+                    onPress={() => submitMorningConfirmation(true)}
+                    disabled={loading}
+                  >
+                    {loading ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <>
+                        <Icon name="checkmark-circle" size={18} color="#fff" />
+                        <Text style={styles.btnText}>Yes, Traveling</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.smallCancelBtn}
+                    onPress={() => submitMorningConfirmation(false)}
+                    disabled={loading}
+                  >
+                    <Icon name="close-circle" size={18} color="#fff" />
+                    <Text style={styles.btnText}>No</Text>
+                  </TouchableOpacity>
+                </View>
               </View>
             </LinearGradient>
           </Animated.View>
@@ -488,7 +767,7 @@ export default function PassengerDashboard({ navigation }) {
         {/* Today's Trip Details */}
         <Animated.View style={{ 
           transform: [{ translateY: cardTranslateY }],
-          marginTop: (!showTravelAlert && !showArrivalAlert) ? 20 : 15
+          marginTop: (!showPollModal && !showMorningConfirmation) ? 20 : 15
         }}>
           <View style={styles.sectionCard}>
             <LinearGradient
@@ -499,77 +778,113 @@ export default function PassengerDashboard({ navigation }) {
             >
               <View style={styles.sectionTitleContainer}>
                 <Icon name="car" size={22} color="#fff" style={{ marginRight: 8 }} />
-                <Text style={styles.cardTitle}>Today's Trip Details</Text>
+                <Text style={styles.cardTitle}>Today's Trip Status</Text>
               </View>
             </LinearGradient>
 
-            <View style={styles.tripCardContainer}>
+            {currentTrip ? (
+              <View style={styles.tripCardContainer}>
+                <View style={styles.tripCard}>
+                  <Icon name="information-circle" size={24} color="#A1D826" />
+                  <View style={{ marginLeft: 10 }}>
+                    <Text style={styles.tripCardTitle}>Status</Text>
+                    <Text style={styles.tripCardText}>
+                      {tripStatus === 'picked' ? 'On Board' : 
+                       tripStatus === 'En Route' ? 'Van En Route' :
+                       tripStatus === 'Ready' ? 'Ready to Start' :
+                       'Scheduled'}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.tripCard}>
+                  <Icon name="time" size={24} color="#A1D826" />
+                  <View style={{ marginLeft: 10 }}>
+                    <Text style={styles.tripCardTitle}>Pickup Time</Text>
+                    <Text style={styles.tripCardText}>{currentTrip.timeSlot || 'N/A'}</Text>
+                  </View>
+                </View>
+
+                <View style={styles.tripCard}>
+                  <Icon name="navigate" size={24} color="#A1D826" />
+                  <View style={{ marginLeft: 10 }}>
+                    <Text style={styles.tripCardTitle}>Route</Text>
+                    <Text style={styles.tripCardText}>{currentTrip.routeName || 'N/A'}</Text>
+                  </View>
+                </View>
+
+                {tripStatus === 'En Route' && (
+                  <View style={styles.tripCard}>
+                    <Icon name="location" size={24} color="#FF9800" />
+                    <View style={{ marginLeft: 10 }}>
+                      <Text style={styles.tripCardTitle}>Estimated Arrival</Text>
+                      <Text style={styles.tripCardText}>{estimatedArrival}</Text>
+                    </View>
+                  </View>
+                )}
+              </View>
+            ) : (
               <View style={styles.tripCard}>
-                <Icon name="time" size={24} color="#A1D826" />
+                <Icon name="information-circle" size={24} color="#999" />
                 <View style={{ marginLeft: 10 }}>
-                  <Text style={styles.tripCardTitle}>Start Time</Text>
-                  <Text style={styles.tripCardText}>{nextTrip.startTime}</Text>
+                  <Text style={styles.tripCardTitle}>No Trip Scheduled</Text>
+                  <Text style={styles.tripCardText}>
+                    You don't have any trips scheduled for today
+                  </Text>
                 </View>
               </View>
+            )}
 
-              <View style={styles.tripCard}>
-                <Icon name="navigate" size={24} color="#A1D826" />
-                <View style={{ marginLeft: 10 }}>
-                  <Text style={styles.tripCardTitle}>Route</Text>
-                  <Text style={styles.tripCardText}>{nextTrip.route}</Text>
-                </View>
-              </View>
-
-              <View style={styles.tripCard}>
-                <Icon name="pin" size={24} color="#A1D826" />
-                <View style={{ marginLeft: 10 }}>
-                  <Text style={styles.tripCardTitle}>Pickup Point</Text>
-                  <Text style={styles.tripCardText}>{nextTrip.pickupPoint}</Text>
-                </View>
-              </View>
-
-              <View style={styles.tripCard}>
-                <Icon name="people" size={24} color="#A1D826" />
-                <View style={{ marginLeft: 10 }}>
-                  <Text style={styles.tripCardTitle}>Total Passengers Today</Text>
-                  <Text style={styles.tripCardText}>20 Passengers</Text>
-                </View>
-              </View>
-            </View>
-
-            {/* Map section */}
-            <View style={styles.mapWrapper}>
-              <MapView
-                style={styles.map}
-                initialRegion={{
-                  latitude: 24.8607,
-                  longitude: 67.0011,
-                  latitudeDelta: 0.05,
-                  longitudeDelta: 0.05,
-                }}
-              >
-                <Marker
-                  coordinate={{ latitude: 24.8607, longitude: 67.0011 }}
-                  title="Your Van"
-                  description="On route to Saddar"
+            {/* Live Map */}
+            {currentTrip && driverLocation && tripStatus === 'En Route' && (
+              <View style={styles.mapWrapper}>
+                <MapView
+                  provider={PROVIDER_GOOGLE}
+                  style={styles.map}
+                  initialRegion={{
+                    latitude: driverLocation.latitude,
+                    longitude: driverLocation.longitude,
+                    latitudeDelta: 0.05,
+                    longitudeDelta: 0.05,
+                  }}
                 >
-                  <Animated.View style={{ 
-                    transform: [
-                      { translateY: mapMarkerAnim },
-                      { scale: pulseAnim }
-                    ] 
-                  }}>
-                    <Icon name="car" size={32} color="#A1D826" />
-                  </Animated.View>
-                </Marker>
-              </MapView>
-              <View style={styles.mapNote}>
-                <Icon name="information-circle" size={18} color="#FFA726" />
-                <Text style={styles.noteText}>
-                  Van arriving in {nextTrip.estimatedArrival}
-                </Text>
+                  {/* Driver/Van Marker */}
+                  <Marker
+                    coordinate={driverLocation}
+                    title="Your Van"
+                    description={`Driver: ${driverInfo.name}`}
+                  >
+                    <Animated.View style={{ 
+                      transform: [
+                        { translateY: mapMarkerAnim },
+                        { scale: pulseAnim }
+                      ] 
+                    }}>
+                      <Icon name="car" size={32} color="#A1D826" />
+                    </Animated.View>
+                  </Marker>
+                  
+                  {/* Your Location Marker */}
+                  {userProfile && userProfile.latitude && userProfile.longitude && (
+                    <Marker
+                      coordinate={{
+                        latitude: userProfile.latitude,
+                        longitude: userProfile.longitude
+                      }}
+                      title="Your Location"
+                      description={pickupPoint}
+                      pinColor="#FF6B6B"
+                    />
+                  )}
+                </MapView>
+                <View style={styles.mapNote}>
+                  <Icon name="information-circle" size={18} color="#FFA726" />
+                  <Text style={styles.noteText}>
+                    Van arriving in {estimatedArrival}
+                  </Text>
+                </View>
               </View>
-            </View>
+            )}
           </View>
         </Animated.View>
 
@@ -590,38 +905,41 @@ export default function PassengerDashboard({ navigation }) {
 
             <View style={styles.driverBox}>
               <View style={styles.driverCircle}>
-                <Text style={styles.driverInitials}>MH</Text>
+                <Text style={styles.driverInitials}>
+                  {driverInfo.name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase()}
+                </Text>
               </View>
               <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={styles.driverName}>{driver.name}</Text>
+                <Text style={styles.driverName}>{driverInfo.name}</Text>
                 <View style={styles.ratingRow}>
                   <Icon name="star" size={14} color="#FFD700" />
-                  <Text style={styles.driverSub}> {driver.rating} • {driver.totalTrips} trips</Text>
+                  <Text style={styles.driverSub}> {driverInfo.rating}</Text>
                 </View>
-                <Text style={styles.driverSub}>{driver.vehicleModel}</Text>
-                <Text style={styles.driverSub}>{driver.vehicleNumber}</Text>
+                <Text style={styles.driverSub}>{driverInfo.vehicleModel}</Text>
+                <Text style={styles.driverSub}>{driverInfo.vehicleNumber}</Text>
               </View>
-              <View style={styles.driverActions}>
-                <TouchableOpacity 
-                  style={styles.actionBtn}
-                  onPress={() => setCallModalVisible(true)}
-                >
-                  <Icon name="call" size={20} color="#A1D826" />
-                </TouchableOpacity>
-                <TouchableOpacity 
-                  style={styles.actionBtn}
-                  onPress={() => setChatModalVisible(true)}
-                >
-                  <Icon name="chatbubble" size={20} color="#A1D826" />
-                </TouchableOpacity>
-              </View>
+              {currentTrip && (
+                <View style={styles.driverActions}>
+                  <TouchableOpacity 
+                    style={styles.actionBtn}
+                    onPress={() => setCallModalVisible(true)}
+                  >
+                    <Icon name="call" size={20} color="#A1D826" />
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    style={styles.actionBtn}
+                    onPress={() => setChatModalVisible(true)}
+                  >
+                    <Icon name="chatbubble" size={20} color="#A1D826" />
+                  </TouchableOpacity>
+                </View>
+              )}
             </View>
           </View>
         </Animated.View>
-
       </ScrollView>
 
-      {/* Enhanced Call Modal */}
+      {/* Call Modal */}
       <Modal visible={callModalVisible} transparent animationType="fade">
         <View style={styles.callModalOverlay}>
           <Animated.View style={[styles.callModalContent, { transform: [{ scale: ringScale }] }]}>
@@ -629,11 +947,13 @@ export default function PassengerDashboard({ navigation }) {
               colors={['#A1D826', '#8BC220']}
               style={styles.callerAvatar}
             >
-              <Text style={styles.callerInitials}>MH</Text>
+              <Text style={styles.callerInitials}>
+                {driverInfo.name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase()}
+              </Text>
             </LinearGradient>
 
-            <Text style={styles.callerName}>{driver.name}</Text>
-            <Text style={styles.callerInfo}>Driver • {driver.vehicleNumber}</Text>
+            <Text style={styles.callerName}>{driverInfo.name}</Text>
+            <Text style={styles.callerInfo}>Driver • {driverInfo.vehicleNumber}</Text>
             <Text style={styles.callingText}>Calling...</Text>
 
             <View style={styles.callActions}>
@@ -659,7 +979,7 @@ export default function PassengerDashboard({ navigation }) {
         </View>
       </Modal>
 
-      {/* Enhanced Chat Modal */}
+      {/* Chat Modal */}
       <Modal visible={chatModalVisible} animationType="slide">
         <View style={styles.chatContainer}>
           <LinearGradient
@@ -672,10 +992,12 @@ export default function PassengerDashboard({ navigation }) {
               <Icon name="arrow-back" size={26} color="#fff" />
             </TouchableOpacity>
             <View style={styles.chatDriverCircle}>
-              <Text style={styles.chatDriverInitials}>MH</Text>
+              <Text style={styles.chatDriverInitials}>
+                {driverInfo.name.split(' ').map(n => n[0]).join('').substring(0, 2).toUpperCase()}
+              </Text>
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.chatHeaderTitle}>{driver.name}</Text>
+              <Text style={styles.chatHeaderTitle}>{driverInfo.name}</Text>
               <Text style={styles.chatHeaderSubtitle}>Driver</Text>
             </View>
             <TouchableOpacity>
@@ -731,6 +1053,14 @@ export default function PassengerDashboard({ navigation }) {
           </KeyboardAvoidingView>
         </View>
       </Modal>
+
+      {/* Loading Overlay */}
+      {loading && (
+        <View style={styles.loadingOverlay}>
+          <ActivityIndicator size="large" color="#A1D826" />
+          <Text style={{ color: "#fff", marginTop: 10, fontSize: 16 }}>Loading...</Text>
+        </View>
+      )}
     </View>
   );
 }

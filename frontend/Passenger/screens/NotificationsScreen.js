@@ -14,7 +14,7 @@ import Icon from 'react-native-vector-icons/Ionicons';
 import { LinearGradient } from 'expo-linear-gradient';
 import styles from '../../styles/NotificationScreenStyle';
 
-const API_BASE_URL = 'http://192.168.10.6:3000/api';
+const API_BASE_URL = 'http://192.168.10.8:3000/api';
 
 const categories = [
   { id: 'all', label: 'All', icon: 'apps' },

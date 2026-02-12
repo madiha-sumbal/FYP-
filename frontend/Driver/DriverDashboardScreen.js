@@ -15,23 +15,30 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from "react-native-maps";
 import { driverStyles } from "./driverStyles";
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width, height } = Dimensions.get("window");
 
-// API Base URL - Update this with your actual backend URL
-const API_BASE_URL = "http://192.168.10.6:3000/api";
+// ==================== API CONFIGURATION ====================
+const API_BASE_URL = "http://192.168.10.8:3000/api";
 const GOOGLE_MAPS_API_KEY = "AIzaSyDiZhjAhYniDLe4Ndr1u87NdDfIdZS6SME";
 
 const UnifiedDriverDashboard = ({ navigation, route }) => {
   const { driver } = route.params || {};
   
-  // Sidebar state
+  // ==================== STATE MANAGEMENT ====================
+  
+  // Auth & User States
+  const [authToken, setAuthToken] = useState(null);
+  const [driverId, setDriverId] = useState(null);
+  const [driverProfile, setDriverProfile] = useState(null);
+  
+  // Sidebar & Navigation
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [currentView, setCurrentView] = useState("Dashboard");
   const [loading, setLoading] = useState(false);
 
-  // Dashboard states
-  const [available, setAvailable] = useState(false);
+  // Dashboard States
   const [dashboardStats, setDashboardStats] = useState({
     completedTrips: 0,
     activeTrips: 0,
@@ -39,58 +46,170 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
     monthlyEarnings: 0
   });
 
-  // Availability states
+  // Availability States
+  const [available, setAvailable] = useState(false);
   const [availabilityModalVisible, setAvailabilityModalVisible] = useState(false);
   const [startTime, setStartTime] = useState("07:00 AM");
   const [endTime, setEndTime] = useState("06:00 PM");
   const [availabilityHistory, setAvailabilityHistory] = useState([]);
+  const [showAvailabilityAlert, setShowAvailabilityAlert] = useState(false);
 
-  // Routes states
-  const [routeStarted, setRouteStarted] = useState(false);
-  const [currentLocation, setCurrentLocation] = useState(0);
-  const [mapExpanded, setMapExpanded] = useState(false);
+  // Route & Trip States
   const [assignedRoutes, setAssignedRoutes] = useState([]);
   const [currentRoute, setCurrentRoute] = useState(null);
-  const [routeStops, setRouteStops] = useState([]);
-  const [selectedStop, setSelectedStop] = useState(null);
-  const [detailsVisible, setDetailsVisible] = useState(false);
   const [currentTrip, setCurrentTrip] = useState(null);
+  const [routeStarted, setRouteStarted] = useState(false);
+  const [routeStops, setRouteStops] = useState([]);
+  const [completedStops, setCompletedStops] = useState([]);
+  const [currentStopIndex, setCurrentStopIndex] = useState(0);
+  const [mapExpanded, setMapExpanded] = useState(false);
+  
+  // Morning Confirmation States
+  const [showMorningConfirmAlert, setShowMorningConfirmAlert] = useState(false);
+  const [morningConfirmationNeeded, setMorningConfirmationNeeded] = useState(false);
+  
+  // Location Tracking
+  const [currentLocation, setCurrentLocation] = useState({
+    latitude: 33.6844,
+    longitude: 73.0479
+  });
+  const [locationUpdateInterval, setLocationUpdateInterval] = useState(null);
 
-  // Payment states
+  // Payment States
+  const [paymentData, setPaymentData] = useState([]);
   const [paymentDetailsVisible, setPaymentDetailsVisible] = useState(false);
   const [selectedPayment, setSelectedPayment] = useState(null);
-  const [paymentData, setPaymentData] = useState([]);
 
-  // Trip History states
+  // Trip History States
+  const [trips, setTrips] = useState([]);
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState("All");
   const [selectedTrip, setSelectedTrip] = useState(null);
   const [tripDetailsVisible, setTripDetailsVisible] = useState(false);
-  const [dateFilter, setDateFilter] = useState("All");
-  const [trips, setTrips] = useState([]);
 
-  // Support states
+  // Support States
   const [supportTickets, setSupportTickets] = useState([]);
   const [newTicketVisible, setNewTicketVisible] = useState(false);
   const [ticketCategory, setTicketCategory] = useState("Payment Issue");
   const [ticketSubject, setTicketSubject] = useState("");
   const [ticketDescription, setTicketDescription] = useState("");
 
-  // Notification states
+  // Notification States
   const [notifications, setNotifications] = useState([]);
+  const [unreadNotifications, setUnreadNotifications] = useState(0);
 
-  // Feedback states
+  // Feedback States
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
   const [feedbackRating, setFeedbackRating] = useState(0);
   const [feedbackComment, setFeedbackComment] = useState("");
 
-  // API Headers
-  const getHeaders = () => {
-    const token = driver?.token;
-    return {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${token}`
-    };
+  // ==================== LOAD AUTH DATA ====================
+  
+  useEffect(() => {
+    loadAuthData();
+  }, []);
+
+  const loadAuthData = async () => {
+    try {
+      const token = await AsyncStorage.getItem('authToken');
+      const userId = await AsyncStorage.getItem('userId');
+      const userDataStr = await AsyncStorage.getItem('userData');
+      
+      if (token && userId) {
+        setAuthToken(token);
+        setDriverId(userId);
+        
+        if (userDataStr) {
+          const userData = JSON.parse(userDataStr);
+          setDriverProfile(userData);
+        }
+        
+        console.log("✅ Auth data loaded for driver");
+        
+        // Load all data
+        await loadAllData();
+        
+        // Check for daily availability reminder (simulate 6 PM check)
+        checkAvailabilityReminder();
+        
+        // Set up polling for real-time updates
+        const pollInterval = setInterval(() => {
+          fetchCurrentTrip();
+          fetchNotifications();
+        }, 10000); // Every 10 seconds
+        
+        return () => clearInterval(pollInterval);
+      } else {
+        console.log("⚠️ No auth data found");
+        navigation.reset({
+          index: 0,
+          routes: [{ name: 'DriverLogin' }],
+        });
+      }
+    } catch (error) {
+      console.error("❌ Error loading auth data:", error);
+    }
+  };
+
+  // ==================== API HELPER ====================
+  
+  const getHeaders = () => ({
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${authToken}`
+  });
+
+  // ==================== LOAD ALL DATA ====================
+  
+  const loadAllData = async () => {
+    try {
+      setLoading(true);
+      await Promise.all([
+        fetchDashboardStats(),
+        fetchAssignedRoutes(),
+        fetchCurrentTrip(),
+        fetchPayments(),
+        fetchTrips(),
+        fetchSupportTickets(),
+        fetchNotifications(),
+        fetchAvailabilityHistory()
+      ]);
+    } catch (error) {
+      console.error("❌ Error loading all data:", error);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // ==================== AVAILABILITY REMINDER ====================
+  
+  const checkAvailabilityReminder = () => {
+    // Simulate daily 6 PM reminder to confirm availability
+    const now = new Date();
+    const currentHour = now.getHours();
+    
+    // Show reminder between 6 PM (18:00) and 9 PM (21:00)
+    if (currentHour >= 18 && currentHour < 21) {
+      // Check if already confirmed for tomorrow
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const tomorrowStr = tomorrow.toISOString().split('T')[0];
+      
+      // Check in availability history
+      const tomorrowAvailability = availabilityHistory.find(avail => 
+        new Date(avail.date).toISOString().split('T')[0] === tomorrowStr
+      );
+      
+      if (!tomorrowAvailability) {
+        setShowAvailabilityAlert(true);
+        
+        // Add notification
+        addLocalNotification(
+          "Confirm Tomorrow's Availability",
+          "Please confirm if you'll be available for tomorrow's routes",
+          "warning"
+        );
+      }
+    }
   };
 
   // ==================== API CALLS ====================
@@ -103,16 +222,16 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
       });
       const data = await response.json();
       
-      if (data.success) {
+      if (data.success || data.stats) {
         setDashboardStats({
-          completedTrips: data.stats.completedTrips || 0,
-          activeTrips: data.stats.activeTrips || 0,
-          pendingTrips: data.stats.pendingTrips || 0,
-          monthlyEarnings: data.stats.monthlyEarnings || 0
+          completedTrips: data.stats?.completedTrips || 0,
+          activeTrips: data.stats?.activeTrips || 0,
+          pendingTrips: data.stats?.pendingTrips || 0,
+          monthlyEarnings: data.stats?.monthlyEarnings || 0
         });
       }
     } catch (error) {
-      console.error('Error fetching dashboard stats:', error);
+      console.error('❌ Error fetching dashboard stats:', error);
     }
   };
 
@@ -125,22 +244,25 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
       const data = await response.json();
       
       if (data.success) {
-        setAssignedRoutes(data.routes);
+        setAssignedRoutes(data.routes || []);
         
         // Find today's route
         const today = new Date().toDateString();
-        const todaysRoute = data.routes.find(r => {
-          const routeDate = new Date(r.scheduledDate);
-          return routeDate.toDateString() === today;
+        const todaysRoute = (data.routes || []).find(r => {
+          if (!r.date) return false;
+          const routeDate = new Date(r.date);
+          return routeDate.toDateString() === today && r.assignedDriver?.toString() === driverId;
         });
         
         if (todaysRoute) {
           setCurrentRoute(todaysRoute);
-          // Map passengers to stops format
-          const stops = todaysRoute.passengers.map((p, index) => ({
-            _id: p.passengerId._id || p.passengerId,
-            name: p.pickupPoint,
-            passengerName: p.name,
+          
+          // Map passengers to stops
+          const stops = (todaysRoute.passengers || []).map((p, index) => ({
+            _id: p.passengerId?._id || p.passengerId,
+            name: p.pickupPoint || 'Pickup Point',
+            passengerName: p.passengerName || p.name || 'Passenger',
+            passengerPhone: p.passengerId?.phone || 'N/A',
             status: p.status || 'pending',
             time: todaysRoute.timeSlot,
             coordinate: {
@@ -152,28 +274,12 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
         }
       }
     } catch (error) {
-      console.error('Error fetching routes:', error);
+      console.error('❌ Error fetching routes:', error);
     }
   };
 
-  // Fetch Payment History
-  const fetchPayments = async () => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/payments`, {
-        headers: getHeaders()
-      });
-      const data = await response.json();
-      
-      if (data.success) {
-        setPaymentData(data.payments);
-      }
-    } catch (error) {
-      console.error('Error fetching payments:', error);
-    }
-  };
-
-  // Fetch Trip History
-  const fetchTrips = async () => {
+  // Fetch Current Trip
+  const fetchCurrentTrip = async () => {
     try {
       const response = await fetch(`${API_BASE_URL}/trips`, {
         headers: getHeaders()
@@ -181,48 +287,70 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
       const data = await response.json();
       
       if (data.success) {
-        setTrips(data.trips);
+        const myTrips = (data.trips || []).filter(trip => 
+          trip.driverId?.toString() === driverId || trip.driverId?._id?.toString() === driverId
+        );
         
         // Find active trip
-        const activeTrip = data.trips.find(t => t.status === 'En Route');
+        const activeTrip = myTrips.find(t => 
+          t.status === 'Scheduled' || t.status === 'En Route' || t.status === 'Ready'
+        );
+        
         if (activeTrip) {
           setCurrentTrip(activeTrip);
+          
+          if (activeTrip.status === 'En Route') {
+            setRouteStarted(true);
+            
+            // Start location tracking if not already started
+            if (!locationUpdateInterval) {
+              startLocationTracking(activeTrip._id);
+            }
+          }
+          
+          // Check if morning confirmation is needed
+          if (activeTrip.status === 'Scheduled' && !morningConfirmationNeeded) {
+            const now = new Date();
+            const tripDate = new Date(activeTrip.createdAt);
+            
+            // Check if it's morning of trip day (6 AM - 8 AM)
+            if (
+              now.toDateString() === tripDate.toDateString() &&
+              now.getHours() >= 6 &&
+              now.getHours() < 8
+            ) {
+              setShowMorningConfirmAlert(true);
+              setMorningConfirmationNeeded(true);
+              
+              addLocalNotification(
+                "Morning Confirmation",
+                "Are you ready to start today's route?",
+                "alert"
+              );
+            }
+          }
+          
+          // Update stops with current passenger statuses
+          if (activeTrip.passengers) {
+            setRouteStops(prev => prev.map(stop => {
+              const passenger = activeTrip.passengers.find(p => 
+                p._id?.toString() === stop._id || p._id?._id?.toString() === stop._id
+              );
+              if (passenger) {
+                return { ...stop, status: passenger.status || stop.status };
+              }
+              return stop;
+            }));
+            
+            const completed = activeTrip.passengers.filter(p => 
+              p.status === 'picked' || p.status === 'completed'
+            );
+            setCompletedStops(completed.map(p => p._id?.toString() || p._id?._id?.toString()));
+          }
         }
       }
     } catch (error) {
-      console.error('Error fetching trips:', error);
-    }
-  };
-
-  // Fetch Support Tickets
-  const fetchSupportTickets = async () => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/complaints`, {
-        headers: getHeaders()
-      });
-      const data = await response.json();
-      
-      if (data.success) {
-        setSupportTickets(data.complaints);
-      }
-    } catch (error) {
-      console.error('Error fetching support tickets:', error);
-    }
-  };
-
-  // Fetch Notifications
-  const fetchNotifications = async () => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/notifications`, {
-        headers: getHeaders()
-      });
-      const data = await response.json();
-      
-      if (data.success) {
-        setNotifications(data.notifications);
-      }
-    } catch (error) {
-      console.error('Error fetching notifications:', error);
+      console.error('❌ Error fetching current trip:', error);
     }
   };
 
@@ -235,459 +363,82 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
       const data = await response.json();
       
       if (data.success) {
-        setAvailabilityHistory(data.availability);
-        // Set current availability status
+        setAvailabilityHistory(data.availability || []);
+        
+        // Check tomorrow's availability
         const tomorrow = new Date();
         tomorrow.setDate(tomorrow.getDate() + 1);
         const tomorrowStr = tomorrow.toISOString().split('T')[0];
-        const tomorrowAvailability = data.availability.find(avail => 
+        const tomorrowAvailability = (data.availability || []).find(avail => 
           new Date(avail.date).toISOString().split('T')[0] === tomorrowStr
         );
         setAvailable(tomorrowAvailability?.status === 'available');
       }
     } catch (error) {
-      console.error('Error fetching availability:', error);
+      console.error('❌ Error fetching availability:', error);
     }
   };
 
   // Set Availability
-  const setAvailabilityStatus = async (date, startTime, endTime, status) => {
+  const confirmAvailability = async () => {
+    if (!startTime || !endTime) {
+      Alert.alert("Error", "Please set your start and end times");
+      return;
+    }
+    
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const tomorrowStr = tomorrow.toISOString().split('T')[0];
+    
     try {
+      setLoading(true);
+      
       const response = await fetch(`${API_BASE_URL}/availability`, {
         method: 'POST',
         headers: getHeaders(),
         body: JSON.stringify({
-          date,
+          date: tomorrowStr,
           startTime,
           endTime,
-          status
+          status: 'available'
         })
       });
+      
       const data = await response.json();
       
       if (data.success) {
-        setAvailable(status === 'available');
-        fetchAvailabilityHistory();
-        return true;
-      }
-      return false;
-    } catch (error) {
-      console.error('Error setting availability:', error);
-      return false;
-    }
-  };
-
-  // Start Route
-  const startRoute = async (routeId) => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/routes/${routeId}/start`, {
-        method: 'POST',
-        headers: getHeaders()
-      });
-      const data = await response.json();
-      
-      if (data.success) {
-        setRouteStarted(true);
-        setCurrentLocation(0);
-        if (data.trip) {
-          setCurrentTrip(data.trip);
-        }
-        return true;
-      }
-      return false;
-    } catch (error) {
-      console.error('Error starting route:', error);
-      return false;
-    }
-  };
-
-  // Pickup Passenger
-  const pickupPassenger = async (passengerId) => {
-    try {
-      if (!currentTrip) {
-        Alert.alert("Error", "No active trip found");
-        return false;
-      }
-
-      const response = await fetch(`${API_BASE_URL}/trips/${currentTrip._id}/pickup/${passengerId}`, {
-        method: 'POST',
-        headers: getHeaders()
-      });
-      const data = await response.json();
-      
-      if (data.success) {
-        // Update local state
-        setRouteStops(prevStops => 
-          prevStops.map(stop => 
-            stop._id === passengerId ? { ...stop, status: 'picked' } : stop
-          )
-        );
-        fetchTrips();
-        return true;
-      }
-      return false;
-    } catch (error) {
-      console.error('Error picking up passenger:', error);
-      return false;
-    }
-  };
-
-  // Complete Trip
-  const completeTrip = async () => {
-    try {
-      if (!currentTrip) {
-        Alert.alert("Error", "No active trip found");
-        return false;
-      }
-
-      const response = await fetch(`${API_BASE_URL}/trips/${currentTrip._id}/complete`, {
-        method: 'POST',
-        headers: getHeaders()
-      });
-      const data = await response.json();
-      
-      if (data.success) {
-        setRouteStarted(false);
-        setCurrentLocation(0);
-        setShowFeedbackModal(true);
-        fetchTrips();
-        return true;
-      }
-      return false;
-    } catch (error) {
-      console.error('Error completing trip:', error);
-      return false;
-    }
-  };
-
-  // Submit Feedback
-  const submitFeedback = async () => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/feedback`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({
-          tripId: currentTrip?._id,
-          routeId: currentRoute?._id,
-          rating: feedbackRating,
-          comment: feedbackComment
-        })
-      });
-      const data = await response.json();
-      
-      if (data.success) {
-        setShowFeedbackModal(false);
-        setFeedbackRating(0);
-        setFeedbackComment("");
-        Alert.alert("Success", "Thank you for your feedback!");
-        return true;
-      }
-      return false;
-    } catch (error) {
-      console.error('Error submitting feedback:', error);
-      return false;
-    }
-  };
-
-  // Submit Support Ticket (Complaint)
-  const submitSupportTicket = async (category, subject, description) => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/complaints`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({
-          title: subject,
-          description,
-          category
-        })
-      });
-      const data = await response.json();
-      
-      if (data.success) {
-        fetchSupportTickets();
-        return true;
-      }
-      return false;
-    } catch (error) {
-      console.error('Error submitting support ticket:', error);
-      return false;
-    }
-  };
-
-  // Mark Notification as Read
-  const markNotificationAsRead = async (notificationId) => {
-    try {
-      await fetch(`${API_BASE_URL}/notifications/${notificationId}/read`, {
-        method: 'PUT',
-        headers: getHeaders()
-      });
-      fetchNotifications();
-    } catch (error) {
-      console.error('Error marking notification as read:', error);
-    }
-  };
-
-  // Mark All Notifications as Read
-  const markAllNotificationsAsRead = async () => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/notifications/mark-all-read`, {
-        method: 'PUT',
-        headers: getHeaders()
-      });
-      const data = await response.json();
-      
-      if (data.success) {
-        fetchNotifications();
-      }
-    } catch (error) {
-      console.error('Error marking all notifications as read:', error);
-    }
-  };
-
-  // Update Live Location
-  const updateLiveLocation = async (location) => {
-    try {
-      if (!currentTrip) return;
-      
-      await fetch(`${API_BASE_URL}/trips/${currentTrip._id}/location`, {
-        method: 'POST',
-        headers: getHeaders(),
-        body: JSON.stringify({
-          latitude: location.latitude,
-          longitude: location.longitude,
-          speed: 40,
-          eta: '5 min',
-          currentStop: routeStops[currentLocation]?.name || ''
-        })
-      });
-    } catch (error) {
-      console.error('Error updating live location:', error);
-    }
-  };
-
-  // ==================== USE EFFECTS ====================
-
-  // Load initial data
-  useEffect(() => {
-    if (driver?.token) {
-      fetchDashboardStats();
-      fetchAssignedRoutes();
-      fetchPayments();
-      fetchTrips();
-      fetchSupportTickets();
-      fetchNotifications();
-      fetchAvailabilityHistory();
-    }
-  }, [driver]);
-
-  // Auto-refresh dashboard every 30 seconds
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (driver?.token) {
-        fetchDashboardStats();
-        fetchNotifications();
-      }
-    }, 30000);
-    return () => clearInterval(interval);
-  }, [driver]);
-
-  // Vehicle movement simulation (GPS tracking - refreshes every 8 seconds)
-  useEffect(() => {
-    if (routeStarted && currentLocation < routeStops.length) {
-      const timer = setTimeout(() => {
-        setCurrentLocation(prev => prev + 1);
+        setAvailable(true);
+        setShowAvailabilityAlert(false);
+        setAvailabilityModalVisible(false);
         
-        // Update live location
-        if (currentLocation < routeStops.length) {
-          const currentStop = routeStops[currentLocation];
-          if (currentStop && currentStop.coordinate) {
-            updateLiveLocation(currentStop.coordinate);
-          }
-        }
-      }, 8000);
-      return () => clearTimeout(timer);
+        await fetchAvailabilityHistory();
+        
+        addLocalNotification(
+          "Availability Confirmed",
+          `You're confirmed for ${formatDisplayDate(tomorrowStr)} (${startTime} - ${endTime})`,
+          "success"
+        );
+        
+        Alert.alert(
+          "Success", 
+          "Your availability has been confirmed and sent to the transporter!"
+        );
+      } else {
+        Alert.alert("Error", data.message || "Failed to confirm availability");
+      }
+    } catch (error) {
+      console.error('❌ Error confirming availability:', error);
+      Alert.alert("Error", "Failed to confirm availability");
+    } finally {
+      setLoading(false);
     }
-  }, [routeStarted, currentLocation, routeStops]);
+  };
 
-  // ==================== HELPER FUNCTIONS ====================
-
-  // Format date for tomorrow
-  const getTomorrowDate = () => {
+  // Mark Unavailable
+  const markUnavailable = async () => {
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
-    return tomorrow.toISOString().split('T')[0];
-  };
-
-  // Format date for display
-  const formatDisplayDate = (dateString) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
-  };
-
-  // Navigation
-  const navigateTo = (view) => {
-    setCurrentView(view);
-    setSidebarOpen(false);
-  };
-
-  // Route handlers
-  const handleStartRoute = () => {
-    if (!currentRoute) {
-      Alert.alert("Error", "No route assigned for today");
-      return;
-    }
-
-    Alert.alert(
-      "Start Route", 
-      "Are you ready to start this route? GPS tracking will begin.", 
-      [
-        { text: "Cancel", style: "cancel" },
-        { 
-          text: "Start", 
-          onPress: async () => {
-            setLoading(true);
-            const success = await startRoute(currentRoute._id);
-            setLoading(false);
-            
-            if (success) {
-              addNotification("Trip Started", "GPS tracking is now active. Drive safely!", "success");
-              Alert.alert("Success", "Route started successfully!");
-            } else {
-              Alert.alert("Error", "Failed to start route");
-            }
-          } 
-        }
-      ]
-    );
-  };
-
-  const handleCompleteRoute = () => {
-    if (!currentRoute) return;
-
-    const allPickedUp = routeStops.every(stop => stop.status === "picked" || stop.status === "completed");
-    
-    if (!allPickedUp) {
-      Alert.alert(
-        "Incomplete Route", 
-        "Some passengers haven't been picked up yet. Are you sure you want to complete the route?", 
-        [
-          { text: "Cancel", style: "cancel" },
-          { 
-            text: "Complete Anyway", 
-            style: "destructive", 
-            onPress: async () => {
-              setLoading(true);
-              const success = await completeTrip();
-              setLoading(false);
-              
-              if (success) {
-                addNotification("Trip Completed", "Route completed successfully!", "success");
-              } else {
-                Alert.alert("Error", "Failed to complete route");
-              }
-            } 
-          }
-        ]
-      );
-    } else {
-      setLoading(true);
-      completeTrip().then(success => {
-        setLoading(false);
-        if (success) {
-          addNotification("Trip Completed", "All passengers have been dropped off successfully!", "success");
-        } else {
-          Alert.alert("Error", "Failed to complete route");
-        }
-      });
-    }
-  };
-
-  const handlePickupPassenger = async (passengerId) => {
-    if (!routeStarted) {
-      Alert.alert("Route Not Started", "Please start the route first before picking up passengers.");
-      return;
-    }
-
-    const stop = routeStops.find(s => s._id === passengerId);
-    if (!stop) return;
-
-    Alert.alert(
-      'Confirm Pickup',
-      `Confirm pickup for ${stop.passengerName} at ${stop.name}?`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Confirm",
-          onPress: async () => {
-            setLoading(true);
-            const success = await pickupPassenger(passengerId);
-            setLoading(false);
-            
-            if (success) {
-              addNotification(
-                `Passenger Picked Up`,
-                `${stop.passengerName} has been picked up at ${stop.name}`,
-                "success"
-              );
-              Alert.alert("Success", "Passenger marked as picked up");
-            } else {
-              Alert.alert("Error", "Failed to mark passenger as picked up");
-            }
-          }
-        }
-      ]
-    );
-  };
-
-  // Helper function to add notifications (local only)
-  const addNotification = (title, message, type) => {
-    const newNotif = {
-      _id: Date.now().toString(),
-      title,
-      message,
-      time: "Just now",
-      type,
-      read: false,
-      timestamp: new Date().toISOString()
-    };
-    setNotifications(prev => [newNotif, ...prev]);
-  };
-
-  // Handle availability confirmation
-  const handleConfirmAvailability = async () => {
-    const tomorrowDate = getTomorrowDate();
-    
-    Alert.alert(
-      "Confirm Availability",
-      `Confirming your availability for ${formatDisplayDate(tomorrowDate)} from ${startTime} to ${endTime}. This will be sent to the transporter.`,
-      [
-        { text: "Cancel", style: "cancel" },
-        {
-          text: "Confirm",
-          onPress: async () => {
-            setLoading(true);
-            const success = await setAvailabilityStatus(tomorrowDate, startTime, endTime, 'available');
-            setLoading(false);
-            
-            if (success) {
-              addNotification(
-                "Availability Confirmed",
-                `Your availability for ${formatDisplayDate(tomorrowDate)} (${startTime} - ${endTime}) has been sent to the transporter.`,
-                "success"
-              );
-              Alert.alert("Success", "Your availability has been confirmed and sent to the transporter!");
-            } else {
-              Alert.alert("Error", "Failed to confirm availability");
-            }
-          }
-        }
-      ]
-    );
-  };
-
-  // Handle mark unavailable
-  const handleMarkUnavailable = async () => {
-    const tomorrowDate = getTomorrowDate();
+    const tomorrowStr = tomorrow.toISOString().split('T')[0];
     
     Alert.alert(
       "Mark Unavailable",
@@ -698,19 +449,41 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
           text: "Yes, Unavailable",
           style: "destructive",
           onPress: async () => {
-            setLoading(true);
-            const success = await setAvailabilityStatus(tomorrowDate, "", "", 'unavailable');
-            setLoading(false);
-            
-            if (success) {
-              addNotification(
-                "Marked Unavailable",
-                `You have marked yourself as unavailable for ${formatDisplayDate(tomorrowDate)}.`,
-                "warning"
-              );
-              Alert.alert("Updated", "You have been marked as unavailable for tomorrow.");
-            } else {
+            try {
+              setLoading(true);
+              
+              const response = await fetch(`${API_BASE_URL}/availability`, {
+                method: 'POST',
+                headers: getHeaders(),
+                body: JSON.stringify({
+                  date: tomorrowStr,
+                  startTime: '',
+                  endTime: '',
+                  status: 'unavailable'
+                })
+              });
+              
+              const data = await response.json();
+              
+              if (data.success) {
+                setAvailable(false);
+                setShowAvailabilityAlert(false);
+                
+                await fetchAvailabilityHistory();
+                
+                addLocalNotification(
+                  "Marked Unavailable",
+                  `You've been marked unavailable for ${formatDisplayDate(tomorrowStr)}`,
+                  "warning"
+                );
+                
+                Alert.alert("Updated", "You have been marked as unavailable for tomorrow.");
+              }
+            } catch (error) {
+              console.error('❌ Error marking unavailable:', error);
               Alert.alert("Error", "Failed to update availability");
+            } finally {
+              setLoading(false);
             }
           }
         }
@@ -718,46 +491,460 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
     );
   };
 
-  // Support ticket submission
-  const handleSubmitTicket = async () => {
-    if (!ticketSubject.trim() || !ticketDescription.trim()) {
-      Alert.alert("Error", "Please fill in all required fields");
+  // Start Route
+  const startRoute = async () => {
+    if (!currentRoute) {
+      Alert.alert("Error", "No route assigned");
       return;
     }
+    
+    Alert.alert(
+      "Start Route",
+      "Are you ready to start this route? GPS tracking will begin and passengers will be notified.",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Start Route",
+          onPress: async () => {
+            try {
+              setLoading(true);
+              
+              const response = await fetch(
+                `${API_BASE_URL}/routes/${currentRoute._id}/start`,
+                {
+                  method: 'POST',
+                  headers: getHeaders()
+                }
+              );
+              
+              const data = await response.json();
+              
+              if (data.success) {
+                setRouteStarted(true);
+                setCurrentStopIndex(0);
+                
+                if (data.trip) {
+                  setCurrentTrip(data.trip);
+                  startLocationTracking(data.trip._id);
+                }
+                
+                addLocalNotification(
+                  "Route Started",
+                  "GPS tracking is active. Drive safely!",
+                  "success"
+                );
+                
+                Alert.alert("Success", "Route started! All passengers have been notified.");
+                
+                await fetchCurrentTrip();
+              } else {
+                Alert.alert("Error", data.message || "Failed to start route");
+              }
+            } catch (error) {
+              console.error('❌ Error starting route:', error);
+              Alert.alert("Error", "Failed to start route");
+            } finally {
+              setLoading(false);
+            }
+          }
+        }
+      ]
+    );
+  };
 
-    setLoading(true);
-    const success = await submitSupportTicket(ticketCategory, ticketSubject, ticketDescription);
-    setLoading(false);
+  // Start Location Tracking
+  const startLocationTracking = (tripId) => {
+    // Simulate GPS tracking - update location every 8 seconds
+    const interval = setInterval(() => {
+      // Simulate movement towards next stop
+      if (currentStopIndex < routeStops.length) {
+        const nextStop = routeStops[currentStopIndex];
+        if (nextStop && nextStop.coordinate) {
+          // Move towards next stop
+          setCurrentLocation(prev => ({
+            latitude: prev.latitude + (nextStop.coordinate.latitude - prev.latitude) * 0.1,
+            longitude: prev.longitude + (nextStop.coordinate.longitude - prev.longitude) * 0.1
+          }));
+          
+          // Update backend with new location
+          updateLocationOnBackend(tripId, currentLocation);
+        }
+      }
+    }, 8000);
+    
+    setLocationUpdateInterval(interval);
+  };
 
-    if (success) {
-      setNewTicketVisible(false);
-      setTicketSubject("");
-      setTicketDescription("");
-      addNotification("Support Ticket Created", "Your support request has been submitted successfully.", "info");
-      Alert.alert("Success", "Your support ticket has been submitted. We'll get back to you soon.");
-    } else {
-      Alert.alert("Error", "Failed to submit support ticket");
+  // Update Location on Backend
+  const updateLocationOnBackend = async (tripId, location) => {
+    try {
+      await fetch(`${API_BASE_URL}/live-tracking/location`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          routeId: currentRoute?._id,
+          latitude: location.latitude,
+          longitude: location.longitude,
+          speed: 40,
+          heading: 0
+        })
+      });
+    } catch (error) {
+      console.error('❌ Error updating location:', error);
     }
   };
 
-  // Calculate stats
-  const completedStops = routeStops.filter(s => s.status === "picked" || s.status === "completed").length;
-  const progress = routeStops.length > 0 ? (completedStops / routeStops.length) * 100 : 0;
-  const unreadNotifications = notifications.filter(n => !n.read).length;
+  // Pickup Passenger
+  const pickupPassenger = async (stop) => {
+    if (!routeStarted) {
+      Alert.alert("Route Not Started", "Please start the route first");
+      return;
+    }
+    
+    Alert.alert(
+      "Confirm Pickup",
+      `Confirm pickup for ${stop.passengerName} at ${stop.name}?`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Confirm Pickup",
+          onPress: async () => {
+            try {
+              setLoading(true);
+              
+              const response = await fetch(
+                `${API_BASE_URL}/routes/${currentRoute._id}/stops/${stop._id}/status`,
+                {
+                  method: 'PUT',
+                  headers: getHeaders(),
+                  body: JSON.stringify({ status: 'picked-up' })
+                }
+              );
+              
+              const data = await response.json();
+              
+              if (data.success) {
+                // Update local state
+                setRouteStops(prev => prev.map(s => 
+                  s._id === stop._id ? { ...s, status: 'picked' } : s
+                ));
+                setCompletedStops(prev => [...prev, stop._id]);
+                setCurrentStopIndex(prev => prev + 1);
+                
+                addLocalNotification(
+                  "Passenger Picked Up",
+                  `${stop.passengerName} has been picked up`,
+                  "success"
+                );
+                
+                Alert.alert("Success", "Passenger marked as picked up");
+                
+                await fetchCurrentTrip();
+              }
+            } catch (error) {
+              console.error('❌ Error picking up passenger:', error);
+              Alert.alert("Error", "Failed to mark passenger as picked up");
+            } finally {
+              setLoading(false);
+            }
+          }
+        }
+      ]
+    );
+  };
+
+  // Complete Route
+  const completeRoute = async () => {
+    const allPickedUp = routeStops.every(s => 
+      s.status === 'picked' || s.status === 'completed'
+    );
+    
+    if (!allPickedUp) {
+      Alert.alert(
+        "Incomplete Route",
+        "Some passengers haven't been picked up. Are you sure you want to complete?",
+        [
+          { text: "Cancel", style: "cancel" },
+          {
+            text: "Complete Anyway",
+            style: "destructive",
+            onPress: () => finalizeRouteCompletion()
+          }
+        ]
+      );
+    } else {
+      finalizeRouteCompletion();
+    }
+  };
+
+  const finalizeRouteCompletion = async () => {
+    try {
+      setLoading(true);
+      
+      const response = await fetch(
+        `${API_BASE_URL}/routes/${currentRoute._id}/end`,
+        {
+          method: 'POST',
+          headers: getHeaders()
+        }
+      );
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        // Stop location tracking
+        if (locationUpdateInterval) {
+          clearInterval(locationUpdateInterval);
+          setLocationUpdateInterval(null);
+        }
+        
+        setRouteStarted(false);
+        setCurrentStopIndex(0);
+        setCompletedStops([]);
+        
+        // Show feedback modal
+        setShowFeedbackModal(true);
+        
+        addLocalNotification(
+          "Route Completed",
+          "Great job! Route completed successfully.",
+          "success"
+        );
+        
+        await fetchCurrentTrip();
+        await fetchTrips();
+      }
+    } catch (error) {
+      console.error('❌ Error completing route:', error);
+      Alert.alert("Error", "Failed to complete route");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Submit Feedback
+  const submitFeedback = async () => {
+    if (feedbackRating === 0) {
+      Alert.alert("Rating Required", "Please provide a rating");
+      return;
+    }
+    
+    try {
+      setLoading(true);
+      
+      const response = await fetch(`${API_BASE_URL}/feedback`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          tripId: currentTrip?._id,
+          rating: feedbackRating,
+          comment: feedbackComment,
+          givenBy: 'driver'
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        setShowFeedbackModal(false);
+        setFeedbackRating(0);
+        setFeedbackComment("");
+        
+        Alert.alert("Success", "Thank you for your feedback!");
+      }
+    } catch (error) {
+      console.error('❌ Error submitting feedback:', error);
+      Alert.alert("Error", "Failed to submit feedback");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fetch Payments
+  const fetchPayments = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/payments`, {
+        headers: getHeaders()
+      });
+      const data = await response.json();
+      
+      if (data.success) {
+        setPaymentData(data.payments || []);
+      }
+    } catch (error) {
+      console.error('❌ Error fetching payments:', error);
+    }
+  };
+
+  // Fetch Trips
+  const fetchTrips = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/trips`, {
+        headers: getHeaders()
+      });
+      const data = await response.json();
+      
+      if (data.success) {
+        const myTrips = (data.trips || []).filter(trip => 
+          trip.driverId?.toString() === driverId || trip.driverId?._id?.toString() === driverId
+        );
+        setTrips(myTrips);
+      }
+    } catch (error) {
+      console.error('❌ Error fetching trips:', error);
+    }
+  };
+
+  // Fetch Support Tickets
+  const fetchSupportTickets = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/complaints`, {
+        headers: getHeaders()
+      });
+      const data = await response.json();
+      
+      if (data.success) {
+        setSupportTickets(data.complaints || []);
+      }
+    } catch (error) {
+      console.error('❌ Error fetching support tickets:', error);
+    }
+  };
+
+  // Submit Support Ticket
+  const submitSupportTicket = async () => {
+    if (!ticketSubject.trim() || !ticketDescription.trim()) {
+      Alert.alert("Error", "Please fill in all fields");
+      return;
+    }
+    
+    try {
+      setLoading(true);
+      
+      const response = await fetch(`${API_BASE_URL}/complaints`, {
+        method: 'POST',
+        headers: getHeaders(),
+        body: JSON.stringify({
+          title: ticketSubject,
+          description: ticketDescription,
+          category: ticketCategory
+        })
+      });
+      
+      const data = await response.json();
+      
+      if (data.success) {
+        setNewTicketVisible(false);
+        setTicketSubject("");
+        setTicketDescription("");
+        
+        await fetchSupportTickets();
+        
+        addLocalNotification(
+          "Support Ticket Created",
+          "Your request has been submitted",
+          "info"
+        );
+        
+        Alert.alert("Success", "Your support ticket has been submitted");
+      }
+    } catch (error) {
+      console.error('❌ Error submitting ticket:', error);
+      Alert.alert("Error", "Failed to submit ticket");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Fetch Notifications
+  const fetchNotifications = async () => {
+    try {
+      const response = await fetch(`${API_BASE_URL}/notifications`, {
+        headers: getHeaders()
+      });
+      const data = await response.json();
+      
+      if (data.success) {
+        setNotifications(data.notifications || []);
+        setUnreadNotifications(
+          (data.notifications || []).filter(n => !n.read).length
+        );
+      }
+    } catch (error) {
+      console.error('❌ Error fetching notifications:', error);
+    }
+  };
+
+  // Mark Notification as Read
+  const markNotificationAsRead = async (notificationId) => {
+    try {
+      await fetch(`${API_BASE_URL}/notifications/${notificationId}/read`, {
+        method: 'PUT',
+        headers: getHeaders()
+      });
+      await fetchNotifications();
+    } catch (error) {
+      console.error('❌ Error marking notification as read:', error);
+    }
+  };
+
+  // Mark All Notifications as Read
+  const markAllNotificationsAsRead = async () => {
+    try {
+      await fetch(`${API_BASE_URL}/notifications/mark-all-read`, {
+        method: 'PUT',
+        headers: getHeaders()
+      });
+      await fetchNotifications();
+    } catch (error) {
+      console.error('❌ Error marking all as read:', error);
+    }
+  };
+
+  // ==================== HELPER FUNCTIONS ====================
+  
+  const addLocalNotification = (title, message, type) => {
+    const newNotif = {
+      _id: Date.now().toString(),
+      title,
+      message,
+      time: "Just now",
+      type,
+      read: false,
+      createdAt: new Date().toISOString()
+    };
+    setNotifications(prev => [newNotif, ...prev]);
+    setUnreadNotifications(prev => prev + 1);
+  };
+
+  const formatDisplayDate = (dateString) => {
+    const date = new Date(dateString);
+    return date.toLocaleDateString('en-GB', { 
+      day: 'numeric', 
+      month: 'short', 
+      year: 'numeric' 
+    });
+  };
+
+  const navigateTo = (view) => {
+    setCurrentView(view);
+    setSidebarOpen(false);
+  };
+
+  // Calculate progress
+  const completedCount = completedStops.length;
+  const totalStops = routeStops.length;
+  const progress = totalStops > 0 ? (completedCount / totalStops) * 100 : 0;
 
   // Filtered trips
   const filteredTrips = trips.filter((trip) => {
-    const matchesSearch = trip.routeName?.toLowerCase().includes(search.toLowerCase()) || 
-                          trip.driverName?.toLowerCase().includes(search.toLowerCase());
-    const matchesFilter = filter === "All" ? true : trip.status?.toLowerCase() === filter.toLowerCase();
+    const matchesSearch = 
+      trip.routeName?.toLowerCase().includes(search.toLowerCase()) || 
+      trip.driverName?.toLowerCase().includes(search.toLowerCase());
+    const matchesFilter = 
+      filter === "All" ? true : trip.status?.toLowerCase() === filter.toLowerCase();
     return matchesSearch && matchesFilter;
   });
-
-  // Map data
-  const routeCoordinates = routeStops.map(stop => stop.coordinate).filter(coord => coord);
-  const vehiclePosition = routeStarted && currentLocation > 0 && routeStops.length > 0
-    ? routeStops[Math.min(currentLocation - 1, routeStops.length - 1)].coordinate 
-    : (routeStops[0]?.coordinate || { latitude: 33.6844, longitude: 73.0479 });
 
   const styles = driverStyles;
 
@@ -767,13 +954,15 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
     
     const statusLower = status?.toLowerCase();
     
-    if (statusLower === "completed" || statusLower === "picked" || statusLower === "transferred" || statusLower === "resolved") {
+    if (statusLower === "completed" || statusLower === "picked" || 
+        statusLower === "resolved" || statusLower === "available") {
       bgColor = "#E8F5E9";
       textColor = "#4CAF50";
-    } else if (statusLower === "cancelled") {
+    } else if (statusLower === "cancelled" || statusLower === "unavailable") {
       bgColor = "#FFEBEE";
       textColor = "#F44336";
-    } else if (statusLower === "in progress" || statusLower === "en route") {
+    } else if (statusLower === "in progress" || statusLower === "en route" || 
+               statusLower === "started") {
       bgColor = "#E3F2FD";
       textColor = "#2196F3";
     }
@@ -794,12 +983,71 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
     );
   };
 
-  // ==================== RENDER FUNCTIONS ====================
+  // ==================== CONTINUED IN NEXT MESSAGE ====================
+  // ==================== RENDER FUNCTIONS - PART 2/2 ====================
 
   const renderDashboard = () => (
     <ScrollView style={styles.scrollContent} showsVerticalScrollIndicator={false}>
       <View style={styles.contentPadding}>
         {loading && <ActivityIndicator size="large" color="#A1D826" style={{ marginVertical: 10 }} />}
+        
+        {/* Availability Alert */}
+        {showAvailabilityAlert && (
+          <View style={[styles.card, { backgroundColor: '#FFF3E0', borderLeftWidth: 4, borderLeftColor: '#FF9800' }]}>
+            <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+              <Ionicons name="time" size={24} color="#FF9800" style={{ marginRight: 12 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 16, fontWeight: '700', color: '#333', marginBottom: 8 }}>
+                  ⏰ Confirm Tomorrow's Availability
+                </Text>
+                <Text style={{ fontSize: 14, color: '#666', marginBottom: 12 }}>
+                  Please confirm if you'll be available for tomorrow's routes
+                </Text>
+                <TouchableOpacity
+                  style={styles.button}
+                  onPress={() => setAvailabilityModalVisible(true)}
+                >
+                  <Ionicons name="calendar" size={18} color="#fff" style={{ marginRight: 8 }} />
+                  <Text style={styles.buttonText}>Confirm Availability</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        )}
+
+        {/* Morning Confirmation Alert */}
+        {showMorningConfirmAlert && currentTrip && (
+          <View style={[styles.card, { backgroundColor: '#FFE5E5', borderLeftWidth: 4, borderLeftColor: '#F44336' }]}>
+            <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+              <Ionicons name="alert-circle" size={24} color="#F44336" style={{ marginRight: 12 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 16, fontWeight: '700', color: '#333', marginBottom: 8 }}>
+                  🚐 Ready to Start Route?
+                </Text>
+                <Text style={{ fontSize: 14, color: '#666', marginBottom: 12 }}>
+                  Route: {currentTrip.routeName} • {routeStops.length} passengers
+                </Text>
+                <View style={{ flexDirection: 'row', gap: 10 }}>
+                  <TouchableOpacity
+                    style={[styles.button, { flex: 1, backgroundColor: '#4CAF50' }]}
+                    onPress={() => {
+                      setShowMorningConfirmAlert(false);
+                      Alert.alert("Confirmed", "You're ready! You can start the route now.");
+                    }}
+                  >
+                    <Text style={styles.buttonText}>I'm Ready</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.button, { flex: 1, backgroundColor: '#999' }]}
+                    onPress={() => setShowMorningConfirmAlert(false)}
+                  >
+                    <Text style={styles.buttonText}>Later</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          </View>
+        )}
         
         {/* Dashboard Statistics */}
         <Text style={styles.sectionTitle}>Dashboard Overview</Text>
@@ -807,48 +1055,42 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
           <View style={styles.statCard}>
             <Ionicons name="checkmark-circle" size={28} color="#A1D826" />
             <Text style={styles.statValue}>{dashboardStats.completedTrips}</Text>
-            <Text style={styles.statLabel}>Completed Trips</Text>
+            <Text style={styles.statLabel}>Completed</Text>
           </View>
           <View style={styles.statCard}>
             <Ionicons name="time" size={28} color="#FF9800" />
             <Text style={styles.statValue}>{dashboardStats.activeTrips}</Text>
-            <Text style={styles.statLabel}>Active Trips</Text>
+            <Text style={styles.statLabel}>Active</Text>
           </View>
           <View style={styles.statCard}>
             <Ionicons name="alert-circle" size={28} color="#2196F3" />
             <Text style={styles.statValue}>{dashboardStats.pendingTrips}</Text>
-            <Text style={styles.statLabel}>Pending Trips</Text>
+            <Text style={styles.statLabel}>Pending</Text>
           </View>
         </View>
 
-        {/* Assigned Route Information */}
+        {/* Today's Route */}
         {currentRoute ? (
           <View style={styles.card}>
             <Text style={styles.cardTitle}>Today's Assigned Route</Text>
             <View style={styles.routeInfo}>
               <View style={styles.infoRow}>
-                <View style={styles.infoIcon}>
-                  <Ionicons name="location" size={20} color="#A1D826" />
-                </View>
-                <Text style={styles.cardText}>{currentRoute.name}</Text>
+                <Ionicons name="location" size={20} color="#A1D826" />
+                <Text style={[styles.cardText, { marginLeft: 10 }]}>{currentRoute.name}</Text>
               </View>
               <View style={styles.infoRow}>
-                <View style={styles.infoIcon}>
-                  <Ionicons name="time" size={20} color="#A1D826" />
-                </View>
-                <Text style={styles.cardText}>Time: {currentRoute.timeSlot}</Text>
+                <Ionicons name="time" size={20} color="#A1D826" />
+                <Text style={[styles.cardText, { marginLeft: 10 }]}>Time: {currentRoute.timeSlot}</Text>
               </View>
               <View style={styles.infoRow}>
-                <View style={styles.infoIcon}>
-                  <Ionicons name="people" size={20} color="#A1D826" />
-                </View>
-                <Text style={styles.cardText}>Passengers: {routeStops.length}</Text>
+                <Ionicons name="people" size={20} color="#A1D826" />
+                <Text style={[styles.cardText, { marginLeft: 10 }]}>Passengers: {routeStops.length}</Text>
               </View>
               <View style={styles.infoRow}>
-                <View style={styles.infoIcon}>
-                  <Ionicons name="navigate" size={20} color="#A1D826" />
-                </View>
-                <Text style={styles.cardText}>Status: {routeStarted ? "In Progress" : "Not Started"}</Text>
+                <Ionicons name="navigate" size={20} color="#A1D826" />
+                <Text style={[styles.cardText, { marginLeft: 10 }]}>
+                  Status: {routeStarted ? "In Progress" : "Not Started"}
+                </Text>
               </View>
             </View>
             <TouchableOpacity
@@ -865,14 +1107,14 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
           </View>
         )}
 
-        {/* Quick Access Menu */}
+        {/* Quick Access */}
         <Text style={styles.sectionTitle}>Quick Access</Text>
         {[
           { title: "Confirm Availability", icon: "calendar-outline", view: "Availability" },
           { title: "Assigned Routes", icon: "map", view: "Routes" },
           { title: "Trip History", icon: "time", view: "History" },
-          { title: "Payment & Salary", icon: "card", view: "Payments" },
-          { title: "Support & Complaints", icon: "help-circle", view: "Support" },
+          { title: "Payments", icon: "card", view: "Payments" },
+          { title: "Support", icon: "help-circle", view: "Support" },
           { title: "Notifications", icon: "notifications", view: "Notifications", badge: unreadNotifications }
         ].map((item, index) => (
           <TouchableOpacity
@@ -883,7 +1125,7 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
             <View style={{ flexDirection: "row", alignItems: "center" }}>
               <Ionicons name={item.icon} size={22} color="#A1D826" style={{ marginRight: 14 }} />
               <Text style={styles.menuCardText}>{item.title}</Text>
-            </View>                                               
+            </View>
             <View style={{ flexDirection: "row", alignItems: "center" }}>
               {item.badge > 0 && (
                 <View style={{
@@ -913,7 +1155,7 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
       <View style={styles.contentPadding}>
         {loading && <ActivityIndicator size="large" color="#A1D826" style={{ marginVertical: 10 }} />}
         
-        {/* Current Status Card */}
+        {/* Current Status */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Current Availability Status</Text>
           <View style={{ alignItems: "center", paddingVertical: 20 }}>
@@ -930,24 +1172,14 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
             }}>
               {available ? "Available for Tomorrow" : "Not Available"}
             </Text>
-            {available && (
-              <View style={{ marginTop: 10, alignItems: "center" }}>
-                <Text style={{ fontSize: 14, color: "#666" }}>
-                  Date: {formatDisplayDate(getTomorrowDate())}
-                </Text>
-                <Text style={{ fontSize: 14, color: "#666", marginTop: 4 }}>
-                  Time: {startTime} - {endTime}
-                </Text>
-              </View>
-            )}
           </View>
         </View>
 
-        {/* Confirm Availability Section */}
+        {/* Confirm Availability */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Confirm Tomorrow's Availability</Text>
           <Text style={styles.cardText}>
-            Let the transporter know your available timings for {formatDisplayDate(getTomorrowDate())}
+            Let the transporter know your timings for tomorrow
           </Text>
 
           <View style={{ marginTop: 20 }}>
@@ -1000,8 +1232,7 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
 
           <TouchableOpacity
             style={styles.button}
-            onPress={handleConfirmAvailability}
-            activeOpacity={0.8}
+            onPress={confirmAvailability}
             disabled={loading}
           >
             {loading ? (
@@ -1017,8 +1248,7 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
           {available && (
             <TouchableOpacity
               style={[styles.button, { backgroundColor: "#F44336", marginTop: 12 }]}
-              onPress={handleMarkUnavailable}
-              activeOpacity={0.8}
+              onPress={markUnavailable}
               disabled={loading}
             >
               <Ionicons name="close-circle-outline" size={20} color="#fff" style={{ marginRight: 8 }} />
@@ -1027,52 +1257,25 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
           )}
         </View>
 
-        {/* Information Card */}
-        <View style={[styles.card, { backgroundColor: "#F0F9D9" }]}>
-          <View style={{ flexDirection: "row", alignItems: "flex-start" }}>
-            <Ionicons name="information-circle" size={24} color="#6B8E23" style={{ marginRight: 12 }} />
-            <View style={{ flex: 1 }}>
-              <Text style={{ fontSize: 15, fontWeight: "600", color: "#6B8E23", marginBottom: 8 }}>
-                Important Information
-              </Text>
-              <Text style={{ fontSize: 14, color: "#6B8E23", lineHeight: 20 }}>
-                • Please confirm your availability before 6:00 PM daily{"\n"}
-                • Your availability will be sent to the transporter{"\n"}
-                • You'll receive a notification once route is assigned{"\n"}
-                • Update your timings if there are any changes
-              </Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Recent Availability History */}
-        <Text style={styles.sectionTitle}>Recent Availability History</Text>
+        {/* Availability History */}
+        <Text style={styles.sectionTitle}>Recent History</Text>
         {availabilityHistory.length === 0 ? (
           <View style={styles.card}>
-            <Text style={styles.cardText}>No availability history found.</Text>
+            <Text style={styles.cardText}>No history found</Text>
           </View>
         ) : (
           availabilityHistory.slice(0, 5).map((item, index) => (
             <View key={index} style={styles.card}>
-              <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+              <View style={{ flexDirection: "row", justifyContent: "space-between", alignItems: "center" }}>
                 <Text style={{ fontSize: 16, fontWeight: "700", color: "#333" }}>
                   {formatDisplayDate(item.date)}
                 </Text>
                 <StatusBadge status={item.status === "available" ? "Available" : "Unavailable"} />
               </View>
-              <View style={{ flexDirection: "row", alignItems: "center", marginTop: 4 }}>
-                <Ionicons name="time-outline" size={14} color="#999" />
-                <Text style={{ fontSize: 14, color: "#666", marginLeft: 6 }}>
-                  {item.startTime && item.endTime ? `${item.startTime} - ${item.endTime}` : "-"}
+              {item.startTime && (
+                <Text style={{ fontSize: 14, color: "#666", marginTop: 6 }}>
+                  🕐 {item.startTime} - {item.endTime}
                 </Text>
-              </View>
-              {item.confirmed && (
-                <View style={{ flexDirection: "row", alignItems: "center", marginTop: 6 }}>
-                  <Ionicons name="checkmark-circle" size={14} color="#A1D826" />
-                  <Text style={{ fontSize: 13, color: "#A1D826", marginLeft: 6 }}>
-                    Confirmed
-                  </Text>
-                </View>
               )}
             </View>
           ))
@@ -1105,7 +1308,7 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
               {!routeStarted ? (
                 <TouchableOpacity
                   style={[styles.button, { backgroundColor: "#4CAF50" }]}
-                  onPress={handleStartRoute}
+                  onPress={startRoute}
                   disabled={loading}
                 >
                   <Ionicons name="play-circle" size={20} color="#fff" style={{ marginRight: 8 }} />
@@ -1114,7 +1317,7 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
               ) : (
                 <TouchableOpacity
                   style={[styles.button, { backgroundColor: "#F44336" }]}
-                  onPress={handleCompleteRoute}
+                  onPress={completeRoute}
                   disabled={loading}
                 >
                   <Ionicons name="checkmark-circle" size={20} color="#fff" style={{ marginRight: 8 }} />
@@ -1125,33 +1328,48 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
 
             {/* Progress */}
             {routeStarted && (
-              <View style={styles.progressContainer}>
-                <View style={styles.progressHeader}>
-                  <Text style={styles.progressTitle}>Route Progress</Text>
-                  <Text style={styles.progressText}>{Math.round(progress)}%</Text>
+              <View style={styles.card}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 10 }}>
+                  <Text style={{ fontSize: 16, fontWeight: '700', color: '#333' }}>Route Progress</Text>
+                  <Text style={{ fontSize: 16, fontWeight: '700', color: '#A1D826' }}>
+                    {Math.round(progress)}%
+                  </Text>
                 </View>
-                <View style={styles.progressBarBg}>
-                  <View style={[styles.progressBarFill, { width: `${progress}%` }]} />
+                <View style={{
+                  height: 8,
+                  backgroundColor: '#f0f0f0',
+                  borderRadius: 4,
+                  overflow: 'hidden'
+                }}>
+                  <View style={{
+                    height: '100%',
+                    width: `${progress}%`,
+                    backgroundColor: '#A1D826',
+                    borderRadius: 4
+                  }} />
                 </View>
+                <Text style={{ fontSize: 13, color: '#666', marginTop: 6 }}>
+                  {completedCount} of {totalStops} passengers picked up
+                </Text>
               </View>
             )}
 
             {/* Map */}
-            {routeCoordinates.length > 0 && (
-              <View style={styles.mapContainer}>
+            {routeStops.length > 0 && (
+              <View style={{ height: 300, borderRadius: 16, overflow: 'hidden', marginBottom: 16 }}>
                 <MapView
                   provider={PROVIDER_GOOGLE}
-                  style={styles.mapView}
+                  style={{ flex: 1 }}
                   initialRegion={{
-                    latitude: vehiclePosition.latitude,
-                    longitude: vehiclePosition.longitude,
+                    latitude: currentLocation.latitude,
+                    longitude: currentLocation.longitude,
                     latitudeDelta: 0.05,
                     longitudeDelta: 0.05,
                   }}
                 >
                   {/* Route Line */}
                   <Polyline
-                    coordinates={routeCoordinates}
+                    coordinates={routeStops.map(s => s.coordinate)}
                     strokeColor="#A1D826"
                     strokeWidth={4}
                   />
@@ -1161,18 +1379,17 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
                     <Marker
                       key={stop._id}
                       coordinate={stop.coordinate}
-                      title={stop.name}
-                      description={stop.passengerName}
+                      title={stop.passengerName}
+                      description={stop.name}
                       pinColor={stop.status === 'picked' ? '#4CAF50' : '#FF9800'}
                     />
                   ))}
                   
-                  {/* Vehicle Marker */}
+                  {/* Van Marker */}
                   {routeStarted && (
                     <Marker
-                      coordinate={vehiclePosition}
+                      coordinate={currentLocation}
                       title="Your Van"
-                      description="Current Location"
                     >
                       <View style={{
                         backgroundColor: '#A1D826',
@@ -1190,29 +1407,41 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
             {/* Passenger List */}
             <Text style={styles.sectionTitle}>Passengers</Text>
             {routeStops.map((stop, index) => (
-              <View key={stop._id} style={styles.stopCard}>
-                <View style={styles.stopHeader}>
-                  <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
-                    <View style={styles.stopNumber}>
-                      <Text style={styles.stopNumberText}>{index + 1}</Text>
+              <View key={stop._id} style={styles.card}>
+                <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
+                  <View style={{ flex: 1 }}>
+                    <View style={{ flexDirection: 'row', alignItems: 'center', marginBottom: 4 }}>
+                      <View style={{
+                        width: 28,
+                        height: 28,
+                        borderRadius: 14,
+                        backgroundColor: '#A1D826',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        marginRight: 10
+                      }}>
+                        <Text style={{ color: '#fff', fontSize: 14, fontWeight: '700' }}>
+                          {index + 1}
+                        </Text>
+                      </View>
+                      <Text style={{ fontSize: 16, fontWeight: '700', color: '#333' }}>
+                        {stop.passengerName}
+                      </Text>
                     </View>
-                    <View style={{ flex: 1 }}>
-                      <Text style={styles.stopName}>{stop.passengerName}</Text>
-                      <Text style={styles.stopPassenger}>📍 {stop.name}</Text>
-                    </View>
+                    <Text style={{ fontSize: 14, color: '#666', marginLeft: 38 }}>
+                      📍 {stop.name}
+                    </Text>
+                    <Text style={{ fontSize: 13, color: '#999', marginLeft: 38, marginTop: 2 }}>
+                      🕐 {stop.time}
+                    </Text>
                   </View>
                   <StatusBadge status={stop.status} />
-                </View>
-                
-                <View style={styles.stopTime}>
-                  <Ionicons name="time-outline" size={14} color="#999" />
-                  <Text style={styles.stopTimeText}>{stop.time}</Text>
                 </View>
 
                 {routeStarted && stop.status !== 'picked' && stop.status !== 'completed' && (
                   <TouchableOpacity
                     style={[styles.button, { marginTop: 12 }]}
-                    onPress={() => handlePickupPassenger(stop._id)}
+                    onPress={() => pickupPassenger(stop)}
                     disabled={loading}
                   >
                     <Ionicons name="checkmark-done" size={18} color="#fff" style={{ marginRight: 6 }} />
@@ -1225,7 +1454,7 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
         ) : (
           <View style={styles.card}>
             <Text style={styles.cardTitle}>No Route Assigned</Text>
-            <Text style={styles.cardText}>You don't have any routes assigned for today.</Text>
+            <Text style={styles.cardText}>You don't have any routes for today</Text>
           </View>
         )}
       </View>
@@ -1249,7 +1478,7 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
           />
         </View>
 
-        {/* Filter Tabs */}
+        {/* Filter */}
         <View style={styles.tabContainer}>
           {["All", "Completed", "Cancelled"].map((tab) => (
             <TouchableOpacity
@@ -1264,30 +1493,34 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
           ))}
         </View>
 
-        {/* Trips List */}
+        {/* Trips */}
         {filteredTrips.length > 0 ? (
           filteredTrips.map((trip) => (
-            <View key={trip._id} style={styles.tripCard}>
-              <View style={styles.tripHeader}>
+            <View key={trip._id} style={styles.card}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.routeText}>{trip.routeName || 'Route'}</Text>
-                  <Text style={styles.dateText}>
+                  <Text style={{ fontSize: 16, fontWeight: '700', color: '#333' }}>
+                    {trip.routeName || 'Route'}
+                  </Text>
+                  <Text style={{ fontSize: 13, color: '#999', marginTop: 4 }}>
                     {new Date(trip.createdAt).toLocaleDateString()}
                   </Text>
                 </View>
                 <StatusBadge status={trip.status} />
               </View>
               
-              <View style={styles.tripDetails}>
-                <View style={styles.tripDetailItem}>
+              <View style={{ flexDirection: 'row', marginTop: 8, gap: 16 }}>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                   <Ionicons name="people" size={16} color="#666" />
-                  <Text style={styles.tripDetailText}>
+                  <Text style={{ fontSize: 13, color: '#666', marginLeft: 6 }}>
                     {trip.passengers?.length || 0} passengers
                   </Text>
                 </View>
-                <View style={styles.tripDetailItem}>
+                <View style={{ flexDirection: 'row', alignItems: 'center' }}>
                   <Ionicons name="time" size={16} color="#666" />
-                  <Text style={styles.tripDetailText}>{trip.timeSlot}</Text>
+                  <Text style={{ fontSize: 13, color: '#666', marginLeft: 6 }}>
+                    {trip.timeSlot}
+                  </Text>
                 </View>
               </View>
             </View>
@@ -1304,60 +1537,39 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
   const renderPayments = () => (
     <ScrollView style={styles.scrollContent} showsVerticalScrollIndicator={false}>
       <View style={styles.contentPadding}>
-        <Text style={styles.sectionTitle}>Payments & Salary</Text>
+        <Text style={styles.sectionTitle}>Payments</Text>
         
-        {/* Summary Card */}
-        <View style={styles.summaryCard}>
-          <View style={styles.summaryHeader}>
-            <Text style={styles.summaryMonth}>This Month</Text>
-            <View style={styles.summaryBadge}>
-              <Text style={styles.summaryBadgeText}>
-                {new Date().toLocaleDateString('en-US', { month: 'long' })}
-              </Text>
-            </View>
-          </View>
-          
-          <View style={styles.amountSection}>
-            <Text style={styles.amountLabel}>Total Earned</Text>
-            <Text style={styles.amountValue}>
-              Rs. {paymentData.reduce((sum, p) => sum + (p.amount || 0), 0)}
-            </Text>
-          </View>
-
-          <View style={styles.statsContainer}>
-            <View style={styles.statItem}>
-              <Text style={styles.statLabel}>Trips</Text>
-              <Text style={styles.statValue}>
-                {trips.filter(t => t.status === 'Completed').length}
-              </Text>
-            </View>
-            <View style={styles.statItem}>
-              <Text style={styles.statLabel}>Pending</Text>
-              <Text style={styles.statValue}>
-                Rs. {paymentData.filter(p => p.status === 'Pending').reduce((sum, p) => sum + (p.amount || 0), 0)}
-              </Text>
-            </View>
-          </View>
+        {/* Summary */}
+        <View style={[styles.card, { backgroundColor: '#F0F9D9' }]}>
+          <Text style={{ fontSize: 18, fontWeight: '700', color: '#333', marginBottom: 8 }}>
+            This Month
+          </Text>
+          <Text style={{ fontSize: 32, fontWeight: '700', color: '#A1D826', marginBottom: 4 }}>
+            Rs. {paymentData.reduce((sum, p) => sum + (p.amount || 0), 0)}
+          </Text>
+          <Text style={{ fontSize: 14, color: '#666' }}>
+            {trips.filter(t => t.status === 'Completed').length} trips completed
+          </Text>
         </View>
 
         {/* Payment History */}
         <Text style={styles.sectionTitle}>Payment History</Text>
         {paymentData.length > 0 ? (
           paymentData.map((payment) => (
-            <View key={payment._id} style={styles.paymentCard}>
-              <View style={styles.paymentCardHeader}>
-                <Text style={styles.paymentMonth}>{payment.month}</Text>
-                <Text style={styles.paymentAmount}>Rs. {payment.amount}</Text>
+            <View key={payment._id} style={styles.card}>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
+                <Text style={{ fontSize: 16, fontWeight: '700', color: '#333' }}>
+                  {payment.month}
+                </Text>
+                <Text style={{ fontSize: 18, fontWeight: '700', color: '#A1D826' }}>
+                  Rs. {payment.amount}
+                </Text>
               </View>
-              
-              <View style={styles.paymentCardFooter}>
-                <View style={styles.paymentDate}>
-                  <Ionicons name="calendar-outline" size={14} color="#999" />
-                  <Text style={{ fontSize: 12, color: "#999", marginLeft: 6 }}>
-                    {new Date(payment.date).toLocaleDateString()}
-                  </Text>
-                </View>
-                <Text style={styles.paymentStatus}>{payment.status}</Text>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+                <Text style={{ fontSize: 13, color: '#999' }}>
+                  {new Date(payment.date).toLocaleDateString()}
+                </Text>
+                <StatusBadge status={payment.status} />
               </View>
             </View>
           ))
@@ -1373,9 +1585,8 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
   const renderSupport = () => (
     <ScrollView style={styles.scrollContent} showsVerticalScrollIndicator={false}>
       <View style={styles.contentPadding}>
-        <Text style={styles.sectionTitle}>Support & Complaints</Text>
+        <Text style={styles.sectionTitle}>Support</Text>
         
-        {/* New Ticket Button */}
         <TouchableOpacity
           style={styles.button}
           onPress={() => setNewTicketVisible(true)}
@@ -1384,26 +1595,22 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
           <Text style={styles.buttonText}>Submit New Complaint</Text>
         </TouchableOpacity>
 
-        {/* Tickets List */}
         <Text style={styles.sectionTitle}>My Complaints</Text>
         {supportTickets.length > 0 ? (
           supportTickets.map((ticket) => (
             <View key={ticket._id} style={styles.card}>
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 8 }}>
-                <Text style={styles.cardTitle}>{ticket.title}</Text>
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
+                <Text style={{ fontSize: 16, fontWeight: '700', color: '#333', flex: 1 }}>
+                  {ticket.title}
+                </Text>
                 <StatusBadge status={ticket.status} />
               </View>
-              <Text style={styles.cardText}>{ticket.description}</Text>
-              <Text style={{ fontSize: 12, color: "#999", marginTop: 8 }}>
+              <Text style={{ fontSize: 14, color: '#666', marginBottom: 8 }}>
+                {ticket.description}
+              </Text>
+              <Text style={{ fontSize: 12, color: '#999' }}>
                 {new Date(ticket.createdAt).toLocaleDateString()}
               </Text>
-              {ticket.replies && ticket.replies.length > 0 && (
-                <View style={{ marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#f0f0f0' }}>
-                  <Text style={{ fontSize: 14, fontWeight: '600', color: '#333', marginBottom: 8 }}>
-                    💬 {ticket.replies.length} {ticket.replies.length === 1 ? 'Reply' : 'Replies'}
-                  </Text>
-                </View>
-              )}
             </View>
           ))
         ) : (
@@ -1418,41 +1625,12 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
             <View style={styles.modalContent}>
               <View style={styles.modalHeader}>
                 <Text style={styles.modalTitle}>Submit Complaint</Text>
-                <TouchableOpacity
-                  style={styles.closeButton}
-                  onPress={() => setNewTicketVisible(false)}
-                >
+                <TouchableOpacity onPress={() => setNewTicketVisible(false)}>
                   <Ionicons name="close" size={24} color="#333" />
                 </TouchableOpacity>
               </View>
 
               <ScrollView>
-                <Text style={{ fontSize: 15, fontWeight: "600", color: "#333", marginBottom: 10 }}>
-                  Category
-                </Text>
-                <View style={{
-                  backgroundColor: "#f9f9f9",
-                  borderWidth: 1,
-                  borderColor: "#e5e5e5",
-                  borderRadius: 12,
-                  marginBottom: 16
-                }}>
-                  <TouchableOpacity
-                    style={{
-                      padding: 14,
-                      flexDirection: 'row',
-                      justifyContent: 'space-between',
-                      alignItems: 'center'
-                    }}
-                    onPress={() => {
-                      // Could add category picker here
-                    }}
-                  >
-                    <Text style={{ fontSize: 15, color: "#333" }}>{ticketCategory}</Text>
-                    <Ionicons name="chevron-down" size={20} color="#999" />
-                  </TouchableOpacity>
-                </View>
-
                 <Text style={{ fontSize: 15, fontWeight: "600", color: "#333", marginBottom: 10 }}>
                   Subject
                 </Text>
@@ -1464,13 +1642,11 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
                     borderRadius: 12,
                     padding: 14,
                     marginBottom: 16,
-                    fontSize: 15,
-                    color: "#333"
+                    fontSize: 15
                   }}
                   placeholder="Enter subject"
                   value={ticketSubject}
                   onChangeText={setTicketSubject}
-                  placeholderTextColor="#999"
                 />
 
                 <Text style={{ fontSize: 15, fontWeight: "600", color: "#333", marginBottom: 10 }}>
@@ -1485,26 +1661,24 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
                     padding: 14,
                     marginBottom: 20,
                     fontSize: 15,
-                    color: "#333",
                     height: 120,
                     textAlignVertical: 'top'
                   }}
                   placeholder="Describe your complaint..."
                   value={ticketDescription}
                   onChangeText={setTicketDescription}
-                  placeholderTextColor="#999"
                   multiline
                 />
 
                 <TouchableOpacity
                   style={styles.button}
-                  onPress={handleSubmitTicket}
+                  onPress={submitSupportTicket}
                   disabled={loading}
                 >
                   {loading ? (
                     <ActivityIndicator size="small" color="#fff" />
                   ) : (
-                    <Text style={styles.buttonText}>Submit Complaint</Text>
+                    <Text style={styles.buttonText}>Submit</Text>
                   )}
                 </TouchableOpacity>
               </ScrollView>
@@ -1518,12 +1692,12 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
   const renderNotifications = () => (
     <ScrollView style={styles.scrollContent} showsVerticalScrollIndicator={false}>
       <View style={styles.contentPadding}>
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 }}>
+        <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 16 }}>
           <Text style={styles.sectionTitle}>Notifications</Text>
           {unreadNotifications > 0 && (
             <TouchableOpacity onPress={markAllNotificationsAsRead}>
               <Text style={{ color: '#A1D826', fontSize: 14, fontWeight: '600' }}>
-                Mark all as read
+                Mark all read
               </Text>
             </TouchableOpacity>
           )}
@@ -1547,7 +1721,7 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
                 <Ionicons 
                   name={notification.icon || 'notifications'} 
                   size={24} 
-                  color={notification.color || '#A1D826'} 
+                  color="#A1D826" 
                   style={{ marginRight: 12 }}
                 />
                 <View style={{ flex: 1 }}>
@@ -1588,16 +1762,13 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
         <View style={styles.modalContent}>
           <View style={styles.modalHeader}>
             <Text style={styles.modalTitle}>Rate Your Trip</Text>
-            <TouchableOpacity
-              style={styles.closeButton}
-              onPress={() => setShowFeedbackModal(false)}
-            >
+            <TouchableOpacity onPress={() => setShowFeedbackModal(false)}>
               <Ionicons name="close" size={24} color="#333" />
             </TouchableOpacity>
           </View>
 
           <ScrollView>
-            <Text style={{ fontSize: 15, fontWeight: "600", color: "#333", marginBottom: 16, textAlign: 'center' }}>
+            <Text style={{ fontSize: 15, textAlign: 'center', color: '#666', marginBottom: 20 }}>
               How was your experience today?
             </Text>
 
@@ -1618,7 +1789,7 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
               ))}
             </View>
 
-            <Text style={{ fontSize: 15, fontWeight: "600", color: "#333", marginBottom: 10 }}>
+            <Text style={{ fontSize: 15, fontWeight: "600", marginBottom: 10 }}>
               Comments (Optional)
             </Text>
             <TextInput
@@ -1629,15 +1800,12 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
                 borderRadius: 12,
                 padding: 14,
                 marginBottom: 20,
-                fontSize: 15,
-                color: "#333",
                 height: 100,
                 textAlignVertical: 'top'
               }}
               placeholder="Share your experience..."
               value={feedbackComment}
               onChangeText={setFeedbackComment}
-              placeholderTextColor="#999"
               multiline
             />
 
@@ -1658,6 +1826,76 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
     </Modal>
   );
 
+  // Availability Modal
+  const AvailabilityModal = () => (
+    <Modal visible={availabilityModalVisible} animationType="slide" transparent>
+      <View style={styles.modalOverlay}>
+        <View style={styles.modalContent}>
+          <View style={styles.modalHeader}>
+            <Text style={styles.modalTitle}>Confirm Availability</Text>
+            <TouchableOpacity onPress={() => setAvailabilityModalVisible(false)}>
+              <Ionicons name="close" size={24} color="#333" />
+            </TouchableOpacity>
+          </View>
+
+          <ScrollView>
+            <Text style={{ fontSize: 14, color: '#666', marginBottom: 20 }}>
+              Set your available timings for tomorrow
+            </Text>
+
+            <Text style={{ fontSize: 15, fontWeight: "600", marginBottom: 10 }}>
+              Start Time
+            </Text>
+            <TextInput
+              style={{
+                backgroundColor: "#f9f9f9",
+                borderWidth: 1,
+                borderColor: "#e5e5e5",
+                borderRadius: 12,
+                padding: 14,
+                marginBottom: 16
+              }}
+              placeholder="07:00 AM"
+              value={startTime}
+              onChangeText={setStartTime}
+            />
+
+            <Text style={{ fontSize: 15, fontWeight: "600", marginBottom: 10 }}>
+              End Time
+            </Text>
+            <TextInput
+              style={{
+                backgroundColor: "#f9f9f9",
+                borderWidth: 1,
+                borderColor: "#e5e5e5",
+                borderRadius: 12,
+                padding: 14,
+                marginBottom: 20
+              }}
+              placeholder="06:00 PM"
+              value={endTime}
+              onChangeText={setEndTime}
+            />
+
+            <TouchableOpacity
+              style={styles.button}
+              onPress={confirmAvailability}
+              disabled={loading}
+            >
+              {loading ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text style={styles.buttonText}>Confirm</Text>
+              )}
+            </TouchableOpacity>
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+
+  // ==================== MAIN RENDER ====================
+  
   return (
     <View style={styles.container}>
       {/* Header */}
@@ -1699,18 +1937,18 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
             <View style={styles.sidebarHeader}>
               <Text style={styles.sidebarHeaderText}>Driver Portal</Text>
               <Text style={styles.sidebarHeaderSubtext}>
-                {driver?.name || "Driver Name"}
+                {driverProfile?.name || "Driver"}
               </Text>
             </View>
             
             <ScrollView style={styles.sidebarMenu}>
               {[
                 { view: "Dashboard", title: "Dashboard", icon: "home" },
-                { view: "Availability", title: "Confirm Availability", icon: "calendar-outline" },
-                { view: "Routes", title: "Assigned Routes", icon: "map" },
-                { view: "History", title: "Trip History", icon: "time" },
-                { view: "Payments", title: "Payments & Salary", icon: "card" },
-                { view: "Support", title: "Support & Complaints", icon: "help-circle" },
+                { view: "Availability", title: "Availability", icon: "calendar-outline" },
+                { view: "Routes", title: "Routes", icon: "map" },
+                { view: "History", title: "History", icon: "time" },
+                { view: "Payments", title: "Payments", icon: "card" },
+                { view: "Support", title: "Support", icon: "help-circle" },
                 { view: "Notifications", title: "Notifications", icon: "notifications", badge: unreadNotifications },
               ].map((item) => (
                 <TouchableOpacity
@@ -1747,7 +1985,7 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
                 onPress={() => {
                   Alert.alert(
                     "Logout", 
-                    "Are you sure you want to logout?",
+                    "Are you sure?",
                     [
                       { text: "Cancel", style: "cancel" },
                       { 
@@ -1781,8 +2019,9 @@ const UnifiedDriverDashboard = ({ navigation, route }) => {
       {currentView === "Support" && renderSupport()}
       {currentView === "Notifications" && renderNotifications()}
       
-      {/* Feedback Modal */}
+      {/* Modals */}
       <FeedbackModal />
+      <AvailabilityModal />
 
       {/* Loading Overlay */}
       {loading && (
