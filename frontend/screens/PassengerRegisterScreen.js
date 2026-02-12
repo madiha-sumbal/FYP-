@@ -3,7 +3,7 @@ import { View, Text, StyleSheet, Image, ScrollView, TouchableOpacity, Alert } fr
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import Icon from 'react-native-vector-icons/MaterialIcons';
 
-const API_BASE_URL = 'http://192.168.10.8:3000/api'; // Replace with your server IP
+const API_BASE_URL = 'http://192.168.10.3:3000/api'; // Replace with your server IP
 
 export default function PassengerProfile() {
   const [profile, setProfile] = useState({

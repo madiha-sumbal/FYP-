@@ -222,7 +222,9 @@ export const driverStyles = StyleSheet.create({
     shadowColor: "#A1D826",
     shadowOpacity: 0.3,
     shadowRadius: 8,
-    elevation: 4
+    elevation: 4,
+    flexDirection: 'row',
+    justifyContent: 'center'
   },
 
   buttonText: {
@@ -457,15 +459,13 @@ export const driverStyles = StyleSheet.create({
   stopPassenger: {
     color: "#666",
     fontSize: 14,
-    marginTop: 6,
-    marginLeft: 44
+    marginTop: 6
   },
 
   stopTime: {
     flexDirection: "row",
     alignItems: "center",
-    marginTop: 8,
-    marginLeft: 44
+    marginTop: 8
   },
 
   stopTimeText: {
@@ -865,5 +865,18 @@ export const driverStyles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "700",
     textAlign: "right"
+  },
+
+  // Loading Overlay
+  loadingOverlay: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    bottom: 0,
+    backgroundColor: 'rgba(0,0,0,0.7)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    zIndex: 1000,
   }
 });

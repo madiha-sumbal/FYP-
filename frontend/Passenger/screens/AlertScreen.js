@@ -9,131 +9,119 @@ import {
   Alert as RNAlert,
   ActivityIndicator,
 } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { LinearGradient } from 'expo-linear-gradient';
 import styles from '../../styles/NotificationScreenStyle';
 
-const API_BASE_URL = 'http://192.168.10.8:5001/api';
+const API_BASE_URL = 'http://192.168.10.6:3000/api';
 
 const categories = [
   { id: 'all', label: 'All', icon: 'apps' },
-  { id: 'payment', label: 'Payments', icon: 'card' },
-  { id: 'trip', label: 'Trips', icon: 'car' },
-  { id: 'driver', label: 'Drivers', icon: 'person' },
-  { id: 'system', label: 'System', icon: 'settings' },
+  { id: 'poll', label: 'Polls', icon: 'bar-chart' },
+  { id: 'route', label: 'Routes', icon: 'map' },
+  { id: 'confirmation', label: 'Confirmations', icon: 'checkmark-circle' },
+  { id: 'alert', label: 'Alerts', icon: 'warning' },
 ];
 
-export default function NotificationsScreen({ navigation }) {
-  const [notifications, setNotifications] = useState([]);
-  const [loading, setLoading] = useState(true);
+export default function AlertScreen({ navigation, route }) {
+  const { notifications: initialNotifications, onMarkAsRead, onMarkAllAsRead } = route.params || {};
+
+  const [notifications, setNotifications] = useState(initialNotifications || []);
+  const [loading, setLoading] = useState(!initialNotifications);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState('all');
-  const [counts, setCounts] = useState({
-    total: 0,
-    unread: 0
-  });
+  const [counts, setCounts] = useState({ total: 0, unread: 0 });
+  const [token, setToken] = useState(null);
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
   const slideAnim = useRef(new Animated.Value(30)).current;
 
   useEffect(() => {
+    const loadToken = async () => {
+      const storedToken = await AsyncStorage.getItem('authToken');
+      setToken(storedToken);
+    };
+    loadToken();
+  }, []);
+
+  useEffect(() => {
     Animated.parallel([
       Animated.timing(fadeAnim, {
         toValue: 1,
-        duration: 800,
+        duration: 700,
         useNativeDriver: true,
       }),
       Animated.timing(slideAnim, {
         toValue: 0,
-        duration: 800,
+        duration: 700,
         useNativeDriver: true,
       }),
     ]).start();
-
-    fetchNotifications();
   }, []);
 
-  // Fetch notifications from backend (बिना token के)
+  useEffect(() => {
+    if (token) fetchNotifications();
+  }, [token]);
+
+  useEffect(() => {
+    if (token && !loading) fetchNotifications(selectedCategory);
+  }, [selectedCategory]);
+
   const fetchNotifications = async (category = selectedCategory) => {
     try {
-      let url = `${API_BASE_URL}/notifications`;
-      if (category !== 'all') {
-        url += `?category=${category}`;
-      }
+      if (!token) return;
 
-      console.log('📡 Fetching notifications from:', url);
+      let url = `${API_BASE_URL}/notifications`;
+      if (category !== 'all') url += `?type=${category}`;
 
       const response = await fetch(url, {
         method: 'GET',
         headers: {
+          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
       });
 
-      console.log('📊 Notifications response status:', response.status);
-
-      if (!response.ok) {
-        throw new Error(`Server returned ${response.status}`);
+      if (response.status === 401) {
+        RNAlert.alert('Session Expired', 'Please login again');
+        return;
       }
+
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
 
       const data = await response.json();
-
       if (data.success) {
-        setNotifications(data.notifications || []);
-        setCounts(data.counts || { total: 0, unread: 0 });
-        console.log(`✅ Loaded ${data.notifications?.length || 0} notifications`);
-      } else {
-        throw new Error(data.message || 'Failed to load notifications');
+        const notifs = data.notifications || [];
+        setNotifications(notifs);
+        setCounts(data.counts || { 
+          total: notifs.length, 
+          unread: notifs.filter(n => !n.read).length 
+        });
       }
-
     } catch (error) {
       console.error('❌ Fetch notifications error:', error);
-      RNAlert.alert(
-        'Connection Error', 
-        'Please make sure server is running on http://192.168.10.8:5001'
-      );
-      setNotifications([]);
-      setCounts({ total: 0, unread: 0 });
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   };
 
-  // Category change effect
-  useEffect(() => {
-    if (!loading) {
-      fetchNotifications(selectedCategory);
-    }
-  }, [selectedCategory]);
-
-  const onRefresh = () => {
-    setRefreshing(true);
-    fetchNotifications();
-  };
-
   const markAsRead = async (id) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/notifications/${id}/read`, {
+      if (!token) return;
+      await fetch(`${API_BASE_URL}/notifications/${id}/read`, {
         method: 'PUT',
         headers: {
+          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
       });
-
-      const data = await response.json();
-
-      if (data.success) {
-        // Update local state
-        setNotifications(notifications.map(notification => 
-          notification.id === id ? { ...notification, read: true } : notification
-        ));
-        // Update counts
-        setCounts(prev => ({
-          ...prev,
-          unread: Math.max(0, prev.unread - 1)
-        }));
-      }
+      setNotifications(notifications.map(n => 
+        n._id === id ? { ...n, read: true } : n
+      ));
+      setCounts(prev => ({ ...prev, unread: Math.max(0, prev.unread - 1) }));
+      if (onMarkAsRead) onMarkAsRead(id);
     } catch (error) {
       console.error('Mark as read error:', error);
     }
@@ -141,28 +129,18 @@ export default function NotificationsScreen({ navigation }) {
 
   const markAllAsRead = async () => {
     try {
-      const response = await fetch(`${API_BASE_URL}/notifications/mark-all-read`, {
+      if (!token) return;
+      await fetch(`${API_BASE_URL}/notifications/mark-all-read`, {
         method: 'PUT',
         headers: {
+          'Authorization': `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
       });
-
-      const data = await response.json();
-
-      if (data.success) {
-        // Update all notifications to read
-        setNotifications(notifications.map(notification => ({ 
-          ...notification, 
-          read: true 
-        })));
-        // Update counts
-        setCounts(prev => ({
-          ...prev,
-          unread: 0
-        }));
-        RNAlert.alert('Success', 'All notifications marked as read');
-      }
+      setNotifications(notifications.map(n => ({ ...n, read: true })));
+      setCounts(prev => ({ ...prev, unread: 0 }));
+      RNAlert.alert('Success', 'All notifications marked as read');
+      if (onMarkAllAsRead) onMarkAllAsRead();
     } catch (error) {
       console.error('Mark all as read error:', error);
     }
@@ -170,106 +148,81 @@ export default function NotificationsScreen({ navigation }) {
 
   const getNotificationColor = (type) => {
     switch (type) {
-      case 'success': return ['#A1D826', '#8BC220'];
-      case 'payment': return ['#FFA726', '#FF9800'];
-      case 'warning': return ['#FF6B6B', '#EE5A52'];
-      case 'info': return ['#5AC8FA', '#4AB9F1'];
-      case 'trip': return ['#A1D826', '#8BC220'];
-      case 'driver': return ['#5AC8FA', '#4AB9F1'];
-      case 'system': return ['#FFA726', '#FF9800'];
+      case 'poll': return ['#2196F3', '#1976D2'];
+      case 'route': return ['#A1D826', '#8BC220'];
+      case 'confirmation': return ['#4CAF50', '#388E3C'];
+      case 'alert': return ['#FF9800', '#F57C00'];
       default: return ['#A1D826', '#8BC220'];
     }
   };
 
-  const renderCategoryTab = ({ item }) => (
-    <TouchableOpacity
-      style={[
-        styles.categoryTab,
-        selectedCategory === item.id && styles.categoryTabActive
-      ]}
-      onPress={() => setSelectedCategory(item.id)}
-    >
-      <Icon 
-        name={item.icon} 
-        size={18} 
-        color={selectedCategory === item.id ? '#fff' : '#7f8c8d'} 
-      />
-      <Text style={[
-        styles.categoryText,
-        selectedCategory === item.id && styles.categoryTextActive
-      ]}>
-        {item.label}
-      </Text>
-    </TouchableOpacity>
-  );
+  const getNotificationIcon = (type) => {
+    switch (type) {
+      case 'poll': return 'bar-chart';
+      case 'route': return 'map';
+      case 'confirmation': return 'checkmark-circle';
+      case 'alert': return 'warning';
+      default: return 'notifications';
+    }
+  };
 
-  const renderNotification = ({ item, index }) => (
+  const formatTime = (dateString) => {
+    const date = new Date(dateString);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffMins = Math.floor(diffMs / 60000);
+    
+    if (diffMins < 1) return 'Just now';
+    if (diffMins < 60) return `${diffMins}m ago`;
+    const diffHours = Math.floor(diffMins / 60);
+    if (diffHours < 24) return `${diffHours}h ago`;
+    const diffDays = Math.floor(diffHours / 24);
+    if (diffDays < 7) return `${diffDays}d ago`;
+    return date.toLocaleDateString();
+  };
+
+  const renderNotification = ({ item }) => (
     <Animated.View
       style={[
         styles.notificationCard,
-        { 
-          opacity: fadeAnim,
-          transform: [{ translateY: slideAnim }]
-        }
+        { opacity: fadeAnim, transform: [{ translateY: slideAnim }] }
       ]}
     >
       <View style={styles.notificationHeader}>
-        <View style={styles.notificationIconContainer}>
-          <LinearGradient
-            colors={getNotificationColor(item.type)}
-            style={styles.notificationIcon}
-          >
-            <Icon name={item.icon} size={18} color="#fff" />
-          </LinearGradient>
-          <View style={styles.notificationTitleContainer}>
-            <Text style={styles.notificationTitle}>{item.title}</Text>
-            <Text style={styles.notificationTime}>{item.time}</Text>
-          </View>
+        <LinearGradient
+          colors={getNotificationColor(item.type)}
+          style={styles.notificationIcon}
+        >
+          <Icon name={getNotificationIcon(item.type)} size={18} color="#fff" />
+        </LinearGradient>
+        <View style={styles.notificationTitleContainer}>
+          <Text style={styles.notificationTitle}>{item.title}</Text>
+          <Text style={styles.notificationTime}>{formatTime(item.createdAt)}</Text>
         </View>
-        
         {!item.read && (
-          <TouchableOpacity 
-            style={styles.markReadBtn}
-            onPress={() => markAsRead(item.id)}
-          >
-            <LinearGradient
-              colors={['#A1D826', '#8BC220']}
-              style={styles.markReadGradient}
-            >
-              <Icon name="checkmark" size={14} color="#fff" />
-            </LinearGradient>
+          <TouchableOpacity onPress={() => markAsRead(item._id)}>
+            <Icon name="checkmark-circle" size={22} color="#A1D826" />
           </TouchableOpacity>
         )}
       </View>
-
-      <View style={styles.notificationBody}>
-        <Text style={styles.notificationMessage}>{item.message}</Text>
-      </View>
-
-      {!item.read && (
-        <View style={styles.unreadIndicator} />
-      )}
+      <Text style={styles.notificationMessage}>{item.message}</Text>
+      {!item.read && <View style={styles.unreadIndicator} />}
     </Animated.View>
   );
 
-  const renderLoadingState = () => (
-    <View style={styles.loadingContainer}>
-      <ActivityIndicator size="large" color="#A1D826" />
-      <Text style={styles.loadingText}>Loading notifications...</Text>
-    </View>
-  );
+  if (loading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color="#A1D826" />
+        <Text style={styles.loadingText}>Loading...</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={styles.container}>
-      {/* Header */}
-      <LinearGradient
-        colors={['#A1D826', '#8BC220']}
-        style={styles.header}
-      >
-        <TouchableOpacity 
-          style={styles.backButton}
-          onPress={() => navigation.goBack()}
-        >
+      <LinearGradient colors={['#A1D826', '#8BC220']} style={styles.header}>
+        <TouchableOpacity onPress={() => navigation.goBack()}>
           <Icon name="arrow-back" size={24} color="#fff" />
         </TouchableOpacity>
         <View style={styles.headerTitleContainer}>
@@ -280,78 +233,66 @@ export default function NotificationsScreen({ navigation }) {
             </View>
           )}
         </View>
-        <TouchableOpacity 
-          style={styles.moreButton}
-          onPress={markAllAsRead}
-        >
+        <TouchableOpacity onPress={markAllAsRead}>
           <Icon name="checkmark-done" size={22} color="#fff" />
         </TouchableOpacity>
       </LinearGradient>
 
-      {/* Category Tabs */}
       <View style={styles.categoryContainer}>
         <FlatList
           data={categories}
-          renderItem={renderCategoryTab}
+          renderItem={({ item }) => (
+            <TouchableOpacity
+              style={[
+                styles.categoryTab,
+                selectedCategory === item.id && styles.categoryTabActive
+              ]}
+              onPress={() => setSelectedCategory(item.id)}
+            >
+              <Icon 
+                name={item.icon} 
+                size={18} 
+                color={selectedCategory === item.id ? '#fff' : '#7f8c8d'} 
+              />
+              <Text style={[
+                styles.categoryText,
+                selectedCategory === item.id && styles.categoryTextActive
+              ]}>
+                {item.label}
+              </Text>
+            </TouchableOpacity>
+          )}
           keyExtractor={item => item.id}
           horizontal
           showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.categoryList}
         />
       </View>
 
-      {/* Notifications Count */}
-      <View style={styles.notificationsCount}>
-        <Text style={styles.countText}>
-          {counts.total} notification{counts.total !== 1 ? 's' : ''}
-          {selectedCategory !== 'all' && ` in ${categories.find(cat => cat.id === selectedCategory)?.label}`}
-        </Text>
-        <TouchableOpacity onPress={onRefresh}>
-          <Icon name="refresh" size={16} color="#7f8c8d" />
-        </TouchableOpacity>
-      </View>
+      <FlatList
+        data={notifications}
+        renderItem={renderNotification}
+        keyExtractor={(item) => item._id}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={() => {
+              setRefreshing(true);
+              fetchNotifications();
+            }}
+            colors={['#A1D826']}
+          />
+        }
+        ListEmptyComponent={
+          <View style={styles.emptyState}>
+            <Icon name="notifications-off" size={60} color="#ccc" />
+            <Text style={styles.emptyStateTitle}>No Notifications</Text>
+          </View>
+        }
+      />
 
-      {/* Loading State */}
-      {loading && renderLoadingState()}
-
-      {/* Notifications List */}
-      {!loading && (
-        <FlatList
-          data={notifications}
-          renderItem={renderNotification}
-          keyExtractor={item => item.id.toString()}
-          contentContainerStyle={styles.listContainer}
-          showsVerticalScrollIndicator={false}
-          refreshControl={
-            <RefreshControl
-              refreshing={refreshing}
-              onRefresh={onRefresh}
-              colors={['#A1D826']}
-              tintColor="#A1D826"
-            />
-          }
-          ListEmptyComponent={
-            <View style={styles.emptyState}>
-              <Icon name="notifications-off" size={64} color="#e9ecef" />
-              <Text style={styles.emptyStateTitle}>No Notifications</Text>
-              <Text style={styles.emptyStateText}>
-                No notifications found.
-              </Text>
-            </View>
-          }
-        />
-      )}
-
-      {/* Mark All as Read FAB */}
-      {!loading && counts.unread > 0 && (
-        <TouchableOpacity 
-          style={styles.fab}
-          onPress={markAllAsRead}
-        >
-          <LinearGradient
-            colors={['#A1D826', '#8BC220']}
-            style={styles.fabGradient}
-          >
+      {counts.unread > 0 && (
+        <TouchableOpacity style={styles.fab} onPress={markAllAsRead}>
+          <LinearGradient colors={['#A1D826', '#8BC220']} style={styles.fabGradient}>
             <Icon name="checkmark-done" size={20} color="#fff" />
             <Text style={styles.fabText}>Mark All Read</Text>
           </LinearGradient>

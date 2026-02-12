@@ -1,160 +1,87 @@
+// context/AuthContext.js
 import React, { createContext, useState, useEffect, useContext } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-// Create context
-const AuthContext = createContext();
-
-const API_BASE_URL = "http://192.168.10.8:5001/api";
+const AuthContext = createContext({});
 
 export const AuthProvider = ({ children }) => {
   const [userToken, setUserToken] = useState(null);
-  const [isLoading, setIsLoading] = useState(true);
   const [userInfo, setUserInfo] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
 
-  // Check if user is logged in on app start
+  // Load token and user info on app start
   useEffect(() => {
-    checkExistingLogin();
+    loadStoredAuth();
   }, []);
 
-  const checkExistingLogin = async () => {
+  const loadStoredAuth = async () => {
     try {
       const token = await AsyncStorage.getItem('userToken');
-      const userInfo = await AsyncStorage.getItem('userInfo');
+      const userData = await AsyncStorage.getItem('userData');
 
       if (token) {
         setUserToken(token);
-        
-        if (userInfo) {
-          setUserInfo(JSON.parse(userInfo));
-        }
-        
-        // Verify token with backend (optional)
-        try {
-          const response = await fetch(`${API_BASE_URL}/auth/check`, {
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Content-Type': 'application/json'
-            }
-          });
+      }
 
-          if (response.ok) {
-            const data = await response.json();
-            if (!data.success) {
-              // Token is invalid, logout user
-              await logout();
-            }
-          }
-        } catch (error) {
-          console.error('Token verification failed:', error);
-          // Continue with stored token even if verification fails
-        }
+      if (userData) {
+        setUserInfo(JSON.parse(userData));
       }
     } catch (error) {
-      console.error('Auth check error:', error);
+      console.error('Error loading auth data:', error);
     } finally {
       setIsLoading(false);
     }
   };
 
-  const login = async (email, password) => {
+  const login = async (token, userData) => {
     try {
-      const response = await fetch(`${API_BASE_URL}/auth/login`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ email, password }),
-      });
-
-      const data = await response.json();
-
-      if (data.success) {
-        // Save token and user info
-        await AsyncStorage.setItem('userToken', data.token);
-        await AsyncStorage.setItem('userInfo', JSON.stringify(data.passenger));
-        
-        setUserToken(data.token);
-        setUserInfo(data.passenger);
-        
-        return { success: true, message: data.message };
-      } else {
-        return { success: false, message: data.message };
-      }
+      await AsyncStorage.setItem('userToken', token);
+      await AsyncStorage.setItem('userData', JSON.stringify(userData));
+      
+      setUserToken(token);
+      setUserInfo(userData);
     } catch (error) {
-      console.error('Login error:', error);
-      return { success: false, message: 'Network error. Please try again.' };
-    }
-  };
-
-  const register = async (userData) => {
-    try {
-      const response = await fetch(`${API_BASE_URL}/auth/register`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(userData),
-      });
-
-      const data = await response.json();
-
-      if (data.success) {
-        // Save token and user info
-        await AsyncStorage.setItem('userToken', data.token);
-        await AsyncStorage.setItem('userInfo', JSON.stringify(data.passenger));
-        
-        setUserToken(data.token);
-        setUserInfo(data.passenger);
-        
-        return { success: true, message: data.message };
-      } else {
-        return { success: false, message: data.message };
-      }
-    } catch (error) {
-      console.error('Registration error:', error);
-      return { success: false, message: 'Network error. Please try again.' };
+      console.error('Error saving auth data:', error);
     }
   };
 
   const logout = async () => {
     try {
       await AsyncStorage.removeItem('userToken');
-      await AsyncStorage.removeItem('userInfo');
+      await AsyncStorage.removeItem('userData');
       
       setUserToken(null);
       setUserInfo(null);
     } catch (error) {
-      console.error('Logout error:', error);
+      console.error('Error clearing auth data:', error);
     }
   };
 
-  const updateUserInfo = async (updatedInfo) => {
+  const updateUserInfo = async (newUserInfo) => {
     try {
-      await AsyncStorage.setItem('userInfo', JSON.stringify(updatedInfo));
-      setUserInfo(updatedInfo);
+      await AsyncStorage.setItem('userData', JSON.stringify(newUserInfo));
+      setUserInfo(newUserInfo);
     } catch (error) {
-      console.error('Update user info error:', error);
+      console.error('Error updating user info:', error);
     }
-  };
-
-  const authContextValue = {
-    userToken,
-    userInfo,
-    isLoading,
-    login,
-    register,
-    logout,
-    updateUserInfo,
   };
 
   return (
-    <AuthContext.Provider value={authContextValue}>
+    <AuthContext.Provider
+      value={{
+        userToken,
+        userInfo,
+        isLoading,
+        login,
+        logout,
+        updateUserInfo,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );
 };
 
-// Custom hook to use auth context
 export const useAuth = () => {
   const context = useContext(AuthContext);
   if (!context) {

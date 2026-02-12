@@ -17,13 +17,12 @@ import Icon from "react-native-vector-icons/Ionicons";
 import MapView, { Marker } from "react-native-maps";
 import styles from "../../styles/PassengerDashboardStyle";
 import { LinearGradient } from 'expo-linear-gradient';
-import { useAuth } from '../../context/AuthContext';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Use your actual IP address
-const API_BASE_URL = "http://192.168.10.8:5001/api";
+const API_BASE_URL = "http://192.168.10.6:3000/api";
 
 export default function PassengerDashboard({ navigation }) {
-  const { userToken, logout } = useAuth();
   const [showTravelAlert, setShowTravelAlert] = useState(true);
   const [showArrivalAlert, setShowArrivalAlert] = useState(true);
   const [callModalVisible, setCallModalVisible] = useState(false);
@@ -35,6 +34,7 @@ export default function PassengerDashboard({ navigation }) {
   const [refreshing, setRefreshing] = useState(false);
   const [dashboardData, setDashboardData] = useState(null);
   const [driverLocation, setDriverLocation] = useState(null);
+  const [userToken, setUserToken] = useState(null);
 
   // Animation refs
   const fadeAnim = useRef(new Animated.Value(0)).current;
@@ -64,6 +64,25 @@ export default function PassengerDashboard({ navigation }) {
     vehicleModel: "Toyota Hiace 2022",
     totalTrips: 1250,
     phone: "+92 300 1234567",
+  };
+
+  // Load token on mount
+  useEffect(() => {
+    loadToken();
+  }, []);
+
+  const loadToken = async () => {
+    try {
+      const token = await AsyncStorage.getItem('userToken');
+      if (token) {
+        setUserToken(token);
+        console.log("✅ Token loaded for dashboard");
+      } else {
+        console.log("⚠️ No token found");
+      }
+    } catch (error) {
+      console.error("❌ Error loading token:", error);
+    }
   };
 
   // API Functions

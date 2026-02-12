@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -12,16 +12,19 @@ import {
   Animated,
   Dimensions,
   ActivityIndicator,
+  Modal,
 } from 'react-native';
-import { Picker } from '@react-native-picker/picker';
 import MapView, { Marker, Polyline, PROVIDER_GOOGLE } from 'react-native-maps';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-const { width } = Dimensions.get('window');
 import { useNavigation } from '@react-navigation/native';
 
+const { width } = Dimensions.get('window');
 
-// Define colors
+// Google Maps API Key
+const GOOGLE_MAPS_API_KEY = 'AIzaSyDiZhjAhYniDLe4Ndr1u87NdDfIdZS6SME';
+
+// Colors
 const COLORS = {
   primary: '#afd826',
   primaryDark: '#8fb320',
@@ -32,48 +35,46 @@ const COLORS = {
   white: '#ffffff',
   black: '#111111',
   gray: '#6c757d',
+  darkGray: '#495057',
   lightGray: '#f8f9fa',
   border: '#e0e0e0',
 };
 
-// Predefined stop coordinates
-const stopCoordinates = {
-  'Chaklala Bus Stop': { latitude: 33.6008, longitude: 73.0963 },
-  'Korang Road': { latitude: 33.583, longitude: 73.1 },
-  'Scheme 3': { latitude: 33.5858, longitude: 73.0887 },
-  'PWD Housing': { latitude: 33.571, longitude: 73.145 },
-  'Gulberg Greens': { latitude: 33.6, longitude: 73.16 },
-  'F-7 Markaz': { latitude: 33.7214, longitude: 73.0572 },
-  'F-8 Markaz': { latitude: 33.710, longitude: 73.040 },
-  'F-10 Markaz': { latitude: 33.6953, longitude: 73.0129 },
-  'I-10 Markaz': { latitude: 33.6476, longitude: 73.0388 },
-  'G-11 Markaz': { latitude: 33.6686, longitude: 72.998 },
-  'G-10 Markaz': { latitude: 33.6751, longitude: 73.017 },
-  'Van 1 Markaz': { latitude: 33.6844, longitude: 73.0479 },
-  'Van 2 Markaz': { latitude: 33.6844, longitude: 73.0479 },
-  'Van 3 Markaz': { latitude: 33.6844, longitude: 73.0479 },
-};
+// API Base URL - Update this to your server IP
+const API_BASE_URL = 'http://192.168.10.6:3000/api';
 
-
-// API Base URL - Update this to your actual backend URL
-const API_BASE_URL = 'http://192.168.0.109:3000/api';
-
-
-
-// API Service Functions
+// ==================== API SERVICE ====================
 const apiService = {
-  // Generic API call function
+  async getAuthData() {
+    try {
+      const token = await AsyncStorage.getItem('authToken');
+      const transporterId = await AsyncStorage.getItem('transporterId');
+      const transporterData = await AsyncStorage.getItem('transporterData');
+      
+      return {
+        token,
+        transporterId,
+        transporterData: transporterData ? JSON.parse(transporterData) : null
+      };
+    } catch (error) {
+      console.error('❌ Error getting auth data:', error);
+      return { token: null, transporterId: null, transporterData: null };
+    }
+  },
+
   async apiCall(endpoint, options = {}) {
     try {
-      const token = await this.getToken();
+      const { token } = await this.getAuthData();
+      
+      if (!token) {
+        throw new Error('Authentication required');
+      }
+
       const headers = {
         'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
         ...options.headers,
       };
-
-      if (token) {
-        headers['Authorization'] = `Bearer ${token}`;
-      }
 
       const config = {
         ...options,
@@ -81,95 +82,188 @@ const apiService = {
       };
 
       const response = await fetch(`${API_BASE_URL}${endpoint}`, config);
+      const responseText = await response.text();
       
       if (!response.ok) {
+        if (response.status === 401 || response.status === 403) {
+          throw new Error('Authentication failed');
+        }
         throw new Error(`API Error: ${response.status}`);
       }
 
-      return await response.json();
+      const data = responseText ? JSON.parse(responseText) : {};
+      return data;
     } catch (error) {
-      console.error('API Call Error:', error);
+      console.error('❌ API Error:', endpoint, error);
       throw error;
     }
   },
-async getTrips() {
-    return this.apiCall('/trips');
-  },
-  async getToken() {
-    try {
-      return await AsyncStorage.getItem('authToken');
-    } catch (error) {
-      console.error('Error getting token:', error);
-      return null;
-    }
-  },
 
-  async setToken(token) {
-    try {
-      await AsyncStorage.setItem('authToken', token);
-    } catch (error) {
-      console.error('Error setting token:', error);
-    }
-  },
-
-  async removeToken() {
-    try {
-      await AsyncStorage.removeItem('authToken');
-    } catch (error) {
-      console.error('Error removing token:', error);
-    }
-  },
-
-  // ... rest of your API methods remain the same
-
-  // Auth APIs
-  async login(email, password) {
-    return this.apiCall('/auth/login', {
-      method: 'POST',
-      body: JSON.stringify({ email, password }),
-    });
-  },
-
+  // Profile APIs
   async getProfile() {
-    return this.apiCall('/profile');
+    try {
+      const { transporterId } = await this.getAuthData();
+      const response = await this.apiCall(`/transporter/profile/${transporterId}`);
+      const profileData = response.data || response.transporter || response;
+      
+      return {
+        id: profileData._id || profileData.id || transporterId,
+        name: profileData.name || 'Transporter',
+        email: profileData.email || 'email@example.com',
+        phone: profileData.phone || profileData.phoneNumber || 'N/A',
+        company: profileData.company || profileData.companyName || 'Transport Company',
+        address: profileData.address || 'N/A',
+        license: profileData.license || profileData.licenseNumber || 'N/A',
+        registrationDate: profileData.registrationDate || new Date().toISOString(),
+        location: profileData.location || 'N/A',
+        status: profileData.status || 'active'
+      };
+    } catch (error) {
+      console.error('❌ Error loading profile:', error);
+      return {
+        id: 'unknown',
+        name: 'Transporter',
+        email: 'email@example.com',
+        phone: 'N/A',
+        company: 'Transport Company',
+        address: 'N/A',
+        license: 'N/A',
+        registrationDate: new Date().toISOString(),
+        location: 'N/A',
+        status: 'active'
+      };
+    }
   },
 
   async updateProfile(profileData) {
-    return this.apiCall('/profile', {
+    const { transporterId } = await this.getAuthData();
+    return this.apiCall(`/transporter/profile/${transporterId}`, {
       method: 'PUT',
       body: JSON.stringify(profileData),
     });
   },
 
-  // Dashboard APIs
+  // Stats
   async getStats() {
-    return this.apiCall('/dashboard/stats');
+    try {
+      const { transporterId } = await this.getAuthData();
+      const response = await this.apiCall(`/dashboard/stats?transporterId=${transporterId}`);
+      const stats = response.stats || response.data || response;
+      return {
+        activeDrivers: parseInt(stats.activeDrivers) || 0,
+        totalPassengers: parseInt(stats.totalPassengers) || 0,
+        completedTrips: parseInt(stats.completedTrips) || 0,
+        ongoingTrips: parseInt(stats.ongoingTrips) || 0,
+        complaints: parseInt(stats.complaints) || 0,
+        paymentsReceived: parseInt(stats.paymentsReceived) || 0,
+        paymentsPending: parseInt(stats.paymentsPending) || 0,
+      };
+    } catch (error) {
+      return {
+        activeDrivers: 0,
+        totalPassengers: 0,
+        completedTrips: 0,
+        ongoingTrips: 0,
+        complaints: 0,
+        paymentsReceived: 0,
+        paymentsPending: 0,
+      };
+    }
   },
 
-  // Poll APIs
+  // Polls
   async getPolls() {
-    return this.apiCall('/polls');
+    try {
+      const { transporterId } = await this.getAuthData();
+      const response = await this.apiCall(`/polls?transporterId=${transporterId}`);
+      return Array.isArray(response) ? response : (response.polls || response.data || []);
+    } catch (error) {
+      return [];
+    }
   },
 
   async createPoll(pollData) {
+    const { transporterId } = await this.getAuthData();
     return this.apiCall('/polls', {
       method: 'POST',
-      body: JSON.stringify(pollData),
+      body: JSON.stringify({ ...pollData, transporterId }),
     });
   },
 
-  // Driver APIs
-  async getDrivers() {
-    return this.apiCall('/drivers');
+  async getPollResponses(pollId) {
+    try {
+      const response = await this.apiCall(`/polls/${pollId}/responses`);
+      return response.summary || {};
+    } catch (error) {
+      return { total: 0, yes: 0, no: 0, yesResponses: [], noResponses: [] };
+    }
   },
 
+  async closePoll(pollId) {
+    return this.apiCall(`/polls/${pollId}/close`, {
+      method: 'PUT',
+    });
+  },
+
+  // Driver Availability
+  async getAvailableDrivers(date) {
+    try {
+      const { transporterId } = await this.getAuthData();
+      const response = await this.apiCall(`/availability/drivers?date=${date}&transporterId=${transporterId}`);
+      return response.drivers || [];
+    } catch (error) {
+      return [];
+    }
+  },
+
+  // Route Assignment
+  async assignRouteFromPoll(pollId, assignmentData) {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    
+    return this.apiCall('/routes/assign', {
+      method: 'POST',
+      body: JSON.stringify({
+        pollId,
+        driverId: assignmentData.driverId,
+        routeName: assignmentData.routeName,
+        startPoint: assignmentData.startPoint || 'Start Point',
+        destination: assignmentData.destination || 'Destination',
+        timeSlot: assignmentData.timeSlot,
+        pickupTime: assignmentData.pickupTime || assignmentData.timeSlot,
+        date: tomorrow.toISOString()
+      }),
+    });
+  },
+
+  // Drivers
+  async getDrivers() {
+    try {
+      const { transporterId } = await this.getAuthData();
+      const response = await this.apiCall(`/drivers?transporterId=${transporterId}`);
+      return Array.isArray(response) ? response : (response.drivers || response.data || []);
+    } catch (error) {
+      return [];
+    }
+  },
+
+  // Driver Requests
   async getDriverRequests() {
-    return this.apiCall('/join-requests?type=driver');
+    try {
+      const { transporterId } = await this.getAuthData();
+      const response = await this.apiCall(`/join-requests?type=driver&transporterId=${transporterId}`);
+      const requests = Array.isArray(response) ? response : (response.requests || response.data || []);
+      return requests.filter(req => req.status === 'pending');
+    } catch (error) {
+      return [];
+    }
   },
 
   async approveDriverRequest(requestId) {
+    const { transporterId } = await this.getAuthData();
     return this.apiCall(`/join-requests/${requestId}/accept`, {
       method: 'PUT',
+      body: JSON.stringify({ transporterId }),
     });
   },
 
@@ -179,18 +273,34 @@ async getTrips() {
     });
   },
 
-  // Passenger APIs
+  // Passengers
   async getPassengers() {
-    return this.apiCall('/passengers');
+    try {
+      const { transporterId } = await this.getAuthData();
+      const response = await this.apiCall(`/passengers?transporterId=${transporterId}`);
+      return Array.isArray(response) ? response : (response.passengers || response.data || []);
+    } catch (error) {
+      return [];
+    }
   },
 
+  // Passenger Requests
   async getPassengerRequests() {
-    return this.apiCall('/join-requests?type=passenger');
+    try {
+      const { transporterId } = await this.getAuthData();
+      const response = await this.apiCall(`/join-requests?type=passenger&transporterId=${transporterId}`);
+      const requests = Array.isArray(response) ? response : (response.requests || response.data || []);
+      return requests.filter(req => req.status === 'pending');
+    } catch (error) {
+      return [];
+    }
   },
 
   async approvePassengerRequest(requestId) {
+    const { transporterId } = await this.getAuthData();
     return this.apiCall(`/join-requests/${requestId}/accept`, {
       method: 'PUT',
+      body: JSON.stringify({ transporterId }),
     });
   },
 
@@ -200,50 +310,64 @@ async getTrips() {
     });
   },
 
-  // Route APIs
+  // Routes
   async getRoutes() {
-    return this.apiCall('/routes');
+    try {
+      const { transporterId } = await this.getAuthData();
+      const response = await this.apiCall(`/routes?transporterId=${transporterId}`);
+      return Array.isArray(response) ? response : (response.routes || response.data || []);
+    } catch (error) {
+      return [];
+    }
   },
 
-  async createRoute(routeData) {
-    return this.apiCall('/routes', {
-      method: 'POST',
-      body: JSON.stringify(routeData),
-    });
+  // Trips
+  async getTrips() {
+    try {
+      const { transporterId } = await this.getAuthData();
+      const response = await this.apiCall(`/trips?transporterId=${transporterId}`);
+      return Array.isArray(response) ? response : (response.trips || response.data || []);
+    } catch (error) {
+      return [];
+    }
   },
 
-  async assignDriver(assignmentData) {
-    return this.apiCall(`/routes/${assignmentData.routeId}/assign`, {
-      method: 'PUT',
-      body: JSON.stringify(assignmentData),
-    });
-  },
-
-  // Payment APIs
+  // Payments
   async getDriverPayments() {
-    return this.apiCall('/payments?type=driver');
+    try {
+      const { transporterId } = await this.getAuthData();
+      const response = await this.apiCall(`/payments?type=driver&transporterId=${transporterId}`);
+      return Array.isArray(response) ? response : (response.payments || response.data || []);
+    } catch (error) {
+      return [];
+    }
   },
 
   async getPassengerPayments() {
-    return this.apiCall('/payments?type=passenger');
+    try {
+      const { transporterId } = await this.getAuthData();
+      const response = await this.apiCall(`/payments?type=passenger&transporterId=${transporterId}`);
+      return Array.isArray(response) ? response : (response.payments || response.data || []);
+    } catch (error) {
+      return [];
+    }
   },
 
-  async sendDriverPayment(paymentData) {
-    return this.apiCall('/payments', {
-      method: 'POST',
-      body: JSON.stringify(paymentData),
-    });
-  },
-
-  // Complaint APIs
+  // Complaints
   async getComplaints() {
-    return this.apiCall('/complaints');
+    try {
+      const { transporterId } = await this.getAuthData();
+      const response = await this.apiCall(`/complaints?transporterId=${transporterId}`);
+      return Array.isArray(response) ? response : (response.complaints || response.data || []);
+    } catch (error) {
+      return [];
+    }
   },
 
-  async replyToComplaint(complaintId, replyData) {
+  async replyToComplaint(complaintId, text) {
     return this.apiCall(`/complaints/${complaintId}/reply`, {
       method: 'POST',
-      body: JSON.stringify(replyData),
+      body: JSON.stringify({ text }),
     });
   },
 
@@ -253,9 +377,15 @@ async getTrips() {
     });
   },
 
-  // Notification APIs
+  // Notifications
   async getNotifications() {
-    return this.apiCall('/notifications');
+    try {
+      const { transporterId } = await this.getAuthData();
+      const response = await this.apiCall(`/notifications?transporterId=${transporterId}`);
+      return Array.isArray(response) ? response : (response.notifications || response.data || []);
+    } catch (error) {
+      return [];
+    }
   },
 
   async markNotificationAsRead(notificationId) {
@@ -263,72 +393,33 @@ async getTrips() {
       method: 'PUT',
     });
   },
-
- async getTrips() {
-    try {
-      const response = await this.apiCall('/trips');
-      console.log('Trips API Response:', response);
-      
-      // Handle different response formats
-      if (Array.isArray(response)) {
-        return response; // Direct array
-      } else if (response && Array.isArray(response.trips)) {
-        return response.trips; // { trips: [...] }
-      } else if (response && Array.isArray(response.data)) {
-        return response.data; // { data: [...] }
-      } else {
-        console.warn('Unexpected trips response format:', response);
-        return []; // Return empty array as fallback
-      }
-    } catch (error) {
-      console.error('Error in getTrips API:', error);
-      return []; // Return empty array on error
-    }
-  },
-
-
-  async updateTripLocation(tripId, locationData) {
-    return this.apiCall(`/trips/${tripId}/location`, {
-      method: 'PUT',
-      body: JSON.stringify(locationData),
-    });
-  },
-
-  // Auto Assignment API
-  async generateAutoAssignments() {
-    return this.apiCall('/auto-assign', {
-      method: 'POST',
-    });
-  },
 };
 
-const TransporterDashboard = ()=> {
-  const navigation = useNavigation(); 
+// ==================== MAIN COMPONENT ====================
+const TransporterDashboard = () => {
+  const navigation = useNavigation();
   const [sidebarVisible, setSidebarVisible] = useState(false);
   const [activeSection, setActiveSection] = useState('overview');
   const [refreshing, setRefreshing] = useState(false);
   const [lastUpdated, setLastUpdated] = useState(new Date());
-  const [paymentTab, setPaymentTab] = useState('driver');
-  const [responseTab, setResponseTab] = useState('passenger');
   const [slideAnim] = useState(new Animated.Value(-250));
-  const [selectedResponse, setSelectedResponse] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [selectedVan, setSelectedVan] = useState(null);
 
-  // Profile State
+  // State
   const [profile, setProfile] = useState({
-  name: 'Loading...',
-  email: 'Loading...',
-  phone: 'Loading...',
-  company: 'Loading...',
-  registrationDate: 'Loading...',
-  address: 'Loading...',
-  profileImage: '', 
-});
+    id: '',
+    name: 'Loading...',
+    email: 'Loading...',
+    phone: 'Loading...',
+    company: 'Loading...',
+    registrationDate: 'Loading...',
+    address: 'Loading...',
+    license: 'Loading...',
+    location: 'Loading...',
+  });
 
   const [isEditingProfile, setIsEditingProfile] = useState(false);
 
-  // Dashboard Stats
   const [stats, setStats] = useState({
     activeDrivers: 0,
     totalPassengers: 0,
@@ -339,11 +430,9 @@ const TransporterDashboard = ()=> {
     paymentsPending: 0,
   });
 
-  // Custom Time Slots for Polls
   const [customTimeSlots, setCustomTimeSlots] = useState(['07:00 AM', '07:30 AM', '08:00 AM']);
   const [newTimeSlot, setNewTimeSlot] = useState('');
 
-  // Poll State
   const [polls, setPolls] = useState([]);
   const [newPoll, setNewPoll] = useState({
     title: '',
@@ -351,64 +440,62 @@ const TransporterDashboard = ()=> {
     closingTime: '',
   });
 
-  // Passenger Responses
   const [passengerResponses, setPassengerResponses] = useState([]);
-
-  // Driver Availability
   const [driverAvailability, setDriverAvailability] = useState([]);
-
-  // Routes
   const [routes, setRoutes] = useState([]);
-  const [newRoute, setNewRoute] = useState({ name: '', stops: '' });
-
-  // Driver & Passenger Requests
   const [driverRequests, setDriverRequests] = useState([]);
   const [passengerRequests, setPassengerRequests] = useState([]);
-
-  // Payments
   const [driverPayments, setDriverPayments] = useState([]);
   const [passengerPayments, setPassengerPayments] = useState([]);
-  const [newPayment, setNewPayment] = useState({ driver: '', amount: '', mode: 'Cash' });
-
-  // Complaints
   const [complaints, setComplaints] = useState([]);
-  const [newReply, setNewReply] = useState('');
-
-  // Notifications
   const [notifications, setNotifications] = useState([]);
-
-  // Live Tracking
   const [vans, setVans] = useState([]);
-  const [vanPositions, setVanPositions] = useState({});
+  const [selectedPoll, setSelectedPoll] = useState(null);
+  const [selectedPollForAssignment, setSelectedPollForAssignment] = useState(null);
 
-  // Auto Assignment State
-  const [autoAssignments, setAutoAssignments] = useState([]);
-  const [unassignedInAuto, setUnassignedInAuto] = useState([]);
-  const [selectedAutoRoute, setSelectedAutoRoute] = useState(null);
-  const [viewMode, setViewMode] = useState('manual');
-
-  // Initialize van positions
+  // Check authentication on mount
   useEffect(() => {
-    const positions = vans.reduce((acc, van) => {
-      acc[van.id] = {
-        latitude: new Animated.Value(van.currentLocation?.latitude || 33.6844),
-        longitude: new Animated.Value(van.currentLocation?.longitude || 73.0479),
-        rotation: new Animated.Value(0),
-        scale: new Animated.Value(1),
-      };
-      return acc;
-    }, {});
-    setVanPositions(positions);
-  }, [vans]);
-
-  // Load all data on component mount
-  useEffect(() => {
-    loadAllData();
+    checkAuthentication();
   }, []);
 
+  const checkAuthentication = async () => {
+    try {
+      const { token, transporterId } = await apiService.getAuthData();
+      
+      if (!token || !transporterId) {
+        Alert.alert(
+          'Authentication Required',
+          'Please login to continue',
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                navigation.reset({
+                  index: 0,
+                  routes: [{ name: 'TransporterLogin' }],
+                });
+              }
+            }
+          ]
+        );
+        return;
+      }
+
+      loadAllData();
+    } catch (error) {
+      console.error('❌ Authentication check failed:', error);
+      navigation.reset({
+        index: 0,
+        routes: [{ name: 'TransporterLogin' }],
+      });
+    }
+  };
+
+  // Load all data
   const loadAllData = async () => {
     try {
       setIsLoading(true);
+
       await Promise.all([
         loadProfile(),
         loadStats(),
@@ -424,74 +511,53 @@ const TransporterDashboard = ()=> {
         loadNotifications(),
         loadTrips(),
       ]);
+
+      setLastUpdated(new Date());
     } catch (error) {
-      console.error('Error loading data:', error);
-      Alert.alert('Error', 'Failed to load data. Please check your connection.');
+      console.error('❌ Error loading data:', error);
+      
+      if (error.message === 'Authentication required' || error.message === 'Authentication failed') {
+        Alert.alert(
+          'Session Expired',
+          'Please login again',
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                navigation.reset({
+                  index: 0,
+                  routes: [{ name: 'TransporterLogin' }],
+                });
+              }
+            }
+          ]
+        );
+      } else {
+        Alert.alert('Error', 'Failed to load data. Please check your connection.');
+      }
     } finally {
       setIsLoading(false);
     }
   };
- // CORRECTED loadTrips function
-const loadTrips = async () => {
-  try {
-    const tripsData = await apiService.getTrips();
-    
-    console.log('🔍 Trips API Response:', JSON.stringify(tripsData, null, 2));
-    
-    // Handle case where tripsData might be an object instead of array
-    const tripsArray = Array.isArray(tripsData) ? tripsData : 
-                      (tripsData.trips || tripsData.data || []);
-    
-    console.log('📊 Processed trips array:', tripsArray.length);
-    
-    // Convert trips to vans format for your frontend
-    const vansData = tripsArray.map(trip => {
-      // Safely handle passengers array
-      const passengers = Array.isArray(trip.passengers) ? trip.passengers : [];
-      const pickedPassengers = passengers.filter(p => p && (p.status === 'picked' || p.status === 'current'));
-      
-      console.log(`🚐 Processing trip: ${trip.driverName}, Passengers: ${passengers.length}`);
-      
-      return {
-        id: trip._id, // MongoDB automatic ID
-        name: `Van ${trip.driverName || 'Unknown'}`,
-        driver: trip.driverName || 'Unknown Driver',
-        route: trip.routeName || 'Unknown Route',
-        timeSlot: trip.timeSlot || 'Not specified',
-        status: trip.status || 'Unknown',
-        passengers: pickedPassengers.length,
-        capacity: trip.capacity || 8,
-        currentStop: trip.currentStop || 'Not specified',
-        stops: Array.isArray(trip.stops) ? trip.stops : [],
-        completedStops: Array.isArray(trip.completedStops) ? trip.completedStops : [],
-        currentLocation: trip.currentLocation || { latitude: 33.6844, longitude: 73.0479 },
-        speed: trip.speed || 0,
-        eta: trip.eta || '0 min',
-        color: '#3498DB',
-        passengersList: passengers,
-        notifiedPickups: false,
-        notifiedComplete: false,
-        vehicle: trip.vehicleType || 'Unknown Vehicle',
-        vehicleNumber: trip.vehicleNumber || 'N/A'
-      };
-    });
-    
-    console.log('✅ Converted vans data:', vansData.length);
-    setVans(vansData);
-    
-  } catch (error) {
-    console.error('❌ Error loading trips:', error);
-    // Set empty array as fallback
-    setVans([]);
-  }
-};
-  // Individual data loading functions
+
   const loadProfile = async () => {
     try {
       const profileData = await apiService.getProfile();
-      setProfile(profileData);
+      
+      setProfile({
+        id: profileData.id || 'unknown',
+        name: profileData.name || 'Transporter',
+        email: profileData.email || 'email@example.com',
+        phone: profileData.phone || 'N/A',
+        company: profileData.company || 'Transport Company',
+        address: profileData.address || 'N/A',
+        license: profileData.license || 'N/A',
+        location: profileData.location || 'N/A',
+        registrationDate: profileData.registrationDate ?
+          new Date(profileData.registrationDate).toLocaleDateString() : 'N/A'
+      });
     } catch (error) {
-      console.error('Error loading profile:', error);
+      console.error('❌ Error loading profile:', error);
     }
   };
 
@@ -512,28 +578,25 @@ const loadTrips = async () => {
       console.error('Error loading polls:', error);
     }
   };
-// Update these functions in your component
-const loadDriverRequests = async () => {
-  try {
-    // ✅ Only load pending requests
-    const requestsData = await apiService.getDriverRequests();
-    const pendingRequests = requestsData.data.filter(req => req.status === 'pending');
-    setDriverRequests(pendingRequests);
-  } catch (error) {
-    console.error('Error loading driver requests:', error);
-  }
-};
 
-const loadPassengerRequests = async () => {
-  try {
-    // ✅ Only load pending requests
-    const requestsData = await apiService.getPassengerRequests();
-    const pendingRequests = requestsData.filter(req => req.status === 'pending');
-    setPassengerRequests(pendingRequests);
-  } catch (error) {
-    console.error('Error loading passenger requests:', error);
-  }
-};
+  const loadDriverRequests = async () => {
+    try {
+      const requestsData = await apiService.getDriverRequests();
+      setDriverRequests(requestsData);
+    } catch (error) {
+      console.error('Error loading driver requests:', error);
+    }
+  };
+
+  const loadPassengerRequests = async () => {
+    try {
+      const requestsData = await apiService.getPassengerRequests();
+      setPassengerRequests(requestsData);
+    } catch (error) {
+      console.error('Error loading passenger requests:', error);
+    }
+  };
+
   const loadPassengers = async () => {
     try {
       const passengersData = await apiService.getPassengers();
@@ -560,9 +623,6 @@ const loadPassengerRequests = async () => {
       console.error('Error loading routes:', error);
     }
   };
-
-  
-  
 
   const loadDriverPayments = async () => {
     try {
@@ -600,7 +660,47 @@ const loadPassengerRequests = async () => {
     }
   };
 
- 
+  const loadTrips = async () => {
+    try {
+      const tripsData = await apiService.getTrips();
+
+      if (!tripsData || tripsData.length === 0) {
+        setVans([]);
+        return;
+      }
+
+      const vansData = tripsData.map(trip => {
+        const passengers = Array.isArray(trip.passengers) ? trip.passengers : [];
+        const pickedPassengers = passengers.filter(p => p && (p.status === 'picked' || p.status === 'current'));
+
+        return {
+          id: trip._id || trip.id,
+          name: `Van ${trip.driverName || 'Unknown'}`,
+          driver: trip.driverName || 'Unknown Driver',
+          route: trip.routeName || 'Unknown Route',
+          timeSlot: trip.timeSlot || 'Not specified',
+          status: trip.status || 'Unknown',
+          passengers: pickedPassengers.length,
+          capacity: trip.capacity || 8,
+          currentStop: trip.currentStop || 'Not specified',
+          stops: Array.isArray(trip.stops) ? trip.stops : [],
+          completedStops: Array.isArray(trip.completedStops) ? trip.completedStops : [],
+          currentLocation: trip.currentLocation || { latitude: 33.6844, longitude: 73.0479 },
+          speed: trip.speed || 0,
+          eta: trip.eta || '0 min',
+          color: '#3498DB',
+          passengersList: passengers,
+          vehicle: trip.vehicleType || 'Unknown Vehicle',
+          vehicleNumber: trip.vehicleNumber || 'N/A'
+        };
+      });
+
+      setVans(vansData);
+    } catch (error) {
+      console.error('Error loading trips:', error);
+      setVans([]);
+    }
+  };
 
   // Sidebar animation
   useEffect(() => {
@@ -611,37 +711,14 @@ const loadPassengerRequests = async () => {
     }).start();
   }, [sidebarVisible]);
 
-  // Real-time simulation for dashboard stats
-  useEffect(() => {
-    const interval = setInterval(() => {
-      setLastUpdated(new Date());
-      setStats(prev => ({
-        ...prev,
-        ongoingTrips: vans.filter(v => v.status === 'En Route').length,
-        completedTrips: vans.filter(v => v.status === 'Completed').length,
-      }));
-    }, 10000);
-    return () => clearInterval(interval);
-  }, [vans]);
-
   const handleRefresh = useCallback(() => {
     setRefreshing(true);
     loadAllData().finally(() => {
       setRefreshing(false);
-      setLastUpdated(new Date());
     });
   }, []);
 
   // Poll Functions
-  const addCustomTimeSlot = () => {
-    if (!newTimeSlot) {
-      Alert.alert('Error', 'Please enter a time slot');
-      return;
-    }
-    setCustomTimeSlots([...customTimeSlots, newTimeSlot]);
-    setNewTimeSlot('');
-  };
-
   const toggleTimeSlot = slot => {
     setNewPoll(prev => ({
       ...prev,
@@ -651,306 +728,88 @@ const loadPassengerRequests = async () => {
     }));
   };
 
-  const createPoll = async () => {
+  const createPollWithNotification = async () => {
     if (!newPoll.title || !newPoll.selectedSlots.length || !newPoll.closingTime) {
       Alert.alert('Error', 'Please fill all fields and select at least one time slot');
       return;
     }
 
     try {
+      setIsLoading(true);
       const pollData = {
         title: newPoll.title,
         timeSlots: newPoll.selectedSlots,
         closesAt: newPoll.closingTime,
-        closingDate: new Date(Date.now() + 24 * 60 * 60 * 1000), // 24 hours from now
+        closingDate: new Date(Date.now() + 24 * 60 * 60 * 1000),
       };
 
-      const newPollData = await apiService.createPoll(pollData);
-      setPolls(prev => [...prev, newPollData.poll]);
+      const response = await apiService.createPoll(pollData);
+      
       setNewPoll({ title: '', selectedSlots: [], closingTime: '' });
-      Alert.alert('Success', `Poll created with ${newPoll.selectedSlots.length} time slots`);
+      await loadPolls();
+      
+      Alert.alert(
+        'Success', 
+        `Poll created successfully! ${response.notificationsSent || 0} passengers have been notified.`
+      );
     } catch (error) {
       Alert.alert('Error', 'Failed to create poll');
+    } finally {
+      setIsLoading(false);
     }
   };
 
-  // Route Functions
-  const createRoute = async () => {
-    if (!newRoute.name || !newRoute.stops) {
-      Alert.alert('Error', 'Please fill all fields');
-      return;
-    }
-
-    try {
-      const routeData = {
-        name: newRoute.name,
-        stops: newRoute.stops.split('\n').filter(s => s.trim()),
-        destination: 'Gulberg Greens',
-      };
-
-      const newRouteData = await apiService.createRoute(routeData);
-      setRoutes(prev => [...prev, newRouteData]);
-      setNewRoute({ name: '', stops: '' });
-      Alert.alert('Success', 'Route created successfully');
-    } catch (error) {
-      Alert.alert('Error', 'Failed to create route');
-    }
-  };
-
-  const assignDriverToRoute = async (routeId, driverId, timeSlot) => {
-    try {
-      const driver = driverAvailability.find(d => d.id === driverId);
-      const route = routes.find(r => r.id === routeId);
-      
-      if (!driver || !route || driver.status !== 'Available') {
-        Alert.alert('Error', 'Invalid assignment');
-        return;
-      }
-
-      const routePassengers = passengerResponses.filter(p => p.status === 'Confirmed' && p.selectedTimeSlot === timeSlot);
-      if (routePassengers.length > driver.capacity) {
-        Alert.alert('Warning', `Capacity exceeded: ${routePassengers.length}/${driver.capacity}`);
-      }
-
-      const assignmentData = {
-        routeId,
-        driverId,
-        timeSlot,
-        passengerIds: routePassengers.map(p => p.id),
-      };
-
-      await apiService.assignDriver(assignmentData);
-      
-      // Reload data to get updated assignments
-      await loadRoutes();
-      await loadDrivers();
-      await loadTrips();
-      
-      Alert.alert('Success', `${driver.name} assigned to ${route.name} at ${timeSlot}`);
-    } catch (error) {
-      Alert.alert('Error', 'Failed to assign driver');
-    }
-  };
-// Email Service Function
-const sendAcceptanceEmail = async (email, type, name) => {
-  try {
-    const emailData = {
-      to: email,
-      subject: `Your ${type} Request Has Been Accepted`,
-      message: `
-        Dear ${name},
-        
-        Congratulations! Your ${type} request has been accepted.
-        
-        You can now login to the app and start using our services.
-        
-        Thank you,
-        Transport Team
-      `
-    };
-
-    // API call to send email
-    await fetch(`${API_BASE_URL}/send-email`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(emailData),
-    });
-    
-    console.log(`Email sent to ${email}`);
-  } catch (error) {
-    console.error('Error sending email:', error);
-  }
-};
-
-const handlePassengerRequest = async (requestId, action) => {
-  try {
-    const request = passengerRequests.find(req => req._id === requestId);
-    
-    if (action === 'accept') {
-      await apiService.approvePassengerRequest(requestId);
-      
-      // Email send करें
-      if (request && request.email) {
-        await sendAcceptanceEmail(request.email, 'passenger', request.name);
-      }
-      
-      // Request को list से remove करें
-      setPassengerRequests(prev => prev.filter(req => req._id !== requestId));
-      
-      // Passenger को active passengers में add करें
-      const newPassenger = {
-        _id: request._id,
-        name: request.name,
-        email: request.email,
-        phone: request.phone,
-        pickupPoint: request.pickupPoint,
-        destination: request.destination,
-        status: 'Confirmed',
-        preferredTimeSlot: request.preferredTimeSlot,
-        location: request.location
-      };
-      
-      setPassengerResponses(prev => [...prev, newPassenger]);
-      
-      // Stats update
-      setStats(prev => ({
-        ...prev,
-        totalPassengers: prev.totalPassengers + 1
-      }));
-      
-      Alert.alert('Success', 'Passenger request accepted and added to active passengers');
-    } else {
-      await apiService.rejectPassengerRequest(requestId);
-      // Request को list से remove करें
-      setPassengerRequests(prev => prev.filter(req => req._id !== requestId));
-      Alert.alert('Rejected', 'Passenger request rejected');
-    }
-    
-    await loadStats();
-  } catch (error) {
-    Alert.alert('Error', `Failed to ${action} passenger request`);
-  }
-};
-  // Payment Functions
-  const sendDriverPayment = async () => {
-    if (!newPayment.driver || !newPayment.amount || !newPayment.mode) {
-      Alert.alert('Error', 'Please fill all fields');
-      return;
-    }
-
-    try {
-      const paymentData = {
-        type: 'driver',
-        driver: newPayment.driver,
-        amount: parseInt(newPayment.amount),
-        mode: newPayment.mode,
-        status: 'Sent',
-        month: new Date().toLocaleString('default', { month: 'long', year: 'numeric' }),
-      };
-
-      await apiService.sendDriverPayment(paymentData);
-      setNewPayment({ driver: '', amount: '', mode: 'Cash' });
-      
-      // Reload payments and stats
-      await loadDriverPayments();
-      await loadStats();
-      
-      Alert.alert('Success', 'Payment sent');
-    } catch (error) {
-      Alert.alert('Error', 'Failed to send payment');
-    }
-  };
-
-  const sendRenewalNotification = passengerId => Alert.alert('Notification Sent', 'Renewal reminder sent');
-  const sendPaymentReminder = passengerId => Alert.alert('Reminder Sent', 'Payment reminder sent');
-  
-  const updatePaymentStatus = async (passengerId, newStatus) => {
-    try {
-      // You'll need to implement this API endpoint
-      Alert.alert('Success', 'Payment status updated');
-    } catch (error) {
-      Alert.alert('Error', 'Failed to update payment status');
-    }
-  };
-
-  // Complaint Functions
-  const resolveComplaint = async complaintId => {
-    try {
-      await apiService.resolveComplaint(complaintId);
-      setComplaints(prev => prev.map(c => c.id === complaintId ? { ...c, status: 'Resolved' } : c));
-      await loadStats();
-      Alert.alert('Success', 'Complaint resolved');
-    } catch (error) {
-      Alert.alert('Error', 'Failed to resolve complaint');
-    }
-  };
-
-  const replyToComplaint = async (complaintId) => {
-    if (!newReply.trim()) {
-      Alert.alert('Error', 'Please enter a reply');
-      return;
-    }
-
-    try {
-      const replyData = {
-        text: newReply,
-      };
-
-      await apiService.replyToComplaint(complaintId, replyData);
-      setNewReply('');
-      setSelectedResponse(null);
-      
-      // Reload complaints to get the updated replies
-      await loadComplaints();
-      
-      Alert.alert('Success', 'Reply sent');
-    } catch (error) {
-      Alert.alert('Error', 'Failed to send reply');
-    }
-  };
-
-  // Profile Functions
-  const saveProfile = async () => {
-    try {
-      await apiService.updateProfile(profile);
-      setIsEditingProfile(false);
-      Alert.alert('Success', 'Profile updated');
-    } catch (error) {
-      Alert.alert('Error', 'Failed to update profile');
-    }
-  };
-
- const handleLogout = () => {
-  Alert.alert(
-    "Logout",
-    "Are you sure you want to log out?",
-    [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Logout",
-        style: "destructive",
-        onPress: () => {
-          // ✅ اگر آپ token وغیرہ save کرتے ہیں تو یہاں remove کر سکتے ہیں
-          // AsyncStorage.removeItem("authToken");
-
-          // ✅ اب user کو login screen پر واپس لے جائیں
-          navigation.reset({
-            index: 0,
-            routes: [{ name: "TransporterLogin" }],
-          });
+  const handleLogout = () => {
+    Alert.alert(
+      "Logout",
+      "Are you sure you want to log out?",
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Logout",
+          style: "destructive",
+          onPress: async () => {
+            await AsyncStorage.multiRemove([
+              'authToken',
+              'transporterId',
+              'transporterData',
+              'transporterEmail',
+              'transporterName',
+              'userRole'
+            ]);
+            navigation.reset({
+              index: 0,
+              routes: [{ name: "TransporterLogin" }],
+            });
+          },
         },
-      },
-    ]
-  );
-};
+      ]
+    );
+  };
 
-
-  // UI Components (Keep all your existing UI components exactly as they are)
+  // UI Components
   const StatCard = ({ label, value, iconName, color }) => (
-    <View style={[styles.statCard, { borderColor: color, backgroundColor: COLORS.lightGray }]}>
-      <Icon name={iconName} size={32} color={COLORS.gray} style={styles.statIcon} />
-      <View style={styles.statContent}>
-        <Text style={[styles.statValue, { color: COLORS.gray }]}>{value}</Text>
-        <Text style={[styles.statLabel, { color: COLORS.gray }]}>{label}</Text>
-      </View>
+    <View style={[styles.statCard, { borderColor: color }]}>
+      <Icon name={iconName} size={32} color={color} />
+      <Text style={styles.statValue}>{value}</Text>
+      <Text style={styles.statLabel}>{label}</Text>
     </View>
   );
 
   const QuickActionCard = ({ iconName, title, onPress }) => (
     <TouchableOpacity style={styles.quickActionCard} onPress={onPress}>
-      <View style={styles.quickActionIcon}><Icon name={iconName} size={28} color="#000" /></View>
+      <View style={styles.quickActionIcon}>
+        <Icon name={iconName} size={28} color={COLORS.primary} />
+      </View>
       <Text style={styles.quickActionTitle}>{title}</Text>
     </TouchableOpacity>
   );
 
-  // Sections (Keep all your existing section components exactly as they are)
-  // Only updating the data sources to use the state variables that now contain API data
+  // ==================== SECTIONS ====================
 
   const ProfileSection = () => (
     <ScrollView style={styles.section}>
-      <Text style={styles.sectionTitle}>Transporter Profile</Text>
+      <Text style={styles.sectionTitle}>Profile</Text>
       <View style={styles.card}>
         {isEditingProfile ? (
           <>
@@ -965,6 +824,7 @@ const handlePassengerRequest = async (requestId, action) => {
               placeholder="Email"
               value={profile.email}
               onChangeText={text => setProfile({ ...profile, email: text })}
+              editable={false}
             />
             <TextInput
               style={styles.input}
@@ -990,8 +850,29 @@ const handlePassengerRequest = async (requestId, action) => {
               value={profile.license}
               onChangeText={text => setProfile({ ...profile, license: text })}
             />
-            <TouchableOpacity style={styles.primaryBtn} onPress={saveProfile}>
-              <Text style={styles.primaryBtnText}>Save Profile</Text>
+            <TouchableOpacity
+              style={styles.primaryBtn}
+              onPress={async () => {
+                try {
+                  await apiService.updateProfile(profile);
+                  setIsEditingProfile(false);
+                  Alert.alert('Success', 'Profile updated');
+                  await loadProfile();
+                } catch (error) {
+                  Alert.alert('Error', 'Failed to update profile');
+                }
+              }}
+            >
+              <Text style={styles.primaryBtnText}>Save</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.primaryBtn, { backgroundColor: COLORS.gray, marginTop: 8 }]}
+              onPress={() => {
+                setIsEditingProfile(false);
+                loadProfile();
+              }}
+            >
+              <Text style={styles.primaryBtnText}>Cancel</Text>
             </TouchableOpacity>
           </>
         ) : (
@@ -1021,10 +902,17 @@ const handlePassengerRequest = async (requestId, action) => {
               <Text style={styles.profileValue}>{profile.license}</Text>
             </View>
             <View style={styles.profileInfo}>
-              <Text style={styles.profileLabel}>Registration Date:</Text>
+              <Text style={styles.profileLabel}>Location:</Text>
+              <Text style={styles.profileValue}>{profile.location}</Text>
+            </View>
+            <View style={styles.profileInfo}>
+              <Text style={styles.profileLabel}>Registered:</Text>
               <Text style={styles.profileValue}>{profile.registrationDate}</Text>
             </View>
-            <TouchableOpacity style={styles.primaryBtn} onPress={() => setIsEditingProfile(true)}>
+            <TouchableOpacity
+              style={styles.primaryBtn}
+              onPress={() => setIsEditingProfile(true)}
+            >
               <Text style={styles.primaryBtnText}>Edit Profile</Text>
             </TouchableOpacity>
           </>
@@ -1032,2704 +920,967 @@ const handlePassengerRequest = async (requestId, action) => {
       </View>
     </ScrollView>
   );
-  const ActiveDriversList = ({ onClose }) => {
-  const [activeDrivers, setActiveDrivers] = useState([]);
-  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    loadActiveDrivers();
-  }, []);
-
-  const loadActiveDrivers = async () => {
-    try {
-      setLoading(true);
-      // Fetch active drivers from users collection with role 'driver'
-      const response = await apiService.apiCall('/users?role=driver&status=active');
-      setActiveDrivers(response.users || []);
-    } catch (error) {
-      console.error('Error loading active drivers:', error);
-      Alert.alert('Error', 'Failed to load active drivers');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  if (loading) {
-    return (
-      <View style={styles.listContainer}>
-        <View style={styles.listHeader}>
-          <TouchableOpacity onPress={onClose} style={styles.backButton}>
-            <Icon name="arrow-back" size={24} color={COLORS.black} />
-          </TouchableOpacity>
-          <Text style={styles.listTitle}>Active Drivers</Text>
-          <View style={styles.headerRight} />
-        </View>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={COLORS.primary} />
-          <Text style={styles.loadingText}>Loading drivers...</Text>
-        </View>
-      </View>
-    );
-  }
-
-  return (
-    <View style={styles.listContainer}>
-      <View style={styles.listHeader}>
-        <TouchableOpacity onPress={onClose} style={styles.backButton}>
-          <Icon name="arrow-back" size={24} color={COLORS.black} />
-        </TouchableOpacity>
-        <Text style={styles.listTitle}>Active Drivers ({activeDrivers.length})</Text>
-        <TouchableOpacity onPress={loadActiveDrivers} style={styles.refreshButton}>
-          <Icon name="refresh" size={20} color={COLORS.primary} />
-        </TouchableOpacity>
-      </View>
-
-      <ScrollView style={styles.listContent}>
-        {activeDrivers.length > 0 ? (
-          activeDrivers.map(driver => (
-            <View key={driver._id} style={styles.driverCard}>
-              <View style={styles.driverHeader}>
-                <View style={styles.driverAvatar}>
-                  <Text style={styles.avatarText}>
-                    {driver.name?.charAt(0)?.toUpperCase() || 'D'}
-                  </Text>
-                </View>
-                <View style={styles.driverInfo}>
-                  <Text style={styles.driverName}>{driver.name}</Text>
-                  <Text style={styles.driverPhone}>{driver.phone}</Text>
-                  <Text style={styles.driverEmail}>{driver.email}</Text>
-                </View>
-                <View style={[styles.statusBadge, styles.activeBadge]}>
-                  <Text style={styles.statusText}>Active</Text>
-                </View>
-              </View>
-              
-              <View style={styles.driverDetails}>
-                <View style={styles.detailRow}>
-                  <Icon name="directions-car" size={16} color={COLORS.gray} />
-                  <Text style={styles.detailText}>{driver.vehicle || 'No vehicle'}</Text>
-                </View>
-                <View style={styles.detailRow}>
-                  <Icon name="people" size={16} color={COLORS.gray} />
-                  <Text style={styles.detailText}>Capacity: {driver.capacity || 'N/A'}</Text>
-                </View>
-                <View style={styles.detailRow}>
-                  <Icon name="work" size={16} color={COLORS.gray} />
-                  <Text style={styles.detailText}>Exp: {driver.experience || 'N/A'}</Text>
-                </View>
-              </View>
-
-              <View style={styles.driverActions}>
-                <TouchableOpacity style={styles.actionButton}>
-                  <Icon name="phone" size={16} color={COLORS.primary} />
-                  <Text style={styles.actionText}>Call</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.actionButton}>
-                  <Icon name="message" size={16} color={COLORS.primary} />
-                  <Text style={styles.actionText}>Message</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.actionButton}>
-                  <Icon name="visibility" size={16} color={COLORS.primary} />
-                  <Text style={styles.actionText}>View</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          ))
-        ) : (
-          <View style={styles.emptyState}>
-            <Icon name="directions-car" size={64} color={COLORS.gray} />
-            <Text style={styles.emptyText}>No active drivers found</Text>
-            <Text style={styles.emptySubtext}>All drivers will appear here once they are approved</Text>
-          </View>
-        )}
-      </ScrollView>
-    </View>
-  );
-};
-const PassengersList = ({ onClose }) => {
-  const [passengers, setPassengers] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    loadPassengers();
-  }, []);
-
-  const loadPassengers = async () => {
-    try {
-      setLoading(true);
-      // Fetch passengers from users collection with role 'passenger'
-      const response = await apiService.apiCall('/users?role=passenger&status=active');
-      setPassengers(response.users || []);
-    } catch (error) {
-      console.error('Error loading passengers:', error);
-      Alert.alert('Error', 'Failed to load passengers');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  if (loading) {
-    return (
-      <View style={styles.listContainer}>
-        <View style={styles.listHeader}>
-          <TouchableOpacity onPress={onClose} style={styles.backButton}>
-            <Icon name="arrow-back" size={24} color={COLORS.black} />
-          </TouchableOpacity>
-          <Text style={styles.listTitle}>Total Passengers</Text>
-          <View style={styles.headerRight} />
-        </View>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={COLORS.primary} />
-          <Text style={styles.loadingText}>Loading passengers...</Text>
-        </View>
-      </View>
-    );
-  }
-
-  return (
-    <View style={styles.listContainer}>
-      <View style={styles.listHeader}>
-        <TouchableOpacity onPress={onClose} style={styles.backButton}>
-          <Icon name="arrow-back" size={24} color={COLORS.black} />
-        </TouchableOpacity>
-        <Text style={styles.listTitle}>Total Passengers ({passengers.length})</Text>
-        <TouchableOpacity onPress={loadPassengers} style={styles.refreshButton}>
-          <Icon name="refresh" size={20} color={COLORS.primary} />
-        </TouchableOpacity>
-      </View>
-
-      <ScrollView style={styles.listContent}>
-        {passengers.length > 0 ? (
-          passengers.map(passenger => (
-            <View key={passenger._id} style={styles.passengerCard}>
-              <View style={styles.passengerHeader}>
-                <View style={styles.passengerAvatar}>
-                  <Text style={styles.avatarText}>
-                    {passenger.name?.charAt(0)?.toUpperCase() || 'P'}
-                  </Text>
-                </View>
-                <View style={styles.passengerInfo}>
-                  <Text style={styles.passengerName}>{passenger.name}</Text>
-                  <Text style={styles.passengerPhone}>{passenger.phone}</Text>
-                  <Text style={styles.passengerEmail}>{passenger.email}</Text>
-                </View>
-                <View style={[styles.statusBadge, styles.confirmedBadge]}>
-                  <Text style={styles.statusText}>Active</Text>
-                </View>
-              </View>
-              
-              <View style={styles.passengerDetails}>
-                <View style={styles.detailRow}>
-                  <Icon name="location-pin" size={16} color={COLORS.gray} />
-                  <Text style={styles.detailText}>
-                    Pickup: {passenger.pickupPoint || 'Not specified'}
-                  </Text>
-                </View>
-                <View style={styles.detailRow}>
-                  <Icon name="place" size={16} color={COLORS.gray} />
-                  <Text style={styles.detailText}>
-                    Destination: {passenger.destination || 'Not specified'}
-                  </Text>
-                </View>
-                <View style={styles.detailRow}>
-                  <Icon name="schedule" size={16} color={COLORS.gray} />
-                  <Text style={styles.detailText}>
-                    Preferred Time: {passenger.preferredTimeSlot || 'Any'}
-                  </Text>
-                </View>
-              </View>
-
-              <View style={styles.passengerActions}>
-                <TouchableOpacity style={styles.actionButton}>
-                  <Icon name="phone" size={16} color={COLORS.primary} />
-                  <Text style={styles.actionText}>Call</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.actionButton}>
-                  <Icon name="message" size={16} color={COLORS.primary} />
-                  <Text style={styles.actionText}>Message</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.actionButton}>
-                  <Icon name="receipt" size={16} color={COLORS.primary} />
-                  <Text style={styles.actionText}>Payment</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          ))
-        ) : (
-          <View style={styles.emptyState}>
-            <Icon name="people" size={64} color={COLORS.gray} />
-            <Text style={styles.emptyText}>No passengers found</Text>
-            <Text style={styles.emptySubtext}>All passengers will appear here once they are approved</Text>
-          </View>
-        )}
-      </ScrollView>
-    </View>
-  );
-};
-const LiveTripsList = ({ onClose }) => {
-  const [liveTrips, setLiveTrips] = useState([]);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    loadLiveTrips();
-  }, []);
-
-  const loadLiveTrips = async () => {
-    try {
-      setLoading(true);
-      // Fetch live trips from trips collection with status 'en_route'
-      const response = await apiService.apiCall('/trips?status=en_route');
-      setLiveTrips(response.trips || []);
-    } catch (error) {
-      console.error('Error loading live trips:', error);
-      Alert.alert('Error', 'Failed to load live trips');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  if (loading) {
-    return (
-      <View style={styles.listContainer}>
-        <View style={styles.listHeader}>
-          <TouchableOpacity onPress={onClose} style={styles.backButton}>
-            <Icon name="arrow-back" size={24} color={COLORS.black} />
-          </TouchableOpacity>
-          <Text style={styles.listTitle}>Live Trips</Text>
-          <View style={styles.headerRight} />
-        </View>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={COLORS.primary} />
-          <Text style={styles.loadingText}>Loading live trips...</Text>
-        </View>
-      </View>
-    );
-  }
-
-  return (
-    <View style={styles.listContainer}>
-      <View style={styles.listHeader}>
-        <TouchableOpacity onPress={onClose} style={styles.backButton}>
-          <Icon name="arrow-back" size={24} color={COLORS.black} />
-        </TouchableOpacity>
-        <Text style={styles.listTitle}>Live Trips ({liveTrips.length})</Text>
-        <TouchableOpacity onPress={loadLiveTrips} style={styles.refreshButton}>
-          <Icon name="refresh" size={20} color={COLORS.primary} />
-        </TouchableOpacity>
-      </View>
-
-      <ScrollView style={styles.listContent}>
-        {liveTrips.length > 0 ? (
-          liveTrips.map(trip => (
-            <View key={trip._id} style={styles.tripCard}>
-              <View style={styles.tripHeader}>
-                <View style={styles.tripIcon}>
-                  <Icon name="directions-car" size={24} color={COLORS.warning} />
-                </View>
-                <View style={styles.tripInfo}>
-                  <Text style={styles.tripName}>
-                    {trip.driverId?.name || 'Unknown Driver'} - {trip.vehicleId?.name || 'Unknown Vehicle'}
-                  </Text>
-                  <Text style={styles.tripRoute}>
-                    {trip.routeId?.name || 'Unknown Route'}
-                  </Text>
-                </View>
-                <View style={[styles.statusBadge, styles.liveBadge]}>
-                  <Text style={styles.statusText}>LIVE</Text>
-                </View>
-              </View>
-              
-              <View style={styles.tripDetails}>
-                <View style={styles.tripDetailRow}>
-                  <View style={styles.tripDetailItem}>
-                    <Icon name="people" size={14} color={COLORS.gray} />
-                    <Text style={styles.tripDetailText}>
-                      {trip.passengers?.length || 0} passengers
-                    </Text>
-                  </View>
-                  <View style={styles.tripDetailItem}>
-                    <Icon name="schedule" size={14} color={COLORS.gray} />
-                    <Text style={styles.tripDetailText}>
-                      ETA: {trip.eta || 'Calculating...'}
-                    </Text>
-                  </View>
-                </View>
-                <View style={styles.tripDetailRow}>
-                  <View style={styles.tripDetailItem}>
-                    <Icon name="location-pin" size={14} color={COLORS.gray} />
-                    <Text style={styles.tripDetailText}>
-                      Current: {trip.currentStop || 'En route'}
-                    </Text>
-                  </View>
-                  <View style={styles.tripDetailItem}>
-                    <Icon name="speed" size={14} color={COLORS.gray} />
-                    <Text style={styles.tripDetailText}>
-                      {trip.speed || 0} km/h
-                    </Text>
-                  </View>
-                </View>
-              </View>
-
-              <View style={styles.tripProgress}>
-                <View style={styles.progressBar}>
-                  <View 
-                    style={[
-                      styles.progressFill, 
-                      { width: `${trip.progress || 0}%` }
-                    ]} 
-                  />
-                </View>
-                <Text style={styles.progressText}>
-                  {trip.progress || 0}% Complete
-                </Text>
-              </View>
-
-              <View style={styles.tripActions}>
-                <TouchableOpacity style={[styles.actionButton, styles.trackButton]}>
-                  <Icon name="my-location" size={16} color={COLORS.white} />
-                  <Text style={[styles.actionText, styles.trackButtonText]}>Track Live</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.actionButton}>
-                  <Icon name="call" size={16} color={COLORS.primary} />
-                  <Text style={styles.actionText}>Call Driver</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          ))
-        ) : (
-          <View style={styles.emptyState}>
-            <Icon name="autorenew" size={64} color={COLORS.gray} />
-            <Text style={styles.emptyText}>No live trips</Text>
-            <Text style={styles.emptySubtext}>Currently no trips are in progress</Text>
-          </View>
-        )}
-      </ScrollView>
-    </View>
-  );
-};
-
-const OverviewSection = () => {
-  const [selectedList, setSelectedList] = useState(null);
-
-  const handleCardPress = (listType) => {
-    setSelectedList(listType);
-  };
-
-  const renderDetailedList = () => {
-    switch (selectedList) {
-      case 'activeDrivers':
-        return <ActiveDriversList onClose={() => setSelectedList(null)} />;
-      case 'totalPassengers':
-        return <PassengersList onClose={() => setSelectedList(null)} />;
-      case 'ongoingTrips':
-        return <LiveTripsList onClose={() => setSelectedList(null)} />;
-      case 'completedTrips':
-        return <CompletedTripsList onClose={() => setSelectedList(null)} />;
-      default:
-        return null;
-    }
-  };
-
-  if (selectedList) {
-    return renderDetailedList();
-  }
-
-  return (
-    <ScrollView style={styles.section} refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />}>
-      <Text style={styles.sectionTitle}>Today's Overview</Text>
+  const OverviewSection = () => (
+    <ScrollView
+      style={styles.section}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} />}
+    >
+      <Text style={styles.sectionTitle}>Dashboard Overview</Text>
       <Text style={styles.updateText}>
-        Last Updated: {lastUpdated.toLocaleString('en-PK', { 
-          day: '2-digit',
-          month: 'short',
-          year: 'numeric',
-        })}
+        Last Updated: {lastUpdated.toLocaleTimeString()}
       </Text>
-      <Text></Text>
 
-      <View style={styles.overviewGrid}>
-        {/* Active Drivers - Clickable */}
-        <TouchableOpacity 
-          style={[styles.overviewCard, { backgroundColor: '#E8F5E9' }]}
-          onPress={() => handleCardPress('activeDrivers')}
-        >
-          <Icon name="directions-car" size={32} color="#4CAF50" />
-          <Text style={styles.overviewValue}>{stats.activeDrivers}</Text>
-          <Text style={styles.overviewLabel}>Active Drivers</Text>
-          <Icon name="chevron-right" size={20} color="#4CAF50" style={styles.cardArrow} />
-        </TouchableOpacity>
-
-        {/* Total Passengers - Clickable */}
-        <TouchableOpacity 
-          style={[styles.overviewCard, { backgroundColor: '#E3F2FD' }]}
-          onPress={() => handleCardPress('totalPassengers')}
-        >
-          <Icon name="people" size={32} color="#2196F3" />
-          <Text style={styles.overviewValue}>{stats.totalPassengers}</Text>
-          <Text style={styles.overviewLabel}>Total Riders</Text>
-          <Icon name="chevron-right" size={20} color="#2196F3" style={styles.cardArrow} />
-        </TouchableOpacity>
-
-        {/* Live Trips - Clickable */}
-        <TouchableOpacity 
-          style={[styles.overviewCard, { backgroundColor: '#FFF3E0' }]}
-          onPress={() => handleCardPress('ongoingTrips')}
-        >
-          <Icon name="autorenew" size={32} color="#FF9800" />
-          <Text style={styles.overviewValue}>{stats.ongoingTrips}</Text>
-          <Text style={styles.overviewLabel}>Live Trips</Text>
-          <Icon name="chevron-right" size={20} color="#FF9800" style={styles.cardArrow} />
-        </TouchableOpacity>
-
-        {/* Completed Trips - Clickable */}
-        <TouchableOpacity 
-          style={[styles.overviewCard, { backgroundColor: '#F3E5F5' }]}
-          onPress={() => handleCardPress('completedTrips')}
-        >
-          <Icon name="check-circle" size={32} color="#9C27B0" />
-          <Text style={styles.overviewValue}>{stats.completedTrips}</Text>
-          <Text style={styles.overviewLabel}>Completed</Text>
-          <Icon name="chevron-right" size={20} color="#9C27B0" style={styles.cardArrow} />
-        </TouchableOpacity>
+      <View style={styles.statsGrid}>
+        <StatCard
+          label="Active Drivers"
+          value={stats.activeDrivers}
+          iconName="directions-car"
+          color={COLORS.success}
+        />
+        <StatCard
+          label="Total Passengers"
+          value={stats.totalPassengers}
+          iconName="people"
+          color={COLORS.primary}
+        />
+        <StatCard
+          label="Ongoing Trips"
+          value={stats.ongoingTrips}
+          iconName="autorenew"
+          color={COLORS.warning}
+        />
+        <StatCard
+          label="Completed Trips"
+          value={stats.completedTrips}
+          iconName="check-circle"
+          color={COLORS.success}
+        />
       </View>
-      
+
       <Text style={styles.sectionSubtitle}>Quick Actions</Text>
       <View style={styles.quickActionsGrid}>
-        <QuickActionCard iconName="poll" title="Create Poll" onPress={() => setActiveSection('poll')} />
-        <QuickActionCard iconName="map" title="Routes" onPress={() => setActiveSection('routes')} />
-        <QuickActionCard iconName="assignment-ind" title="Assign" onPress={() => setActiveSection('assign')} />
-        <QuickActionCard iconName="my-location" title="Track Live" onPress={() => setActiveSection('tracking')} />
+        <QuickActionCard
+          iconName="poll"
+          title="Create Poll"
+          onPress={() => setActiveSection('poll')}
+        />
+        <QuickActionCard
+          iconName="map"
+          title="Routes"
+          onPress={() => setActiveSection('routes')}
+        />
+        <QuickActionCard
+          iconName="assignment-ind"
+          title="Assign"
+          onPress={() => setActiveSection('assign')}
+        />
+        <QuickActionCard
+          iconName="my-location"
+          title="Track"
+          onPress={() => setActiveSection('tracking')}
+        />
       </View>
     </ScrollView>
   );
-};
 
-  // ... Keep all your other section components exactly as they were ...
- const PollSection = () => (
-  <ScrollView style={styles.section}>
-    <Text style={styles.sectionTitle}>Create Travel Poll</Text>
-    <View style={styles.card}>
-      <TextInput 
-        style={styles.input} 
-        placeholder="Poll Title" 
-        value={newPoll.title} 
-        onChangeText={text => setNewPoll({ ...newPoll, title: text })} 
-      />
-      <Text style={styles.inputLabel}>Add Custom Time Slot:</Text>
-      <View style={styles.customTimeSlotContainer}>
-        <TextInput 
-          style={[styles.input, { flex: 1, marginRight: 10 }]} 
-          placeholder="Enter time (e.g., 09:00 AM)" 
-          value={newTimeSlot} 
-          onChangeText={setNewTimeSlot} 
-        />
-        <TouchableOpacity style={styles.addTimeSlotBtn} onPress={addCustomTimeSlot}>
-          <Text style={styles.addTimeSlotBtnText}>Add</Text>
-        </TouchableOpacity>
-      </View>
-      <Text style={styles.inputLabel}>Select Time Slots:</Text>
-      {customTimeSlots.map((slot, index) => (
-        <TouchableOpacity 
-          key={index} 
-          style={[styles.timeSlotOption, newPoll.selectedSlots.includes(slot) && styles.timeSlotSelected]} 
-          onPress={() => toggleTimeSlot(slot)}
-        >
-          <View style={[styles.checkbox, newPoll.selectedSlots.includes(slot) && styles.checkboxSelected]}>
-            <Icon name="check" size={16} color="#000" />
-          </View>
-          <Text style={styles.timeSlotLabel}>{slot}</Text>
-        </TouchableOpacity>
-      ))}
-      <TextInput 
-        style={styles.input} 
-        placeholder="Closing Time (e.g., 22:00)" 
-        value={newPoll.closingTime} 
-        onChangeText={text => setNewPoll({ ...newPoll, closingTime: text })} 
-      />
-      <TouchableOpacity style={styles.primaryBtn} onPress={createPoll}>
-        <Text style={styles.primaryBtnText}>Send Poll</Text>
-      </TouchableOpacity>
-    </View>
-    <Text style={styles.sectionSubtitle}>Active Polls</Text>
-    {polls.length > 0 ? polls.map(poll => (
-      <View key={poll._id || poll.id} style={styles.pollCard}>
-        <Text style={styles.pollTitle}>{poll.title}</Text>
-        <Text style={styles.pollSlots}>Slots: {poll.timeSlots?.join(', ') || 'No slots'}</Text>
-        <View style={styles.pollStats}>
-          <Text style={styles.pollStat}>
-            {poll.responses?.length || 0}/{passengerResponses.length}
-          </Text>
-          <Text style={styles.pollStat}>Closes: {poll.closesAt}</Text>
-        </View>
-        <Text style={styles.pollDate}>{new Date(poll.createdAt).toLocaleDateString()}</Text>
-      </View>
-    )) : (
-      <View style={styles.emptyState}>
-        <Icon name="poll" size={48} color="#999" />
-        <Text style={styles.emptyText}>No active polls</Text>
-      </View>
-    )}
-  </ScrollView>
-);
+  const PollSection = () => {
+    const [pollResponses, setPollResponses] = useState([]);
 
-const ResponsesSection = () => (
-  <ScrollView style={styles.section}>
-    <Text style={styles.sectionTitle}>Poll Responses</Text>
-    <View style={styles.tabContainer}>
-      <TouchableOpacity 
-        style={[styles.tab, responseTab === 'passenger' && styles.tabActive]} 
-        onPress={() => setResponseTab('passenger')}
-      >
-        <Text style={[styles.tabText, responseTab === 'passenger' && styles.tabTextActive]}>Passengers</Text>
-      </TouchableOpacity>
-      <TouchableOpacity 
-        style={[styles.tab, responseTab === 'driver' && styles.tabActive]} 
-        onPress={() => setResponseTab('driver')}
-      >
-        <Text style={[styles.tabText, responseTab === 'driver' && styles.tabTextActive]}>Drivers</Text>
-      </TouchableOpacity>
-    </View>
-    
-    {responseTab === 'passenger' && (
-      <>
-        <Text style={styles.sectionSubtitle}>Confirmed Passengers</Text>
-        {passengerResponses.filter(p => p.status === 'Confirmed').length > 0 ? (
-          passengerResponses.filter(p => p.status === 'Confirmed').map(p => (
-            <View key={p._id || p.id} style={styles.responseCard}>
-              <View style={styles.responseInfo}>
-                <Text style={styles.responseName}>{p.name}</Text>
-                <Text style={styles.responseLocation}>Pickup: {p.pickupPoint}</Text>
-                <Text style={styles.responseDetail}>Time: {p.selectedTimeSlot || 'Not selected'}</Text>
-                <Text style={styles.responseDetail}>{p.phone}</Text>
-              </View>
-              <View style={[styles.statusBadge, { backgroundColor: COLORS.success }]}>
-                <Text style={styles.statusText}>Confirmed</Text>
-              </View>
-            </View>
-          ))
-        ) : (
-          <View style={styles.emptyState}>
-            <Icon name="people" size={48} color="#999" />
-            <Text style={styles.emptyText}>No confirmed passengers</Text>
-          </View>
-        )}
-        
-        <Text style={styles.sectionSubtitle}>Not Confirmed</Text>
-        {passengerResponses.filter(p => p.status !== 'Confirmed').length > 0 ? (
-          passengerResponses.filter(p => p.status !== 'Confirmed').map(p => (
-            <View key={p._id || p.id} style={styles.responseCard}>
-              <View style={styles.responseInfo}>
-                <Text style={styles.responseName}>{p.name}</Text>
-                <Text style={styles.responseLocation}>Pickup: {p.pickupPoint}</Text>
-                <Text style={styles.responseDetail}>{p.phone}</Text>
-              </View>
-              <View style={[styles.statusBadge, { backgroundColor: COLORS.gray }]}>
-                <Text style={styles.statusText}>{p.status || 'Not Confirmed'}</Text>
-              </View>
-            </View>
-          ))
-        ) : (
-          <View style={styles.emptyState}>
-            <Icon name="people-outline" size={48} color="#999" />
-            <Text style={styles.emptyText}>All passengers confirmed</Text>
-          </View>
-        )}
-      </>
-    )}
-    
-    {responseTab === 'driver' && (
-      <>
-        <Text style={styles.sectionSubtitle}>Available Drivers</Text>
-        {driverAvailability.filter(d => d.status === 'Available').length > 0 ? (
-          driverAvailability.filter(d => d.status === 'Available').map(d => (
-            <View key={d._id || d.id} style={styles.driverResponseCard}>
-              <View style={styles.driverInfo}>
-                <Text style={styles.driverName}>{d.name}</Text>
-                <Text style={styles.driverVan}>{d.van}</Text>
-                <Text style={styles.driverDetail}>Capacity: {d.capacity}</Text>
-                <Text style={styles.driverDetail}>
-                  Available: {d.availableTimeSlots?.join(', ') || 'No slots'}
-                </Text>
-                <Text style={styles.driverDetail}>{d.phone}</Text>
-              </View>
-              <View style={[styles.statusBadge, { backgroundColor: COLORS.success }]}>
-                <Text style={styles.statusText}>Available</Text>
-              </View>
-            </View>
-          ))
-        ) : (
-          <View style={styles.emptyState}>
-            <Icon name="directions-car" size={48} color="#999" />
-            <Text style={styles.emptyText}>No available drivers</Text>
-          </View>
-        )}
-        
-        <Text style={styles.sectionSubtitle}>Not Available</Text>
-        {driverAvailability.filter(d => d.status !== 'Available').length > 0 ? (
-          driverAvailability.filter(d => d.status !== 'Available').map(d => (
-            <View key={d._id || d.id} style={styles.driverResponseCard}>
-              <View style={styles.driverInfo}>
-                <Text style={styles.driverName}>{d.name}</Text>
-                <Text style={styles.driverVan}>{d.van}</Text>
-                <Text style={styles.driverDetail}>Capacity: {d.capacity}</Text>
-                <Text style={styles.driverDetail}>{d.phone}</Text>
-              </View>
-              <View style={[styles.statusBadge, { backgroundColor: COLORS.gray }]}>
-                <Text style={styles.statusText}>{d.status}</Text>
-              </View>
-            </View>
-          ))
-        ) : (
-          <View style={styles.emptyState}>
-            <Icon name="directions-car" size={48} color="#999" />
-            <Text style={styles.emptyText}>All drivers available</Text>
-          </View>
-        )}
-      </>
-    )}
-  </ScrollView>
-);
-const RouteSchedulingSection = () => {
-  const [showCreateForm, setShowCreateForm] = useState(false);
-  const [editingRoute, setEditingRoute] = useState(null);
-  const [availablePassengers, setAvailablePassengers] = useState([]);
-  const [selectedPassengers, setSelectedPassengers] = useState([]);
-  const [optimizedRoute, setOptimizedRoute] = useState(null);
-  const [newRoute, setNewRoute] = useState({ 
-    name: '', 
-    stops: '', 
-    distance: '', 
-    duration: '' 
-  });
-
-  // Load data on component mount
-  useEffect(() => {
-    loadAvailablePassengers();
-  }, []);
-
-  const loadAvailablePassengers = async () => {
-    try {
-      const passengers = await apiService.getPassengers();
-      const available = passengers.filter(p => 
-        p.status === 'active' && p.selectedTimeSlot
-      );
-      setAvailablePassengers(available);
-    } catch (error) {
-      console.error('Error loading passengers:', error);
-      Alert.alert('Error', 'Failed to load passengers');
-    }
-  };
-
-  // CREATE ROUTE FUNCTION
-  const createRoute = async () => {
-    if (!newRoute.name || !newRoute.stops) {
-      Alert.alert('Error', 'Please fill route name and stops');
-      return;
-    }
-
-    try {
-      const routeData = {
-        name: newRoute.name,
-        stops: newRoute.stops.split('\n').filter(s => s.trim()),
-        distance: newRoute.distance || '0 km',
-        duration: newRoute.duration || '0 min',
-        destination: 'Gulberg Greens'
-      };
-
-      const createdRoute = await apiService.createRoute(routeData);
-      
-      // Reset form
-      setNewRoute({ name: '', stops: '', distance: '', duration: '' });
-      setShowCreateForm(false);
-      
-      // Reload routes
-      await loadRoutes();
-      
-      Alert.alert('Success', 'Route created successfully');
-    } catch (error) {
-      console.error('Create route error:', error);
-      Alert.alert('Error', 'Failed to create route');
-    }
-  };
-
-  // UPDATE ROUTE FUNCTION
-  const handleUpdateRoute = async () => {
-    if (!editingRoute || !newRoute.name || !newRoute.stops) {
-      Alert.alert('Error', 'Please fill all fields');
-      return;
-    }
-
-    try {
-      const routeData = {
-        name: newRoute.name,
-        stops: newRoute.stops.split('\n').filter(s => s.trim()),
-        distance: newRoute.distance,
-        duration: newRoute.duration
-      };
-
-      await apiService.updateRoute(editingRoute._id, routeData);
-      
-      // Reset states
-      setEditingRoute(null);
-      setNewRoute({ name: '', stops: '', distance: '', duration: '' });
-      setShowCreateForm(false);
-      
-      // Reload routes
-      await loadRoutes();
-      
-      Alert.alert('Success', 'Route updated successfully');
-    } catch (error) {
-      console.error('Update route error:', error);
-      Alert.alert('Error', 'Failed to update route');
-    }
-  };
-
-  // DELETE ROUTE FUNCTION
-  // In your RouteSchedulingSection component, update the deleteRoute function:
-
-const deleteRoute = async (routeId) => {
-  Alert.alert(
-    "Delete Route",
-    "Are you sure you want to delete this route?",
-    [
-      { text: "Cancel", style: "cancel" },
-      {
-        text: "Delete",
-        style: "destructive",
-        onPress: async () => {
-          try {
-            console.log('Deleting route:', routeId);
-            await apiService.deleteRoute(routeId);
-            
-            // Remove from local state immediately for better UX
-            setRoutes(prev => prev.filter(route => route._id !== routeId));
-            
-            Alert.alert("Success", "Route deleted successfully");
-          } catch (error) {
-            console.error('Delete route error:', error);
-            Alert.alert("Error", "Failed to delete route");
-          }
-        }
-      }
-    ]
-  );
-};
-  // AI ROUTE OPTIMIZATION FUNCTIONS
-  const generateOptimizedRoute = () => {
-    if (selectedPassengers.length === 0) {
-      Alert.alert('Error', 'Please select passengers for route optimization');
-      return;
-    }
-
-    const selectedPassengerData = availablePassengers.filter(p => 
-      selectedPassengers.includes(p._id)
-    );
-
-    const optimized = optimizeRouteWithAI(selectedPassengerData);
-    setOptimizedRoute(optimized);
-    setNewRoute(prev => ({
-      ...prev,
-      name: optimized.name,
-      stops: optimized.stops.join('\n'),
-      distance: optimized.distance,
-      duration: optimized.duration
-    }));
-  };
-
-  const optimizeRouteWithAI = (passengers) => {
-    const stopCoords = {
-      'Chaklala Bus Stop': { lat: 33.6008, lng: 73.0963 },
-      'Korang Road': { lat: 33.583, lng: 73.1 },
-      'Scheme 3': { lat: 33.5858, lng: 73.0887 },
-      'PWD Housing': { lat: 33.571, lng: 73.145 },
-      'I-10 Markaz': { lat: 33.6476, lng: 73.0388 },
-      'G-11 Markaz': { lat: 33.6686, lng: 72.998 }
-    };
-
-    // Group by time slot
-    const timeSlotGroups = {};
-    passengers.forEach(passenger => {
-      const timeSlot = passenger.selectedTimeSlot || 'Not Selected';
-      if (!timeSlotGroups[timeSlot]) {
-        timeSlotGroups[timeSlot] = [];
-      }
-      timeSlotGroups[timeSlot].push(passenger);
-    });
-
-    // Get main time slot
-    const mainTimeSlot = Object.keys(timeSlotGroups).reduce((a, b) => 
-      timeSlotGroups[a].length > timeSlotGroups[b].length ? a : b
-    );
-
-    const mainPassengers = timeSlotGroups[mainTimeSlot];
-    
-    // Calculate optimal route
-    const stops = calculateOptimalStops(mainPassengers, stopCoords);
-    const totalDistance = calculateTotalDistance(stops, stopCoords);
-    const totalTime = calculateEstimatedTime(totalDistance);
-
-    return {
-      name: `AI Optimized Route - ${mainTimeSlot}`,
-      stops: stops,
-      distance: `${totalDistance.toFixed(1)} km`,
-      duration: `${totalTime} min`,
-      timeSlot: mainTimeSlot,
-      passengers: mainPassengers.map(p => p._id),
-      efficiency: '95%',
-      totalPassengers: mainPassengers.length
-    };
-  };
-
-  const calculateOptimalStops = (passengers, coords) => {
-    if (passengers.length === 0) return [];
-    
-    const stops = [...new Set(passengers.map(p => p.pickupPoint))];
-    
-    // Nearest neighbor algorithm
-    const visited = new Set();
-    const optimalRoute = [];
-    
-    if (stops.length > 0) {
-      let currentStop = stops[0];
-      optimalRoute.push(currentStop);
-      visited.add(currentStop);
-      
-      while (visited.size < stops.length) {
-        let nearestStop = null;
-        let minDistance = Infinity;
-        
-        stops.forEach(stop => {
-          if (!visited.has(stop) && coords[currentStop] && coords[stop]) {
-            const distance = calculateDistance(
-              coords[currentStop].lat, coords[currentStop].lng,
-              coords[stop].lat, coords[stop].lng
-            );
-            if (distance < minDistance) {
-              minDistance = distance;
-              nearestStop = stop;
-            }
-          }
-        });
-        
-        if (nearestStop) {
-          optimalRoute.push(nearestStop);
-          visited.add(nearestStop);
-          currentStop = nearestStop;
-        } else {
-          break;
-        }
-      }
-    }
-    
-    return optimalRoute;
-  };
-
-  const calculateDistance = (lat1, lng1, lat2, lng2) => {
-    const R = 6371;
-    const dLat = (lat2 - lat1) * Math.PI / 180;
-    const dLng = (lng2 - lng1) * Math.PI / 180;
-    const a = 
-      Math.sin(dLat/2) * Math.sin(dLat/2) +
-      Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
-      Math.sin(dLng/2) * Math.sin(dLng/2);
-    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
-    return R * c;
-  };
-
-  const calculateTotalDistance = (stops, coords) => {
-    let total = 0;
-    for (let i = 0; i < stops.length - 1; i++) {
-      if (coords[stops[i]] && coords[stops[i+1]]) {
-        total += calculateDistance(
-          coords[stops[i]].lat, coords[stops[i]].lng,
-          coords[stops[i+1]].lat, coords[stops[i+1]].lng
-        );
-      }
-    }
-    return total;
-  };
-
-  const calculateEstimatedTime = (distance) => {
-    return Math.round((distance / 40) * 60);
-  };
-
-  // EDIT ROUTE FUNCTION
-  const updateRoute = (route) => {
-    setEditingRoute(route);
-    setNewRoute({
-      name: route.name,
-      stops: Array.isArray(route.stops) ? route.stops.join('\n') : '',
-      distance: route.distance || '',
-      duration: route.duration || ''
-    });
-    setShowCreateForm(true);
-  };
-
-  // TOGGLE PASSENGER SELECTION
-  const togglePassengerSelection = (passengerId) => {
-    setSelectedPassengers(prev => 
-      prev.includes(passengerId)
-        ? prev.filter(id => id !== passengerId)
-        : [...prev, passengerId]
-    );
-  };
-
-  // RESET FORM
-  const resetForm = () => {
-    setShowCreateForm(false);
-    setEditingRoute(null);
-    setNewRoute({ name: '', stops: '', distance: '', duration: '' });
-    setOptimizedRoute(null);
-    setSelectedPassengers([]);
-  };
-
-  return (
-    <ScrollView style={styles.section}>
-      <Text style={styles.sectionTitle}>Route Scheduling</Text>
-
-      {/* AI Route Optimization Section */}
-      <View style={styles.card}>
-        <Text style={styles.cardTitle}>🤖 AI Route Optimizer</Text>
-        <Text style={styles.cardDescription}>
-          Select passengers to generate optimized routes based on their locations and time slots
-        </Text>
-
-        <Text style={styles.inputLabel}>Available Passengers:</Text>
-        
-        {availablePassengers.length > 0 ? (
-          Object.entries(
-            availablePassengers.reduce((groups, passenger) => {
-              const timeSlot = passenger.selectedTimeSlot || 'Not Selected';
-              if (!groups[timeSlot]) groups[timeSlot] = [];
-              groups[timeSlot].push(passenger);
-              return groups;
-            }, {})
-          ).map(([timeSlot, passengers]) => (
-            <View key={timeSlot} style={styles.timeSlotGroup}>
-              <Text style={styles.timeSlotTitle}>{timeSlot} ({passengers.length} passengers)</Text>
-              {passengers.map(passenger => (
-                <TouchableOpacity
-                  key={passenger._id}
-                  style={[
-                    styles.passengerOption,
-                    selectedPassengers.includes(passenger._id) && styles.passengerSelected
-                  ]}
-                  onPress={() => togglePassengerSelection(passenger._id)}
-                >
-                  <View style={[
-                    styles.passengerCheckbox,
-                    selectedPassengers.includes(passenger._id) && styles.passengerCheckboxSelected
-                  ]}>
-                    {selectedPassengers.includes(passenger._id) && (
-                      <Icon name="check" size={16} color="#fff" />
-                    )}
-                  </View>
-                  <View style={styles.passengerInfo}>
-                    <Text style={styles.passengerName}>{passenger.name}</Text>
-                    <Text style={styles.passengerLocation}>{passenger.pickupPoint}</Text>
-                  </View>
-                  <Text style={styles.passengerTime}>{passenger.selectedTimeSlot}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          ))
-        ) : (
-          <Text style={styles.noPassengersText}>No available passengers found</Text>
-        )}
-
-        <TouchableOpacity 
-          style={[
-            styles.primaryBtn, 
-            selectedPassengers.length === 0 && styles.disabledBtn
-          ]}
-          onPress={generateOptimizedRoute}
-          disabled={selectedPassengers.length === 0}
-        >
-          <Icon name="psychology" size={20} color="#fff" />
-          <Text style={styles.primaryBtnText}>Generate AI Optimized Route</Text>
-        </TouchableOpacity>
-
-        {optimizedRoute && (
-          <View style={styles.optimizedRouteCard}>
-            <Text style={styles.optimizedTitle}>🚀 AI Optimized Route</Text>
-            <View style={styles.optimizedStats}>
-              <View style={styles.optimizedStat}>
-                <Text style={styles.optimizedStatValue}>{optimizedRoute.totalPassengers}</Text>
-                <Text style={styles.optimizedStatLabel}>Passengers</Text>
-              </View>
-              <View style={styles.optimizedStat}>
-                <Text style={styles.optimizedStatValue}>{optimizedRoute.distance}</Text>
-                <Text style={styles.optimizedStatLabel}>Distance</Text>
-              </View>
-              <View style={styles.optimizedStat}>
-                <Text style={styles.optimizedStatValue}>{optimizedRoute.duration}</Text>
-                <Text style={styles.optimizedStatLabel}>Time</Text>
-              </View>
-              <View style={styles.optimizedStat}>
-                <Text style={styles.optimizedStatValue}>{optimizedRoute.efficiency}</Text>
-                <Text style={styles.optimizedStatLabel}>Efficiency</Text>
-              </View>
-            </View>
-            <Text style={styles.optimizedStopsTitle}>Optimized Stops:</Text>
-            {optimizedRoute.stops.map((stop, index) => (
-              <View key={index} style={styles.optimizedStop}>
-                <Text style={styles.stopNumber}>{index + 1}</Text>
-                <Text style={styles.stopName}>{stop}</Text>
-              </View>
-            ))}
-            <TouchableOpacity 
-              style={styles.useRouteBtn}
-              onPress={() => setShowCreateForm(true)}
+    return (
+      <ScrollView style={styles.section}>
+        <Text style={styles.sectionTitle}>Create Travel Poll</Text>
+        <View style={styles.card}>
+          <TextInput
+            style={styles.input}
+            placeholder="Poll Title (e.g., Tomorrow Travel Confirmation)"
+            value={newPoll.title}
+            onChangeText={text => setNewPoll({ ...newPoll, title: text })}
+          />
+          
+          <Text style={styles.inputLabel}>Available Time Slots:</Text>
+          {customTimeSlots.map((slot, index) => (
+            <TouchableOpacity
+              key={index}
+              style={[
+                styles.timeSlotOption,
+                newPoll.selectedSlots.includes(slot) && styles.timeSlotSelected
+              ]}
+              onPress={() => toggleTimeSlot(slot)}
             >
-              <Text style={styles.useRouteBtnText}>Use This Route</Text>
+              <View style={[
+                styles.checkbox,
+                newPoll.selectedSlots.includes(slot) && styles.checkboxSelected
+              ]}>
+                {newPoll.selectedSlots.includes(slot) && (
+                  <Icon name="check" size={16} color={COLORS.white} />
+                )}
+              </View>
+              <Text style={styles.timeSlotLabel}>{slot}</Text>
             </TouchableOpacity>
-          </View>
-        )}
-      </View>
-
-      {/* Create/Edit Route Form */}
-      <View style={styles.card}>
-        <View style={styles.formHeader}>
-          <Text style={styles.cardTitle}>
-            {editingRoute ? 'Edit Route' : 'Create New Route'}
-          </Text>
-          <TouchableOpacity onPress={resetForm}>
-            <Text style={styles.toggleFormText}>
-              {showCreateForm ? 'Cancel' : 'Create Route'}
-            </Text>
+          ))}
+          
+          <TextInput
+            style={styles.input}
+            placeholder="Closing Time (e.g., 22:00)"
+            value={newPoll.closingTime}
+            onChangeText={text => setNewPoll({ ...newPoll, closingTime: text })}
+          />
+          
+          <TouchableOpacity 
+            style={styles.primaryBtn} 
+            onPress={createPollWithNotification}
+            disabled={isLoading}
+          >
+            {isLoading ? (
+              <ActivityIndicator size="small" color={COLORS.white} />
+            ) : (
+              <Text style={styles.primaryBtnText}>Create Poll & Notify Passengers</Text>
+            )}
           </TouchableOpacity>
         </View>
 
-        {showCreateForm && (
-          <>
-            <TextInput 
-              style={styles.input} 
-              placeholder="Route Name" 
-              value={newRoute.name} 
-              onChangeText={text => setNewRoute({ ...newRoute, name: text })} 
-            />
-            <TextInput 
-              style={[styles.input, styles.textArea]} 
-              placeholder="Stops (one per line)" 
-              value={newRoute.stops} 
-              onChangeText={text => setNewRoute({ ...newRoute, stops: text })} 
-              multiline 
-              numberOfLines={4}
-            />
-            <View style={styles.distanceDurationRow}>
-              <TextInput 
-                style={[styles.input, styles.halfInput]} 
-                placeholder="Distance (km)" 
-                value={newRoute.distance} 
-                onChangeText={text => setNewRoute({ ...newRoute, distance: text })} 
-                keyboardType="numeric"
-              />
-              <TextInput 
-                style={[styles.input, styles.halfInput]} 
-                placeholder="Duration (min)" 
-                value={newRoute.duration} 
-                onChangeText={text => setNewRoute({ ...newRoute, duration: text })} 
-                keyboardType="numeric"
-              />
-            </View>
-            
-            {editingRoute ? (
-              <View style={styles.formActions}>
-                <TouchableOpacity 
-                  style={[styles.primaryBtn, styles.updateBtn]} 
-                  onPress={handleUpdateRoute}
-                >
-                  <Text style={styles.primaryBtnText}>Update Route</Text>
-                </TouchableOpacity>
-                <TouchableOpacity 
-                  style={[styles.primaryBtn, styles.cancelBtn]} 
-                  onPress={resetForm}
-                >
-                  <Text style={styles.primaryBtnText}>Cancel</Text>
-                </TouchableOpacity>
-              </View>
-            ) : (
-              <TouchableOpacity style={styles.primaryBtn} onPress={createRoute}>
-                <Text style={styles.primaryBtnText}>Create Route</Text>
-              </TouchableOpacity>
-            )}
-          </>
-        )}
-      </View>
-      
-      <Text style={styles.sectionSubtitle}>Existing Routes</Text>
-      
-      {routes.length > 0 ? routes.map(route => (
-        <View key={route._id} style={styles.routeCard}>
-          <View style={styles.routeHeader}>
-            <Text style={styles.routeName}>{route.name}</Text>
-            <View style={styles.routeActions}>
-              <TouchableOpacity 
-                style={styles.actionBtn}
-                onPress={() => updateRoute(route)}
-              >
-                <Icon name="edit" size={18} color="#2196F3" />
-              </TouchableOpacity>
-              <TouchableOpacity 
-                style={styles.actionBtn}
-                onPress={() => deleteRoute(route._id)}
-              >
-                <Icon name="delete" size={18} color="#f44336" />
-              </TouchableOpacity>
-            </View>
-          </View>
-          
-          <View style={styles.stopsContainer}>
-            {route.stops?.map((stop, i) => (
-              <View key={i} style={styles.stopItem}>
-                <View style={styles.stopDot} />
-                <Text style={styles.stopText}>{stop}</Text>
-              </View>
-            ))}
-            <View style={styles.stopItem}>
-              <View style={[styles.stopDot, styles.destinationDot]} />
-              <Text style={[styles.stopText, styles.destinationText]}>
-                {route.destination || 'Gulberg Greens'}
-              </Text>
-            </View>
-          </View>
-          
-          <View style={styles.routeInfo}>
-            <Text style={styles.routeInfoText}>{route.distance}</Text>
-            <Text style={styles.routeInfoText}>{route.duration}</Text>
-          </View>
-          
-          {route.assignedDriver && (
-            <View style={styles.assignedDriverBadge}>
-              <Text style={styles.assignedDriverText}>
-                Driver: {typeof route.assignedDriver === 'object' ? route.assignedDriver.name : route.assignedDriver}
-              </Text>
-              <Text style={styles.assignedDriverText}>Time: {route.timeSlot}</Text>
-              <Text style={styles.assignedDriverText}>
-                Passengers: {route.passengers?.length || 0}
-              </Text>
-            </View>
-          )}
-        </View>
-      )) : (
-        <View style={styles.emptyState}>
-          <Icon name="map" size={48} color="#999" />
-          <Text style={styles.emptyText}>No routes created</Text>
-        </View>
-      )}
-    </ScrollView>
-  );
-};
-// Helper functions for driver assignment
-const getDriversByTimeSlot = (timeSlot) => {
-  return driverAvailability.filter(driver => 
-    driver.status === 'Available' && 
-    driver.availableTimeSlots?.includes(timeSlot)
-  );
-};
-
-const getPassengersByTimeSlot = (timeSlot) => {
-  return passengerResponses.filter(passenger => 
-    passenger.status === 'Confirmed' && 
-    passenger.selectedTimeSlot === timeSlot
-  );
-};
-
-// Auto-assignment functions
-const handleAutoAssignment = async () => {
-  try {
-    const assignments = await apiService.generateAutoAssignments();
-    setAutoAssignments(assignments.assigned || []);
-    setUnassignedInAuto(assignments.unassigned || []);
-    Alert.alert('Success', 'Auto-assignments generated successfully');
-  } catch (error) {
-    console.error('Auto-assignment error:', error);
-    Alert.alert('Error', 'Failed to generate auto-assignments');
-  }
-};
-
-const handleApproveAutoRoute = async (index) => {
-  try {
-    const assignment = autoAssignments[index];
-    
-    // Convert the auto-assignment to a manual assignment
-    const assignmentData = {
-      routeId: assignment.routeId,
-      driverId: assignment.driver.id,
-      timeSlot: assignment.timeSlot,
-      passengerIds: assignment.passengers.map(p => p._id || p.id),
-    };
-
-    await apiService.assignDriver(assignmentData);
-    
-    // Update the assignment status
-    const updatedAssignments = [...autoAssignments];
-    updatedAssignments[index] = { ...updatedAssignments[index], status: 'approved' };
-    setAutoAssignments(updatedAssignments);
-    
-    // Reload data
-    await loadRoutes();
-    await loadDrivers();
-    await loadTrips();
-    
-    Alert.alert('Success', 'Route approved and assigned');
-  } catch (error) {
-    Alert.alert('Error', 'Failed to approve route');
-  }
-};
-
-const handleApproveAllAutoRoutes = async () => {
-  try {
-    const pendingAssignments = autoAssignments.filter(a => a.status !== 'approved');
-    
-    for (const assignment of pendingAssignments) {
-      const assignmentData = {
-        routeId: assignment.routeId,
-        driverId: assignment.driver.id,
-        timeSlot: assignment.timeSlot,
-        passengerIds: assignment.passengers.map(p => p._id || p.id),
-      };
-      
-      await apiService.assignDriver(assignmentData);
-    }
-    
-    // Mark all as approved
-    const updatedAssignments = autoAssignments.map(a => ({ ...a, status: 'approved' }));
-    setAutoAssignments(updatedAssignments);
-    
-    // Reload data
-    await loadRoutes();
-    await loadDrivers();
-    await loadTrips();
-    
-    Alert.alert('Success', 'All routes approved and assigned');
-  } catch (error) {
-    Alert.alert('Error', 'Failed to approve all routes');
-  }
-};
-const AssignDriversSection = () => (
-  <ScrollView style={styles.section}>
-    <View style={styles.assignModeSelector}>
-      <Text style={styles.sectionTitle}>Route Assignment</Text>
-      <View style={styles.modeSwitcher}>
-        <TouchableOpacity 
-          style={[styles.modeBtn, viewMode === 'manual' && styles.modeBtnActive]}
-          onPress={() => setViewMode('manual')}
-        >
-          <Text style={[styles.modeBtnText, viewMode === 'manual' && styles.modeBtnTextActive]}>Manual</Text>
-        </TouchableOpacity>
-        <TouchableOpacity 
-          style={[styles.modeBtn, viewMode === 'auto' && styles.modeBtnActive]}
-          onPress={() => setViewMode('auto')}
-        >
-          <Text style={[styles.modeBtnText, viewMode === 'auto' && styles.modeBtnTextActive]}>AI Auto-Assign</Text>
-        </TouchableOpacity>
-      </View>
-    </View>
-
-    {viewMode === 'manual' ? (
-      <>
-        {routes.length > 0 ? routes.map(route => (
-          <View key={route._id || route.id} style={styles.assignCard}>
-            <Text style={styles.assignRouteName}>{route.name}</Text>
-            <Text style={styles.assignRouteStops}>
-              {route.stops?.join(' → ')} → {route.destination}
+        <Text style={styles.sectionSubtitle}>Active Polls & Responses</Text>
+        {polls.length > 0 ? polls.map(poll => (
+          <View key={poll._id} style={styles.card}>
+            <Text style={styles.cardTitle}>{poll.title}</Text>
+            <Text style={styles.pollSlots}>
+              Time Slots: {poll.timeSlots?.join(', ') || 'None'}
             </Text>
-            {route.assignedDriver ? (
-              <View style={styles.alreadyAssigned}>
-                <Text style={styles.alreadyAssignedText}>
-                  Driver: {typeof route.assignedDriver === 'object' ? route.assignedDriver.name : route.assignedDriver}
-                </Text>
-                <Text style={styles.alreadyAssignedText}>Time: {route.timeSlot}</Text>
-                <Text style={styles.alreadyAssignedText}>
-                  Passengers: {route.passengers?.length || 0}
-                </Text>
-              </View>
-            ) : (
-              customTimeSlots.map(slot => {
-                const drivers = getDriversByTimeSlot(slot);
-                const passengers = getPassengersByTimeSlot(slot);
-                return drivers.length > 0 ? (
-                  <View key={slot} style={styles.timeSlotAssignSection}>
-                    <Text style={styles.timeSlotAssignTitle}>{slot}</Text>
-                    <Text style={styles.passengerCount}>{passengers.length} passengers</Text>
-                    {drivers.map(d => (
-                      <TouchableOpacity 
-                        key={d._id || d.id} 
-                        style={styles.driverSelectBtn} 
-                        onPress={() => assignDriverToRoute(route._id || route.id, d._id || d.id, slot)}
-                      >
-                        <View style={styles.driverSelectInfo}>
-                          <Text style={styles.driverSelectText}>{d.name} - {d.van}</Text>
-                          <Text style={styles.driverCapacity}>Capacity: {d.capacity}</Text>
-                        </View>
-                        <Text style={styles.assignArrow}>→</Text>
-                      </TouchableOpacity>
-                    ))}
-                  </View>
-                ) : null;
-              })
+            <Text style={styles.pollDate}>
+              Created: {new Date(poll.createdAt).toLocaleDateString()}
+            </Text>
+            <Text style={styles.pollDate}>
+              Closes: {poll.closesAt}
+            </Text>
+            
+            <View style={styles.responseSummary}>
+              <Text style={styles.responseCount}>
+                📊 {poll.responses?.length || 0} Responses
+              </Text>
+              <Text style={styles.responseCount}>
+                ✅ {poll.responses?.filter(r => r.response === 'yes').length || 0} Will Travel
+              </Text>
+              <Text style={styles.responseCount}>
+                ❌ {poll.responses?.filter(r => r.response === 'no').length || 0} Won't Travel
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              style={[styles.primaryBtn, { marginTop: 10, backgroundColor: COLORS.primaryDark }]}
+              onPress={() => {
+                setSelectedPoll(poll);
+                setPollResponses(poll.responses || []);
+              }}
+            >
+              <Text style={styles.primaryBtnText}>View All Responses</Text>
+            </TouchableOpacity>
+
+            {poll.responses?.filter(r => r.response === 'yes').length > 0 && (
+              <TouchableOpacity
+                style={[styles.primaryBtn, { marginTop: 8, backgroundColor: COLORS.success }]}
+                onPress={() => {
+                  setActiveSection('assign');
+                  setSelectedPollForAssignment(poll);
+                }}
+              >
+                <Text style={styles.primaryBtnText}>Create Route from Responses</Text>
+              </TouchableOpacity>
             )}
           </View>
         )) : (
           <View style={styles.emptyState}>
-            <Icon name="assignment" size={48} color="#999" />
-            <Text style={styles.emptyText}>No routes available for assignment</Text>
-          </View>
-        )}
-      </>
-    ) : (
-      <>
-        <View style={styles.autoAssignHeader}>
-          <Text style={styles.autoAssignSubtitle}>AI-Powered Route Optimization</Text>
-          <Text style={styles.autoAssignDesc}>Proximity-based clustering with capacity optimization</Text>
-          <View style={styles.autoAssignActions}>
-            <TouchableOpacity style={styles.autoAssignBtn} onPress={handleAutoAssignment}>
-              <Icon name="refresh" size={18} color={COLORS.white} />
-              <Text style={styles.autoAssignBtnText}>Generate Routes</Text>
-            </TouchableOpacity>
-            {autoAssignments.length > 0 && (
-              <TouchableOpacity style={styles.approveAllBtn} onPress={handleApproveAllAutoRoutes}>
-                <Icon name="check-circle" size={18} color={COLORS.white} />
-                <Text style={styles.approveAllBtnText}>Approve All</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        </View>
-
-        {autoAssignments.length > 0 && (
-          <View style={styles.autoStatsCard}>
-            <Text style={styles.autoStatsTitle}>System Performance</Text>
-            <View style={styles.autoStatsGrid}>
-              <View style={styles.autoStatItem}>
-                <Text style={styles.autoStatLabel}>Routes</Text>
-                <Text style={styles.autoStatValue}>{autoAssignments.length}</Text>
-              </View>
-              <View style={styles.autoStatItem}>
-                <Text style={styles.autoStatLabel}>Avg Efficiency</Text>
-                <Text style={styles.autoStatValue}>
-                  {(autoAssignments.reduce((sum, a) => sum + parseFloat(a.efficiencyScore || 0), 0) / autoAssignments.length).toFixed(0)}%
-                </Text>
-              </View>
-              <View style={styles.autoStatItem}>
-                <Text style={styles.autoStatLabel}>Avg Distance</Text>
-                <Text style={styles.autoStatValue}>
-                  {(autoAssignments.reduce((sum, a) => sum + parseFloat(a.totalDistance || 0), 0) / autoAssignments.length).toFixed(1)} km
-                </Text>
-              </View>
-              <View style={styles.autoStatItem}>
-                <Text style={styles.autoStatLabel}>Utilization</Text>
-                <Text style={styles.autoStatValue}>
-                  {(autoAssignments.reduce((sum, a) => sum + parseFloat(a.utilization || 0), 0) / autoAssignments.length).toFixed(0)}%
-                </Text>
-              </View>
-            </View>
+            <Icon name="poll" size={48} color={COLORS.gray} />
+            <Text style={styles.emptyText}>No active polls</Text>
           </View>
         )}
 
-        {autoAssignments.map((assignment, idx) => (
-          <View key={idx} style={[
-            styles.autoRouteCard,
-            assignment.status === 'approved' && styles.autoRouteApproved,
-            selectedAutoRoute === idx && styles.autoRouteSelected
-          ]}>
-            <View style={styles.autoRouteHeader}>
-              <View style={styles.autoRouteDriverInfo}>
-                <Icon name="local-shipping" size={24} color={COLORS.primary} />
-                <View style={styles.autoRouteDriverText}>
-                  <Text style={styles.autoRouteDriverName}>{assignment.driver.name}</Text>
-                  <Text style={styles.autoRouteDriverVan}>{assignment.driver.van}</Text>
-                </View>
-              </View>
-              {assignment.status === 'approved' && (
-                <Icon name="check-circle" size={28} color={COLORS.success} />
-              )}
-            </View>
-
-            <View style={styles.autoRouteMetrics}>
-              <View style={styles.autoRouteMetricItem}>
-                <Icon name="people" size={16} color={COLORS.gray} />
-                <Text style={styles.autoRouteMetricText}>
-                  {assignment.passengers.length}/{assignment.targetCapacity}
-                </Text>
-              </View>
-              <View style={styles.autoRouteMetricItem}>
-                <Icon name="map" size={16} color={COLORS.gray} />
-                <Text style={styles.autoRouteMetricText}>{assignment.totalDistance} km</Text>
-              </View>
-              <View style={styles.autoRouteMetricItem}>
-                <Icon name="schedule" size={16} color={COLORS.gray} />
-                <Text style={styles.autoRouteMetricText}>{assignment.estimatedTime} min</Text>
-              </View>
-              <View style={styles.autoRouteMetricItem}>
-                <Icon name="trending-up" size={16} color={COLORS.success} />
-                <Text style={styles.autoRouteMetricText}>{assignment.efficiencyScore}%</Text>
-              </View>
-            </View>
-
-            <View style={styles.capacityBarContainer}>
-              <View style={styles.capacityBarHeader}>
-                <Text style={styles.capacityBarLabel}>Capacity</Text>
-                <Text style={styles.capacityBarValue}>{assignment.utilization}%</Text>
-              </View>
-              <View style={styles.capacityBarTrack}>
-                <View style={[styles.capacityBarFill, { width: `${assignment.utilization}%` }]} />
-              </View>
-            </View>
-
-            <View style={styles.algorithmInfo}>
-              <Text style={styles.algorithmTitle}>🤖 Algorithm Details</Text>
-              <Text style={styles.algorithmText}>• Target: {assignment.targetCapacity} passengers</Text>
-              <Text style={styles.algorithmText}>• Method: Proximity clustering (5km)</Text>
-              <Text style={styles.algorithmText}>• Route: Nearest neighbor optimization</Text>
-            </View>
-
-            {selectedAutoRoute === idx && (
-              <View style={styles.passengerSequence}>
-                <Text style={styles.passengerSequenceTitle}>Optimized Pickup Sequence:</Text>
-                {assignment.passengers.map((passenger, pIdx) => (
-                  <View key={passenger._id || passenger.id} style={styles.passengerSequenceItem}>
-                    <View style={styles.passengerSequenceNumber}>
-                      <Text style={styles.passengerSequenceNumberText}>{pIdx + 1}</Text>
-                    </View>
-                    <View style={styles.passengerSequenceInfo}>
-                      <Text style={styles.passengerSequenceName}>{passenger.name}</Text>
-                      <Text style={styles.passengerSequenceLocation}>{passenger.pickupPoint}</Text>
-                    </View>
-                  </View>
-                ))}
-              </View>
-            )}
-
-            <View style={styles.autoRouteActions}>
-              <TouchableOpacity 
-                style={styles.viewDetailsBtn}
-                onPress={() => setSelectedAutoRoute(selectedAutoRoute === idx ? null : idx)}
-              >
-                <Text style={styles.viewDetailsBtnText}>
-                  {selectedAutoRoute === idx ? 'Hide Details' : 'View Details'}
-                </Text>
-              </TouchableOpacity>
-              {assignment.status === 'pending' && (
-                <TouchableOpacity 
-                  style={styles.approveRouteBtn}
-                  onPress={() => handleApproveAutoRoute(idx)}
-                >
-                  <Icon name="check" size={16} color={COLORS.white} />
-                  <Text style={styles.approveRouteBtnText}>Approve</Text>
-                </TouchableOpacity>
-              )}
-            </View>
-          </View>
-        ))}
-
-        {unassignedInAuto.length > 0 && (
-          <View style={styles.unassignedAlert}>
-            <Icon name="warning" size={24} color={COLORS.danger} />
-            <View style={styles.unassignedAlertContent}>
-              <Text style={styles.unassignedAlertTitle}>
-                Unassigned Passengers ({unassignedInAuto.length})
-              </Text>
-              {unassignedInAuto.map(p => (
-                <Text key={p._id || p.id} style={styles.unassignedPassenger}>
-                  • {p.name} - {p.pickupPoint}
-                </Text>
-              ))}
-            </View>
-          </View>
-        )}
-      </>
-    )}
-  </ScrollView>
-);
-const NotificationsSection = () => {
-  const markAsRead = async (notificationId) => {
-    try {
-      await apiService.markNotificationAsRead(notificationId);
-      setNotifications(notifications.map(n => 
-        n._id === notificationId ? { ...n, read: true } : n
-      ));
-    } catch (error) {
-      Alert.alert('Error', 'Failed to mark notification as read');
-    }
-  };
-
-  const markAllAsRead = async () => {
-    try {
-      // You might need to implement a bulk read endpoint
-      const updatedNotifications = notifications.map(n => ({ ...n, read: true }));
-      setNotifications(updatedNotifications);
-      Alert.alert('Success', 'All notifications marked as read');
-    } catch (error) {
-      Alert.alert('Error', 'Failed to mark all notifications as read');
-    }
-  };
-
-  const deleteNotification = async (notificationId) => {
-    try {
-      // You might need to implement a delete endpoint
-      setNotifications(notifications.filter(n => n._id !== notificationId));
-      Alert.alert('Deleted', 'Notification deleted');
-    } catch (error) {
-      Alert.alert('Error', 'Failed to delete notification');
-    }
-  };
-
-  const getTimeAgo = (timestamp) => {
-    if (!timestamp) return 'Recently';
-    const date = new Date(timestamp);
-    const seconds = Math.floor((new Date() - date) / 1000);
-    if (seconds < 60) return 'Just now';
-    const minutes = Math.floor(seconds / 60);
-    if (minutes < 60) return `${minutes}m ago`;
-    const hours = Math.floor(minutes / 60);
-    if (hours < 24) return `${hours}h ago`;
-    const days = Math.floor(hours / 24);
-    return `${days}d ago`;
-  };
-
-  return (
-    <ScrollView style={styles.section}>
-      <View style={styles.notificationHeader}>
-        <Text style={styles.sectionTitle}>Notifications</Text>
-        {notifications.filter(n => !n.read).length > 0 && (
-          <TouchableOpacity style={styles.markAllBtn} onPress={markAllAsRead}>
-            <Text style={styles.markAllBtnText}>Mark all read</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-      
-      {notifications.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Icon name="notifications-none" size={64} color={COLORS.gray} />
-          <Text style={styles.emptyText}>No notifications yet</Text>
-        </View>
-      ) : (
-        notifications.map(notification => (
-          <TouchableOpacity
-            key={notification._id}
-            style={[styles.notificationCard, !notification.read && styles.notificationUnread]}
-            onPress={() => markAsRead(notification._id)}
-          >
-            <View style={[styles.notificationIcon, { backgroundColor: (notification.color || COLORS.primary) + '20' }]}>
-              <Icon name={notification.icon || 'notifications'} size={24} color={notification.color || COLORS.primary} />
-            </View>
-            <View style={styles.notificationContent}>
-              <Text style={styles.notificationTitle}>{notification.title}</Text>
-              <Text style={styles.notificationMessage}>{notification.message}</Text>
-              <Text style={styles.notificationTime}>
-                {getTimeAgo(notification.createdAt || notification.timestamp)}
-              </Text>
-            </View>
-            <TouchableOpacity onPress={() => deleteNotification(notification._id)}>
-              <Icon name="close" size={20} color={COLORS.gray} />
-            </TouchableOpacity>
-          </TouchableOpacity>
-        ))
-      )}
-    </ScrollView>
-  );
-};
-// Dashboard component के अंदर ही यह function add करें
-const LiveTrackingSection = () => {
-  const [isPlaying, setIsPlaying] = useState(false);
-  const mapRef = useRef(null);
-  const [vanProgress, setVanProgress] = useState({});
-  const vanPositions = useRef({});
-
-  // Ensure Animated.Values exist for each van
-  useEffect(() => {
-    vans.forEach((van) => {
-      if (!vanPositions.current[van.id]) {
-        vanPositions.current[van.id] = {
-          latitude: new Animated.Value(van.currentLocation?.latitude || 33.6844),
-          longitude: new Animated.Value(van.currentLocation?.longitude || 73.0479),
-          rotation: new Animated.Value(0),
-          scale: new Animated.Value(1),
-        };
-      }
-    });
-
-    // Cleanup for removed vans
-    Object.keys(vanPositions.current).forEach((id) => {
-      if (!vans.find((v) => String(v.id) === String(id))) {
-        delete vanPositions.current[id];
-      }
-    });
-  }, [vans]);
-
-  const stopsToCoords = useCallback((stops = []) => {
-    return (stops || [])
-      .map((s) => stopCoordinates[s])
-      .filter((c) => c && typeof c.latitude === 'number' && typeof c.longitude === 'number');
-  }, []);
-
-  const fitToRoute = useCallback((van) => {
-    if (!mapRef.current || !van) return;
-    const coords = stopsToCoords(van.stops);
-    if (coords.length > 1) {
-      mapRef.current.fitToCoordinates(coords, {
-        edgePadding: { top: 100, right: 50, bottom: 50, left: 50 },
-        animated: true,
-      });
-    } else if (coords.length === 1) {
-      mapRef.current.animateToRegion(
-        {
-          latitude: coords[0].latitude,
-          longitude: coords[0].longitude,
-          latitudeDelta: 0.05,
-          longitudeDelta: 0.05,
-        },
-        1000
-      );
-    }
-  }, [stopsToCoords]);
-
-  // Animation loop
-  useEffect(() => {
-    if (!isPlaying) {
-      // Reset animation for en-route vans
-      vans.forEach((van) => {
-        const pos = vanPositions.current[van.id];
-        if (pos && van.status === 'En Route') {
-          Animated.parallel([
-            Animated.timing(pos.scale, { toValue: 1, duration: 300, useNativeDriver: true }),
-            Animated.timing(pos.rotation, { toValue: 0, duration: 300, useNativeDriver: true }),
-          ]).start();
-        }
-      });
-      return;
-    }
-
-    const interval = setInterval(() => {
-      setVanProgress((prev) => {
-        const newProgress = { ...prev };
-        const updatedVans = vans.map((van) => {
-          if (van.status !== 'En Route') return van;
-
-          const prevVal = prev[van.id] || 0;
-          newProgress[van.id] = Math.min((prevVal + 0.005) % 1, 0.99);
-
-          const stops = Array.isArray(van.stops) ? van.stops : [];
-          const totalSegments = Math.max(stops.length - 1, 1);
-          const segmentIndex = Math.floor(newProgress[van.id] * totalSegments);
-          const segmentProgress = (newProgress[van.id] * totalSegments) % 1;
-
-          if (segmentIndex >= totalSegments) {
-            // Mark as completed
-            const pos = vanPositions.current[van.id];
-            if (pos) {
-              Animated.sequence([
-                Animated.timing(pos.scale, { toValue: 1.3, duration: 300, useNativeDriver: true }),
-                Animated.timing(pos.scale, { toValue: 1, duration: 300, useNativeDriver: true }),
-              ]).start();
-            }
-
-            // Update stats
-            setStats((s) => ({ 
-              ...s, 
-              completedTrips: (s.completedTrips || 0) + 1, 
-              ongoingTrips: Math.max((s.ongoingTrips || 1) - 1, 0) 
-            }));
-
-            return {
-              ...van,
-              status: 'Completed',
-              eta: '0 min',
-              currentStop: van.stops ? van.stops[van.stops.length - 1] : van.currentStop,
-              completedStops: van.stops || van.completedStops || [],
-              currentLocation: (van.stops && stopCoordinates[van.stops[van.stops.length - 1]]) || van.currentLocation,
-              passengersList: (van.passengersList || []).map((p) => ({ 
-                ...p, 
-                status: 'picked', 
-                pickupTime: p.pickupTime || new Date().toLocaleTimeString('en-PK', { timeZone: 'Asia/Karachi' }) 
-              })),
-            };
-          }
-
-          const startStop = stops[segmentIndex];
-          const endStop = stops[segmentIndex + 1];
-          const start = (startStop && stopCoordinates[startStop]) || van.currentLocation || { latitude: 33.6844, longitude: 73.0479 };
-          const end = (endStop && stopCoordinates[endStop]) || van.currentLocation || start;
-
-          const newLat = start.latitude + (end.latitude - start.latitude) * segmentProgress;
-          const newLng = start.longitude + (end.longitude - start.longitude) * segmentProgress;
-
-          const pos = vanPositions.current[van.id];
-          if (pos) {
-            Animated.parallel([
-              Animated.timing(pos.latitude, { toValue: newLat, duration: 100, useNativeDriver: false }),
-              Animated.timing(pos.longitude, { toValue: newLng, duration: 100, useNativeDriver: false }),
-              Animated.sequence([
-                Animated.timing(pos.scale, { toValue: 1.05, duration: 150, useNativeDriver: true }), 
-                Animated.timing(pos.scale, { toValue: 1, duration: 150, useNativeDriver: true })
-              ]),
-              Animated.timing(pos.rotation, { 
-                toValue: Math.atan2(end.longitude - start.longitude, end.latitude - start.latitude) * (180 / Math.PI), 
-                duration: 100, 
-                useNativeDriver: true 
-              }),
-            ]).start();
-          }
-
-          // Update passengers and completed stops
-          let updatedPassengers = Array.isArray(van.passengersList) ? van.passengersList : [];
-          let updatedCompletedStops = Array.isArray(van.completedStops) ? van.completedStops : [];
-          const nextStop = stops[segmentIndex] || van.currentStop;
-
-          const distance = Math.sqrt(Math.pow(newLat - start.latitude, 2) + Math.pow(newLng - start.longitude, 2));
-          if (distance < 0.0005 && startStop && !updatedCompletedStops.includes(startStop)) {
-            updatedCompletedStops = [...updatedCompletedStops, startStop];
-            updatedPassengers = updatedPassengers.map((p) => {
-              const passenger = passengerResponses.find((pr) => pr.name === p.name);
-              if (passenger && passenger.pickupPoint === startStop) {
-                return { 
-                  ...p, 
-                  status: 'picked', 
-                  pickupTime: new Date().toLocaleTimeString('en-PK', { timeZone: 'Asia/Karachi' }) 
-                };
-              }
-              return p;
-            });
-            if (pos) {
-              Animated.sequence([
-                Animated.timing(pos.scale, { toValue: 1.4, duration: 200, useNativeDriver: true }), 
-                Animated.timing(pos.scale, { toValue: 1, duration: 200, useNativeDriver: true })
-              ]).start();
-            }
-          }
-
-          const remainingDistance = (1 - newProgress[van.id]) * 15;
-          const etaMinutes = Math.round((remainingDistance / 40) * 60);
-
-          return {
-            ...van,
-            currentLocation: { latitude: newLat, longitude: newLng },
-            currentStop: nextStop,
-            completedStops: updatedCompletedStops,
-            eta: `${etaMinutes} min`,
-            speed: 40,
-            passengersList: updatedPassengers,
-            passengers: updatedPassengers.filter((p) => p.status === 'picked').length,
-          };
-        });
-
-        // Update vans state
-        setVans(updatedVans);
-
-        // Center map on selected van
-        if (selectedVan && mapRef.current) {
-          const found = updatedVans.find((v) => v.id === selectedVan.id);
-          if (found && found.currentLocation) {
-            mapRef.current.animateToRegion(
-              { 
-                latitude: found.currentLocation.latitude, 
-                longitude: found.currentLocation.longitude, 
-                latitudeDelta: 0.02, 
-                longitudeDelta: 0.02 
-              },
-              500
-            );
-          }
-        }
-
-        return newProgress;
-      });
-    }, 100);
-
-    return () => clearInterval(interval);
-  }, [isPlaying, vans, selectedVan, passengerResponses]);
-
-  // Fit route when selected van changes
-  useEffect(() => {
-    if (selectedVan) fitToRoute(selectedVan);
-  }, [selectedVan, fitToRoute]);
-
-  return (
-    <ScrollView style={styles.section} showsVerticalScrollIndicator={false}>
-      <Text style={styles.sectionTitle}>Live Driver Tracking</Text>
-      
-      <View style={styles.controlPanel}>
-        <TouchableOpacity
-          style={[styles.controlButton, isPlaying ? styles.pauseButton : styles.playButton]}
-          onPress={() => {
-            setIsPlaying(!isPlaying);
-            if (!isPlaying && selectedVan) fitToRoute(selectedVan);
-          }}
+        {/* Poll Responses Modal */}
+        <Modal
+          visible={selectedPoll !== null}
+          animationType="slide"
+          onRequestClose={() => setSelectedPoll(null)}
         >
-          <Icon name={isPlaying ? "pause" : "play-arrow"} size={20} color={COLORS.white} />
-          <Text style={styles.controlButtonText}>{isPlaying ? "Pause" : "Start"} Simulation</Text>
-        </TouchableOpacity>
-        
-        <Text style={styles.activeVansText}>
-          Active Vans: <Text style={styles.activeVansCount}>{vans.filter(v => v.status === 'En Route').length}</Text>
-        </Text>
-      </View>
-
-      {selectedVan ? (
-        <View style={styles.trackingDetailCard}>
-          <TouchableOpacity style={styles.backBtn} onPress={() => setSelectedVan(null)}>
-            <Text style={styles.backBtnText}>← Back</Text>
-          </TouchableOpacity>
-          
-          <View style={[styles.vanHeader, { backgroundColor: COLORS.primary }]}>
-            <Text style={styles.vanDetailName}>
-              {selectedVan.name} - {selectedVan.driver}
-            </Text>
-            <Text style={styles.vanDetailRoute}>
-              {selectedVan.route} | {selectedVan.timeSlot}
-            </Text>
-          </View>
-          
-          <View style={styles.mapContainer}>
-            <View style={styles.mapHeader}>
-              <Text style={styles.mapSimulationTitle}>Live Location</Text>
-              <View style={styles.liveBadge}>
-                <Text style={styles.liveBadgeText}>LIVE</Text>
-              </View>
+          <SafeAreaView style={styles.modalContainer}>
+            <View style={styles.modalHeader}>
+              <TouchableOpacity onPress={() => setSelectedPoll(null)}>
+                <Icon name="close" size={24} color={COLORS.black} />
+              </TouchableOpacity>
+              <Text style={styles.modalTitle}>Poll Responses</Text>
+              <View style={{ width: 24 }} />
             </View>
-            
-            <MapView
-              ref={mapRef}
-              style={styles.map}
-              initialRegion={{
-                latitude: selectedVan.currentLocation?.latitude || 33.6844,
-                longitude: selectedVan.currentLocation?.longitude || 73.0479,
-                latitudeDelta: 0.04,
-                longitudeDelta: 0.04,
-              }}
-            >
-              <Marker
-                coordinate={selectedVan.currentLocation || { latitude: 33.6844, longitude: 73.0479 }}
-                title={selectedVan.name}
-                description={`${selectedVan.currentStop} | ETA: ${selectedVan.eta}`}
-              >
-                <View style={[styles.vanMarker, { borderColor: COLORS.primary }]}>
-                  <Icon name="directions-car" size={30} color={COLORS.primary} />
-                </View>
-              </Marker>
-              
-              {selectedVan.stops?.map((stop, index) => (
-                <Marker
-                  key={index}
-                  coordinate={stopCoordinates[stop] || { latitude: 33.6844, longitude: 73.0479 }}
-                  title={stop}
-                >
-                  <View style={styles.stopMarker}>
-                    <Icon
-                      name={stop === selectedVan.stops[0] ? 'flag' : 'location-pin'}
-                      size={stop === selectedVan.stops[0] ? 32 : 24}
-                      color={COLORS.primary}
-                    />
+
+            <ScrollView style={styles.modalContent}>
+              {pollResponses.map((response, index) => (
+                <View key={index} style={styles.responseCard}>
+                  <View style={styles.responseHeader}>
+                    <Text style={styles.responseName}>{response.passengerName}</Text>
+                    <View style={[
+                      styles.statusBadge,
+                      { backgroundColor: response.response === 'yes' ? COLORS.success : COLORS.danger }
+                    ]}>
+                      <Text style={{ color: COLORS.white, fontSize: 12, fontWeight: '600' }}>
+                        {response.response === 'yes' ? 'Will Travel' : 'Won\'t Travel'}
+                      </Text>
+                    </View>
                   </View>
-                </Marker>
+                  
+                  {response.response === 'yes' && (
+                    <>
+                      <Text style={styles.responseDetail}>
+                        🕐 Selected Time: {response.selectedTimeSlot}
+                      </Text>
+                      <Text style={styles.responseDetail}>
+                        📍 Pickup: {response.pickupPoint}
+                      </Text>
+                    </>
+                  )}
+                  
+                  <Text style={styles.responseDate}>
+                    Responded: {new Date(response.respondedAt).toLocaleString()}
+                  </Text>
+                </View>
               ))}
-            </MapView>
-          </View>
+            </ScrollView>
+          </SafeAreaView>
+        </Modal>
+      </ScrollView>
+    );
+  };
+    
+  const AssignSection = () => {
+    const [availableDrivers, setAvailableDrivers] = useState([]);
+    const [selectedDriver, setSelectedDriver] = useState(null);
+    const [routeName, setRouteName] = useState('');
+    const [selectedTimeSlot, setSelectedTimeSlot] = useState('');
+    const [startPoint, setStartPoint] = useState('Office');
+    const [destination, setDestination] = useState('Destination');
+    const [isAssigning, setIsAssigning] = useState(false);
 
-          <View style={styles.vanInfoCard}>
-            <Text style={styles.cardTitle}>Van Details</Text>
-            <View style={styles.vanInfoRow}>
-              <Text style={styles.vanInfoLabel}>Route</Text>
-              <Text style={styles.vanInfoValue}>{selectedVan.route}</Text>
+    useEffect(() => {
+      if (selectedPollForAssignment) {
+        loadAvailableDriversForTomorrow();
+        setRouteName(selectedPollForAssignment.title);
+      }
+    }, [selectedPollForAssignment]);
+
+    const loadAvailableDriversForTomorrow = async () => {
+      try {
+        const tomorrow = new Date();
+        tomorrow.setDate(tomorrow.getDate() + 1);
+        const dateStr = tomorrow.toISOString().split('T')[0];
+        
+        const drivers = await apiService.getAvailableDrivers(dateStr);
+        setAvailableDrivers(drivers);
+      } catch (error) {
+        console.error('Error loading available drivers:', error);
+        setAvailableDrivers([]);
+      }
+    };
+
+    const handleAssignRoute = async () => {
+      if (!selectedPollForAssignment || !selectedDriver || !routeName || !selectedTimeSlot) {
+        Alert.alert('Error', 'Please fill all required fields');
+        return;
+      }
+
+      try {
+        setIsAssigning(true);
+        
+        const assignmentData = {
+          driverId: selectedDriver,
+          routeName,
+          timeSlot: selectedTimeSlot,
+          startPoint,
+          destination,
+          pickupTime: selectedTimeSlot
+        };
+
+        await apiService.assignRouteFromPoll(
+          selectedPollForAssignment._id,
+          assignmentData
+        );
+
+        Alert.alert(
+          'Success',
+          `Route "${routeName}" has been created and assigned! All passengers and driver have been notified.`,
+          [
+            {
+              text: 'OK',
+              onPress: () => {
+                setRouteName('');
+                setSelectedDriver(null);
+                setSelectedTimeSlot('');
+                setSelectedPollForAssignment(null);
+                loadRoutes();
+                loadTrips();
+              }
+            }
+          ]
+        );
+      } catch (error) {
+        console.error('Error assigning route:', error);
+        Alert.alert('Error', 'Failed to assign route. Please try again.');
+      } finally {
+        setIsAssigning(false);
+      }
+    };
+
+    return (
+      <ScrollView style={styles.section}>
+        <Text style={styles.sectionTitle}>Assign Routes from Polls</Text>
+
+        {/* Poll Selection */}
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>Step 1: Select Poll</Text>
+          {polls.filter(p => p.status === 'active').length > 0 ? (
+            polls.filter(p => p.status === 'active').map(poll => {
+              const yesCount = poll.responses?.filter(r => r.response === 'yes').length || 0;
+              return (
+                <TouchableOpacity
+                  key={poll._id}
+                  style={[
+                    styles.pollSelectOption,
+                    selectedPollForAssignment?._id === poll._id && styles.pollSelectOptionActive
+                  ]}
+                  onPress={() => {
+                    setSelectedPollForAssignment(poll);
+                    setRouteName(poll.title);
+                  }}
+                >
+                  <View style={styles.pollSelectContent}>
+                    <Text style={styles.pollSelectTitle}>{poll.title}</Text>
+                    <Text style={styles.pollSelectInfo}>
+                      {yesCount} passengers will travel
+                    </Text>
+                    <Text style={styles.pollSelectInfo}>
+                      Time slots: {poll.timeSlots?.join(', ')}
+                    </Text>
+                  </View>
+                  {selectedPollForAssignment?._id === poll._id && (
+                    <Icon name="check-circle" size={24} color={COLORS.success} />
+                  )}
+                </TouchableOpacity>
+              );
+            })
+          ) : (
+            <View style={styles.emptyState}>
+              <Icon name="poll" size={32} color={COLORS.gray} />
+              <Text style={styles.emptyText}>No active polls available</Text>
+              <TouchableOpacity
+                style={[styles.primaryBtn, { marginTop: 12 }]}
+                onPress={() => setActiveSection('poll')}
+              >
+                <Text style={styles.primaryBtnText}>Create Poll</Text>
+              </TouchableOpacity>
             </View>
-            <View style={styles.vanInfoRow}>
-              <Text style={styles.vanInfoLabel}>Driver</Text>
-              <Text style={styles.vanInfoValue}>{selectedVan.driver}</Text>
+          )}
+        </View>
+
+        {/* Route Details */}
+        {selectedPollForAssignment && (
+          <>
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>Step 2: Route Details</Text>
+              
+              <Text style={styles.inputLabel}>Route Name</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Enter route name"
+                value={routeName}
+                onChangeText={setRouteName}
+              />
+
+              <Text style={styles.inputLabel}>Start Point</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Enter start point"
+                value={startPoint}
+                onChangeText={setStartPoint}
+              />
+
+              <Text style={styles.inputLabel}>Destination</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Enter destination"
+                value={destination}
+                onChangeText={setDestination}
+              />
+
+              <Text style={styles.inputLabel}>Select Time Slot</Text>
+              {selectedPollForAssignment.timeSlots?.map((slot, index) => (
+                <TouchableOpacity
+                  key={index}
+                  style={[
+                    styles.timeSlotOption,
+                    selectedTimeSlot === slot && styles.timeSlotSelected
+                  ]}
+                  onPress={() => setSelectedTimeSlot(slot)}
+                >
+                  <View style={[
+                    styles.checkbox,
+                    selectedTimeSlot === slot && styles.checkboxSelected
+                  ]}>
+                    {selectedTimeSlot === slot && (
+                      <Icon name="check" size={16} color={COLORS.white} />
+                    )}
+                  </View>
+                  <Text style={styles.timeSlotLabel}>{slot}</Text>
+                </TouchableOpacity>
+              ))}
             </View>
-            <View style={styles.vanInfoRow}>
-              <Text style={styles.vanInfoLabel}>Capacity</Text>
-              <Text style={styles.vanInfoValue}>
-                {selectedVan.passengers}/{selectedVan.capacity}
+
+            {/* Driver Selection */}
+            <View style={styles.card}>
+              <Text style={styles.cardTitle}>Step 3: Select Available Driver</Text>
+              
+              {availableDrivers.length > 0 ? (
+                availableDrivers.map((avail, index) => {
+                  const driver = avail.driverId || avail;
+                  return (
+                    <TouchableOpacity
+                      key={index}
+                      style={[
+                        styles.driverOption,
+                        selectedDriver === driver._id && styles.driverOptionSelected
+                      ]}
+                      onPress={() => setSelectedDriver(driver._id)}
+                    >
+                      <View style={[
+                        styles.checkbox,
+                        selectedDriver === driver._id && styles.checkboxSelected
+                      ]}>
+                        {selectedDriver === driver._id && (
+                          <Icon name="check" size={16} color={COLORS.white} />
+                        )}
+                      </View>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.driverName}>
+                          {driver.name || avail.driverName}
+                        </Text>
+                        <Text style={styles.driverDetail}>
+                          📞 {driver.phone || 'N/A'}
+                        </Text>
+                        <Text style={styles.driverDetail}>
+                          🚐 {driver.vehicle || 'Van'} - Capacity: {driver.capacity || 8}
+                        </Text>
+                        {avail.startTime && (
+                          <Text style={styles.driverDetail}>
+                            🕐 Available: {avail.startTime} - {avail.endTime}
+                          </Text>
+                        )}
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })
+              ) : (
+                <View style={styles.emptyState}>
+                  <Icon name="directions-car" size={32} color={COLORS.gray} />
+                  <Text style={styles.emptyText}>No drivers available for tomorrow</Text>
+                  <Text style={styles.emptySubtext}>
+                    Ask drivers to confirm their availability
+                  </Text>
+                </View>
+              )}
+            </View>
+
+            {/* Assign Button */}
+            <TouchableOpacity
+              style={[
+                styles.primaryBtn,
+                (!selectedDriver || !selectedTimeSlot || isAssigning) && styles.primaryBtnDisabled
+              ]}
+              onPress={handleAssignRoute}
+              disabled={!selectedDriver || !selectedTimeSlot || isAssigning}
+            >
+              {isAssigning ? (
+                <ActivityIndicator size="small" color={COLORS.white} />
+              ) : (
+                <Text style={styles.primaryBtnText}>
+                  Assign Route & Notify All
+                </Text>
+              )}
+            </TouchableOpacity>
+
+            {/* Summary */}
+            <View style={[styles.card, { backgroundColor: '#F0F9D9' }]}>
+              <Text style={styles.summaryTitle}>📋 Assignment Summary</Text>
+              <Text style={styles.summaryText}>
+                • Route: {routeName || 'Not set'}
+              </Text>
+              <Text style={styles.summaryText}>
+                • Driver: {selectedDriver ? 
+                  availableDrivers.find(d => (d.driverId?._id || d._id) === selectedDriver)?.driverName || 
+                  availableDrivers.find(d => (d.driverId?._id || d._id) === selectedDriver)?.driverId?.name || 
+                  'Selected' : 'Not selected'}
+              </Text>
+              <Text style={styles.summaryText}>
+                • Time Slot: {selectedTimeSlot || 'Not selected'}
+              </Text>
+              <Text style={styles.summaryText}>
+                • Passengers: {selectedPollForAssignment.responses?.filter(r => r.response === 'yes').length || 0}
               </Text>
             </View>
-            <View style={styles.vanInfoRow}>
-              <Text style={styles.vanInfoLabel}>Status</Text>
-              <Text style={styles.vanInfoValue}>{selectedVan.status}</Text>
-            </View>
-          </View>
+          </>
+        )}
+      </ScrollView>
+    );
+  };
+
+  const RoutesSection = () => {
+    const [routeFilter, setRouteFilter] = useState('all');
+
+    const filteredRoutes = routes.filter(route => {
+      if (routeFilter === 'all') return true;
+      return route.status === routeFilter;
+    });
+
+    return (
+      <ScrollView style={styles.section}>
+        <Text style={styles.sectionTitle}>Routes Management</Text>
+
+        {/* Filter Tabs */}
+        <View style={styles.tabContainer}>
+          {['all', 'assigned', 'started', 'completed'].map(filter => (
+            <TouchableOpacity
+              key={filter}
+              style={[styles.tab, routeFilter === filter && styles.tabActive]}
+              onPress={() => setRouteFilter(filter)}
+            >
+              <Text style={[
+                styles.tabText,
+                routeFilter === filter && styles.tabTextActive
+              ]}>
+                {filter.charAt(0).toUpperCase() + filter.slice(1)}
+              </Text>
+            </TouchableOpacity>
+          ))}
         </View>
-      ) : (
-        <>
-          <Text style={styles.selectVanText}>Select a van to track:</Text>
-          
+
+        {/* Routes List */}
+        {filteredRoutes.length > 0 ? (
+          filteredRoutes.map(route => (
+            <View key={route._id} style={styles.card}>
+              <View style={styles.routeHeader}>
+                <Text style={styles.cardTitle}>{route.name || route.routeName}</Text>
+                <View style={[
+                  styles.statusBadge,
+                  {
+                    backgroundColor: 
+                      route.status === 'completed' ? COLORS.success :
+                      route.status === 'started' ? COLORS.warning :
+                      COLORS.primary
+                  }
+                ]}>
+                  <Text style={styles.statusBadgeText}>
+                    {route.status?.toUpperCase() || 'ASSIGNED'}
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.routeInfo}>
+                <View style={styles.routeInfoRow}>
+                  <Icon name="person" size={16} color={COLORS.gray} />
+                  <Text style={styles.routeInfoText}>
+                    Driver: {route.driverName || 'Not assigned'}
+                  </Text>
+                </View>
+
+                {route.timeSlot && (
+                  <View style={styles.routeInfoRow}>
+                    <Icon name="schedule" size={16} color={COLORS.gray} />
+                    <Text style={styles.routeInfoText}>
+                      Time: {route.timeSlot}
+                    </Text>
+                  </View>
+                )}
+
+                {route.date && (
+                  <View style={styles.routeInfoRow}>
+                    <Icon name="calendar-today" size={16} color={COLORS.gray} />
+                    <Text style={styles.routeInfoText}>
+                      Date: {new Date(route.date).toLocaleDateString()}
+                    </Text>
+                  </View>
+                )}
+
+                {route.passengers && route.passengers.length > 0 && (
+                  <View style={styles.routeInfoRow}>
+                    <Icon name="people" size={16} color={COLORS.gray} />
+                    <Text style={styles.routeInfoText}>
+                      Passengers: {route.passengers.length}
+                    </Text>
+                  </View>
+                )}
+
+                {route.stops && route.stops.length > 0 && (
+                  <View style={styles.routeInfoRow}>
+                    <Icon name="location-on" size={16} color={COLORS.gray} />
+                    <Text style={styles.routeInfoText}>
+                      Stops: {route.stops.join(', ')}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            </View>
+          ))
+        ) : (
+          <View style={styles.emptyState}>
+            <Icon name="map" size={48} color={COLORS.gray} />
+            <Text style={styles.emptyText}>No routes found</Text>
+          </View>
+        )}
+      </ScrollView>
+    );
+  };
+
+  const TrackingSection = () => (
+    <ScrollView style={styles.section}>
+      <Text style={styles.sectionTitle}>Live Tracking</Text>
+      {vans.length > 0 ? (
+        <View style={styles.mapContainer}>
           <MapView
-            style={[styles.map, { height: 220, marginBottom: 18 }]}
+            provider={PROVIDER_GOOGLE}
+            style={styles.map}
             initialRegion={{
-              latitude: 33.6,
-              longitude: 73.1,
-              latitudeDelta: 0.08,
-              longitudeDelta: 0.08,
+              latitude: 33.6844,
+              longitude: 73.0479,
+              latitudeDelta: 0.1,
+              longitudeDelta: 0.1,
             }}
           >
-            {vans.map((van) => (
+            {vans.map(van => (
               <Marker
                 key={van.id}
-                coordinate={van.currentLocation || { latitude: 33.6844, longitude: 73.0479 }}
+                coordinate={van.currentLocation}
                 title={van.name}
-                description={van.currentStop}
-                onPress={() => setSelectedVan(van)}
+                description={`${van.driver} - ${van.currentStop}`}
               >
-                <View style={[styles.vanMarker, { borderColor: COLORS.primary }]}>
-                  <Icon
-                    name="directions-car"
-                    size={24}
-                    color={
-                      van.status === 'Completed' ? COLORS.success : 
-                      van.status === 'En Route' ? COLORS.warning : COLORS.gray
-                    }
-                  />
+                <View style={styles.markerContainer}>
+                  <Icon name="local-shipping" size={30} color={van.color} />
                 </View>
               </Marker>
             ))}
           </MapView>
-          
-          {vans.length > 0 ? vans.map((van) => (
-            <TouchableOpacity
-              key={van.id}
-              style={[styles.vanCard, { borderColor: COLORS.primary }]}
-              onPress={() => setSelectedVan(van)}
-            >
-              <View style={styles.vanHeader}>
-                <Text style={styles.vanName}>{van.name}</Text>
-                <View
-                  style={[
-                    styles.vanStatusBadge,
-                    van.status === 'Completed' && styles.vanStatusCompleted,
-                    van.status === 'En Route' && styles.vanStatusEnRoute,
-                    van.status === 'Paused' && styles.vanStatusPaused,
-                  ]}
-                >
-                  <Text style={styles.vanStatusText}>{van.status}</Text>
+
+          {/* Van Details */}
+          <View style={styles.vansList}>
+            {vans.map(van => (
+              <View key={van.id} style={styles.vanCard}>
+                <View style={styles.vanHeader}>
+                  <Text style={styles.vanName}>{van.name}</Text>
+                  <View style={[
+                    styles.vanStatus,
+                    {
+                      backgroundColor: 
+                        van.status === 'Completed' ? COLORS.success :
+                        van.status === 'En Route' ? COLORS.warning :
+                        COLORS.primary
+                    }
+                  ]}>
+                    <Text style={styles.vanStatusText}>{van.status}</Text>
+                  </View>
                 </View>
+                <Text style={styles.vanDetail}>🚐 {van.driver}</Text>
+                <Text style={styles.vanDetail}>📍 {van.currentStop}</Text>
+                <Text style={styles.vanDetail}>👥 {van.passengers}/{van.capacity} passengers</Text>
+                <Text style={styles.vanDetail}>⏱️ ETA: {van.eta}</Text>
               </View>
-              <Text style={styles.vanDriver}>Driver: {van.driver}</Text>
-              <Text style={styles.vanRoute}>Route: {van.route}</Text>
-              <Text style={styles.vanLocation}>Current: {van.currentStop}</Text>
-              <Text style={styles.vanPassengers}>
-                {van.passengers}/{van.capacity} passengers
-              </Text>
-            </TouchableOpacity>
-          )) : (
-            <View style={styles.emptyState}>
-              <Icon name="directions-car" size={48} color="#999" />
-              <Text style={styles.emptyText}>No vans available for tracking</Text>
-            </View>
-          )}
-        </>
+            ))}
+          </View>
+        </View>
+      ) : (
+        <View style={styles.emptyState}>
+          <Icon name="my-location" size={48} color={COLORS.gray} />
+          <Text style={styles.emptyText}>No active trips</Text>
+        </View>
       )}
     </ScrollView>
   );
-};
-const handleDriverRequest = async (requestId, action) => {
-  try {
-    const request = driverRequests.find(req => req._id === requestId);
-    
-    if (action === 'accept') {
-      await apiService.approveDriverRequest(requestId);
-      
-      // Email send करें
-      if (request && request.email) {
-        await sendAcceptanceEmail(request.email, 'driver', request.name);
-      }
-      
-      // Request को list से remove करें
-      setDriverRequests(prev => prev.filter(req => req._id !== requestId));
-      
-      // Driver को active drivers में add करें
-      const newDriver = {
-        _id: request._id,
-        name: request.name,
-        email: request.email,
-        phone: request.phone,
-        vehicle: request.vehicle,
-        capacity: request.capacity,
-        status: 'Available',
-        availableTimeSlots: request.availableTimeSlots || [],
-        license: request.license,
-        experience: request.experience
-      };
-      
-      setDriverAvailability(prev => [...prev, newDriver]);
-      
-      // Stats update
-      setStats(prev => ({
-        ...prev,
-        activeDrivers: prev.activeDrivers + 1
-      }));
-      
-      Alert.alert('Success', 'Driver request accepted and added to active drivers');
-    } else {
-      await apiService.rejectDriverRequest(requestId);
-      // Request को list से remove करें
-      setDriverRequests(prev => prev.filter(req => req._id !== requestId));
-      Alert.alert('Rejected', 'Driver request rejected');
-    }
-    
-    await loadStats();
-  } catch (error) {
-    Alert.alert('Error', `Failed to ${action} driver request`);
-  }
-};
-const DriverRequestsSection = () => (
-  <ScrollView style={styles.section}>
-    <Text style={styles.sectionTitle}>Driver Join Requests</Text>
-    {driverRequests.length > 0 ? driverRequests.map(request => (
-      <View key={request._id} style={styles.requestCard}>
-        <Text style={styles.requestName}>{request.name}</Text>
-        <Text style={styles.requestDetail}>Email: {request.email}</Text>
-        <Text style={styles.requestDetail}>Vehicle: {request.vehicle}</Text>
-        <Text style={styles.requestDetail}>Capacity: {request.capacity}</Text>
-        <Text style={styles.requestDetail}>Experience: {request.experience}</Text>
-        <Text style={styles.requestDetail}>Phone: {request.phone}</Text>
-        <Text style={styles.requestDetail}>License: {request.license}</Text>
-        <Text style={styles.requestDetail}>
-          Available Slots: {request.availableTimeSlots?.join(', ') || 'Not specified'}
-        </Text>
-        <View style={styles.requestActions}>
-          <TouchableOpacity 
-            style={[styles.actionBtn, styles.acceptBtn]} 
-            onPress={() => handleDriverRequest(request._id, 'accept')}
-          >
-            <Text style={styles.actionBtnText}>Accept</Text>
-          </TouchableOpacity>
-          <TouchableOpacity 
-            style={[styles.actionBtn, styles.rejectBtn]} 
-            onPress={() => handleDriverRequest(request._id, 'reject')}
-          >
-            <Text style={styles.actionBtnText}>Reject</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    )) : (
-      <View style={styles.emptyState}>
-        <Icon name="inbox" size={48} color="#999" />
-        <Text style={styles.emptyText}>No driver requests</Text>
-      </View>
-    )}
-  </ScrollView>
-);
-const PassengerRequestsSection = () => (
-  <ScrollView style={styles.section}>
-    <Text style={styles.sectionTitle}>Passenger Join Requests</Text>
-    {passengerRequests.length > 0 ? passengerRequests.map(request => (
-      <View key={request._id} style={styles.requestCard}>
-        <Text style={styles.requestName}>{request.name}</Text>
-        <Text style={styles.requestDetail}>Location: {request.location}</Text>
-        <Text style={styles.requestDetail}>Pickup: {request.pickupPoint}</Text>
-        <Text style={styles.requestDetail}>Destination: {request.destination}</Text>
-        <Text style={styles.requestDetail}>Preferred Time: {request.preferredTimeSlot}</Text>
-        <Text style={styles.requestDetail}>Phone: {request.phone}</Text>
-        <View style={styles.requestActions}>
-          <TouchableOpacity 
-            style={[styles.actionBtn, styles.acceptBtn]} 
-            onPress={() => handlePassengerRequest(request._id, 'accept')}
-          >
-            <Text style={styles.actionBtnText}>Accept</Text>
-          </TouchableOpacity>
-          <TouchableOpacity 
-            style={[styles.actionBtn, styles.rejectBtn]} 
-            onPress={() => handlePassengerRequest(request._id, 'reject')}
-          >
-            <Text style={styles.actionBtnText}>Reject</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    )) : (
-      <View style={styles.emptyState}>
-        <Icon name="inbox" size={48} color="#999" />
-        <Text style={styles.emptyText}>No passenger requests</Text>
-      </View>
-    )}
-  </ScrollView>
-);
-const PaymentsSection = () => {
-  const [selectedDriver, setSelectedDriver] = useState('');
-  const [paymentAmount, setPaymentAmount] = useState('');
-  const [paymentMode, setPaymentMode] = useState('Cash');
-  const [availableDrivers, setAvailableDrivers] = useState([]);
 
-  // Load available drivers
-  useEffect(() => {
-    loadAvailableDrivers();
-  }, []);
-
-  const loadAvailableDrivers = async () => {
-    try {
-      const response = await apiService.apiCall('/users?role=driver&status=active');
-      setAvailableDrivers(response.users || []);
-    } catch (error) {
-      console.error('Error loading drivers:', error);
-    }
-  };
-
-  const sendPaymentNotification = async () => {
-    if (!selectedDriver || !paymentAmount) {
-      Alert.alert('Error', 'Please select driver and enter amount');
-      return;
-    }
-
-    try {
-      const selectedDriverData = availableDrivers.find(d => d._id === selectedDriver);
-      
-      const notificationData = {
-        type: 'payment_sent',
-        title: 'Payment Sent',
-        message: `Transport company has sent you PKR ${paymentAmount} via ${paymentMode}`,
-        recipientId: selectedDriver,
-        recipientType: 'driver',
-        paymentData: {
-          amount: paymentAmount,
-          mode: paymentMode,
-          date: new Date().toISOString(),
-          status: 'sent'
-        }
-      };
-
-      // Send notification to driver
-      await apiService.apiCall('/notifications', {
-        method: 'POST',
-        body: JSON.stringify(notificationData),
-      });
-
-      // Save payment record (for transporter's records only)
-      const paymentRecord = {
-        driverId: selectedDriver,
-        driverName: selectedDriverData?.name || 'Unknown Driver',
-        amount: paymentAmount,
-        mode: paymentMode,
-        date: new Date().toISOString(),
-        status: 'sent',
-        type: 'driver_payment'
-      };
-
-      await apiService.apiCall('/payments', {
-        method: 'POST',
-        body: JSON.stringify(paymentRecord),
-      });
-
-      // Reset form
-      setSelectedDriver('');
-      setPaymentAmount('');
-      setPaymentMode('Cash');
-
-      Alert.alert('Success', `Payment notification sent to ${selectedDriverData?.name}`);
-      
-      // Reload payment history
-      loadDriverPayments();
-    } catch (error) {
-      console.error('Error sending payment:', error);
-      Alert.alert('Error', 'Failed to send payment notification');
-    }
-  };
-
-  return (
+  const DriverRequestsSection = () => (
     <ScrollView style={styles.section}>
-      <Text style={styles.sectionTitle}>Payments Management</Text>
-      
-      <View style={styles.tabContainer}>
-        <TouchableOpacity 
-          style={[styles.tab, paymentTab === 'driver' && styles.tabActive]} 
-          onPress={() => setPaymentTab('driver')}
-        >
-          <Text style={[styles.tabText, paymentTab === 'driver' && styles.tabTextActive]}>
-            Driver Payments
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity 
-          style={[styles.tab, paymentTab === 'passenger' && styles.tabActive]} 
-          onPress={() => setPaymentTab('passenger')}
-        >
-          <Text style={styles.tabText}>Passenger Payments</Text>
-        </TouchableOpacity>
-      </View>
-      
-      {paymentTab === 'driver' && (
-        <>
-          {/* Send Payment Notification Card */}
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Send Payment Notification</Text>
-            
-            {/* Driver Selection */}
-            <Text style={styles.inputLabel}>Select Driver:</Text>
-            <View style={styles.pickerContainer}>
-              <Picker
-                selectedValue={selectedDriver}
-                style={styles.picker}
-                onValueChange={(itemValue) => setSelectedDriver(itemValue)}
-              >
-                <Picker.Item label="Choose a driver" value="" />
-                {availableDrivers.map(driver => (
-                  <Picker.Item 
-                    key={driver._id} 
-                    label={`${driver.name} - ${driver.phone || ''}`} 
-                    value={driver._id} 
-                  />
-                ))}
-              </Picker>
-            </View>
-
-            {/* Amount Input */}
-            <TextInput 
-              style={styles.input} 
-              placeholder="Amount (PKR)" 
-              value={paymentAmount} 
-              onChangeText={setPaymentAmount} 
-              keyboardType="numeric" 
-            />
-
-            {/* Payment Mode Selection */}
-            <Text style={styles.inputLabel}>Payment Method:</Text>
-            <View style={styles.pickerContainer}>
-              <Picker
-                selectedValue={paymentMode}
-                style={styles.picker}
-                onValueChange={(itemValue) => setPaymentMode(itemValue)}
-              >
-                <Picker.Item label="Cash" value="Cash" />
-                <Picker.Item label="Bank Transfer" value="Bank Transfer" />
-                <Picker.Item label="EasyPaisa" value="EasyPaisa" />
-                <Picker.Item label="JazzCash" value="JazzCash" />
-                <Picker.Item label="Other" value="Other" />
-              </Picker>
-            </View>
-
-            <TouchableOpacity 
-              style={[
-                styles.primaryBtn, 
-                (!selectedDriver || !paymentAmount) && styles.disabledBtn
-              ]} 
-              onPress={sendPaymentNotification}
-              disabled={!selectedDriver || !paymentAmount}
+      <Text style={styles.sectionTitle}>Driver Requests</Text>
+      {driverRequests.length > 0 ? driverRequests.map(request => (
+        <View key={request._id} style={styles.card}>
+          <Text style={styles.cardTitle}>{request.name}</Text>
+          <Text style={styles.requestDetail}>📧 {request.email}</Text>
+          <Text style={styles.requestDetail}>📞 {request.phone}</Text>
+          {request.vehicle && (
+            <Text style={styles.requestDetail}>🚐 {request.vehicle}</Text>
+          )}
+          {request.license && (
+            <Text style={styles.requestDetail}>🪪 License: {request.license}</Text>
+          )}
+          <View style={styles.requestActions}>
+            <TouchableOpacity
+              style={[styles.actionBtn, styles.acceptBtn]}
+              onPress={async () => {
+                try {
+                  await apiService.approveDriverRequest(request._id);
+                  await loadDriverRequests();
+                  await loadDrivers();
+                  Alert.alert('Success', 'Request approved');
+                } catch (error) {
+                  Alert.alert('Error', 'Failed to approve request');
+                }
+              }}
             >
-              <Text style={styles.primaryBtnText}>Send Payment Notification</Text>
+              <Text style={styles.actionBtnText}>Accept</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.actionBtn, styles.rejectBtn]}
+              onPress={async () => {
+                try {
+                  await apiService.rejectDriverRequest(request._id);
+                  await loadDriverRequests();
+                  Alert.alert('Success', 'Request rejected');
+                } catch (error) {
+                  Alert.alert('Error', 'Failed to reject request');
+                }
+              }}
+            >
+              <Text style={styles.actionBtnText}>Reject</Text>
             </TouchableOpacity>
           </View>
-          
-          {/* Payment History */}
-          <Text style={styles.sectionSubtitle}>Payment History</Text>
-          {driverPayments.length > 0 ? driverPayments.map(payment => (
-            <View key={payment._id} style={styles.paymentHistoryCard}>
-              <View style={styles.paymentHeader}>
-                <Text style={styles.driverName}>
-                  {payment.driverName || 'Unknown Driver'}
-                </Text>
-                <View style={[styles.paymentStatusBadge, styles.statusSent]}>
-                  <Text style={styles.paymentStatusText}>Sent</Text>
-                </View>
-              </View>
-              
-              <View style={styles.paymentDetails}>
-                <View style={styles.paymentDetailRow}>
-                  <Text style={styles.paymentDetailLabel}>Amount:</Text>
-                  <Text style={styles.paymentDetailValue}>PKR {payment.amount}</Text>
-                </View>
-                
-                <View style={styles.paymentDetailRow}>
-                  <Text style={styles.paymentDetailLabel}>Method:</Text>
-                  <Text style={styles.paymentDetailValue}>{payment.mode}</Text>
-                </View>
-                
-                <View style={styles.paymentDetailRow}>
-                  <Text style={styles.paymentDetailLabel}>Date:</Text>
-                  <Text style={styles.paymentDetailValue}>
-                    {new Date(payment.date || payment.createdAt).toLocaleDateString('en-PK')}
-                  </Text>
-                </View>
-                
-                <View style={styles.paymentDetailRow}>
-                  <Text style={styles.paymentDetailLabel}>Time:</Text>
-                  <Text style={styles.paymentDetailValue}>
-                    {new Date(payment.date || payment.createdAt).toLocaleTimeString('en-PK')}
-                  </Text>
-                </View>
-              </View>
-            </View>
-          )) : (
-            <View style={styles.emptyState}>
-              <Icon name="receipt" size={48} color="#999" />
-              <Text style={styles.emptyText}>No payment history</Text>
-              <Text style={styles.emptySubtext}>Payment notifications will appear here</Text>
-            </View>
-          )}
-        </>
-      )}
-      
-      {paymentTab === 'passenger' && (
-        <>
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>Passenger Payment Records</Text>
-            <Text style={styles.infoText}>
-              View passenger payment status and send renewal reminders
-            </Text>
-          </View>
-          
-          {passengerPayments.length > 0 ? passengerPayments.map(payment => (
-            <View key={payment._id} style={styles.passengerPaymentCard}>
-              <View style={styles.paymentHeader}>
-                <Text style={styles.passengerName}>
-                  {typeof payment.passengerId === 'object' ? payment.passengerId.name : payment.passenger}
-                </Text>
-                <View style={[
-                  styles.passengerStatusBadge, 
-                  payment.status === 'Paid' && styles.statusPaid,
-                  payment.status === 'Pending' && styles.statusPending,
-                  payment.status === 'Expired' && styles.statusExpired
-                ]}>
-                  <Text style={styles.passengerStatusText}>{payment.status}</Text>
-                </View>
-              </View>
-              
-              <Text style={styles.paymentDetail}>Amount: PKR {payment.amount}</Text>
-              <Text style={styles.paymentDetail}>
-                Last Payment: {new Date(payment.lastPaymentDate).toLocaleDateString()}
-              </Text>
-              <Text style={styles.paymentDetail}>
-                Expiry: {new Date(payment.expiryDate).toLocaleDateString()}
-              </Text>
-              
-              <View style={styles.passengerActions}>
-                {payment.status === 'Expired' && (
-                  <TouchableOpacity 
-                    style={styles.reminderBtn} 
-                    onPress={() => sendPaymentReminder(payment._id)}
-                  >
-                    <Text style={styles.reminderBtnText}>Send Reminder</Text>
-                  </TouchableOpacity>
-                )}
-                {payment.status === 'Paid' && (
-                  <TouchableOpacity 
-                    style={styles.renewalBtn} 
-                    onPress={() => sendRenewalNotification(payment._id)}
-                  >
-                    <Text style={styles.renewalBtnText}>Renewal Notice</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            </View>
-          )) : (
-            <View style={styles.emptyState}>
-              <Icon name="account-balance-wallet" size={48} color="#999" />
-              <Text style={styles.emptyText}>No passenger payments</Text>
-            </View>
-          )}
-        </>
+        </View>
+      )) : (
+        <View style={styles.emptyState}>
+          <Icon name="inbox" size={48} color={COLORS.gray} />
+          <Text style={styles.emptyText}>No pending requests</Text>
+        </View>
       )}
     </ScrollView>
   );
-};
-const CompletedTripsList = ({ onClose }) => {
-  const [completedTrips, setCompletedTrips] = useState([]);
-  const [loading, setLoading] = useState(true);
 
-  useEffect(() => {
-    loadCompletedTrips();
-  }, []);
-
-  const loadCompletedTrips = async () => {
-    try {
-      setLoading(true);
-      const response = await apiService.getCompletedTrips();
-      setCompletedTrips(response.trips || []);
-    } catch (error) {
-      console.error('Error loading completed trips:', error);
-      Alert.alert('Error', 'Failed to load completed trips');
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  if (loading) {
-    return (
-      <View style={styles.listContainer}>
-        <View style={styles.listHeader}>
-          <TouchableOpacity onPress={onClose} style={styles.backButton}>
-            <Icon name="arrow-back" size={24} color={COLORS.black} />
-          </TouchableOpacity>
-          <Text style={styles.listTitle}>Completed Trips</Text>
-          <View style={styles.headerRight} />
-        </View>
-        <View style={styles.loadingContainer}>
-          <ActivityIndicator size="large" color={COLORS.primary} />
-          <Text style={styles.loadingText}>Loading completed trips...</Text>
-        </View>
-      </View>
-    );
-  }
-
-  return (
-    <View style={styles.listContainer}>
-      <View style={styles.listHeader}>
-        <TouchableOpacity onPress={onClose} style={styles.backButton}>
-          <Icon name="arrow-back" size={24} color={COLORS.black} />
-        </TouchableOpacity>
-        <Text style={styles.listTitle}>Completed Trips ({completedTrips.length})</Text>
-        <TouchableOpacity onPress={loadCompletedTrips} style={styles.refreshButton}>
-          <Icon name="refresh" size={20} color={COLORS.primary} />
-        </TouchableOpacity>
-      </View>
-
-      <ScrollView style={styles.listContent}>
-        {completedTrips.length > 0 ? (
-          completedTrips.map(trip => (
-            <View key={trip._id} style={styles.completedTripCard}>
-              <View style={styles.tripHeader}>
-                <View style={styles.tripIcon}>
-                  <Icon name="check-circle" size={24} color={COLORS.success} />
-                </View>
-                <View style={styles.tripInfo}>
-                  <Text style={styles.tripName}>
-                    {trip.driverId?.name || 'Unknown Driver'} 
-                  </Text>
-                  <Text style={styles.tripRoute}>
-                    {trip.routeId?.name || 'Unknown Route'}
-                  </Text>
-                </View>
-                <View style={[styles.statusBadge, styles.completedBadge]}>
-                  <Text style={styles.statusText}>COMPLETED</Text>
-                </View>
-              </View>
-              
-              <View style={styles.tripDetails}>
-                <View style={styles.tripDetailRow}>
-                  <View style={styles.tripDetailItem}>
-                    <Icon name="people" size={14} color={COLORS.gray} />
-                    <Text style={styles.tripDetailText}>
-                      {trip.passengers?.length || 0} passengers
-                    </Text>
-                  </View>
-                  <View style={styles.tripDetailItem}>
-                    <Icon name="schedule" size={14} color={COLORS.gray} />
-                    <Text style={styles.tripDetailText}>
-                      Completed: {new Date(trip.updatedAt || trip.createdAt).toLocaleDateString()}
-                    </Text>
-                  </View>
-                </View>
-                <View style={styles.tripDetailRow}>
-                  <View style={styles.tripDetailItem}>
-                    <Icon name="location-pin" size={14} color={COLORS.gray} />
-                    <Text style={styles.tripDetailText}>
-                      Route: {trip.routeId?.stops?.join(' → ') || 'N/A'}
-                    </Text>
-                  </View>
-                </View>
-              </View>
-
-              <View style={styles.completedTripActions}>
-                <TouchableOpacity style={styles.actionButton}>
-                  <Icon name="receipt" size={16} color={COLORS.primary} />
-                  <Text style={styles.actionText}>View Details</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.actionButton}>
-                  <Icon name="star" size={16} color={COLORS.warning} />
-                  <Text style={styles.actionText}>Rate Trip</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          ))
-        ) : (
-          <View style={styles.emptyState}>
-            <Icon name="check-circle" size={64} color={COLORS.gray} />
-            <Text style={styles.emptyText}>No completed trips</Text>
-            <Text style={styles.emptySubtext}>Completed trips will appear here</Text>
-          </View>
-        )}
-      </ScrollView>
-    </View>
-  );
-};
-const ComplaintsSection = () => (
-  <ScrollView style={styles.section}>
-    <Text style={styles.sectionTitle}>Complaints Management</Text>
-    {selectedResponse ? (
-      <View style={styles.complaintDetailCard}>
-        <TouchableOpacity style={styles.backBtn} onPress={() => setSelectedResponse(null)}>
-          <Text style={styles.backBtnText}>← Back to List</Text>
-        </TouchableOpacity>
-        <View style={styles.complaintHeader}>
-          <Text style={styles.complaintTitle}>{selectedResponse.title}</Text>
-          <View style={[
-            styles.complaintStatusBadge, 
-            selectedResponse.status === 'Open' && styles.complaintStatusOpen,
-            selectedResponse.status === 'Resolved' && styles.complaintStatusResolved
-          ]}>
-            <Text style={styles.complaintStatusText}>{selectedResponse.status}</Text>
-          </View>
-        </View>
-        <Text style={styles.complaintBy}>By: {selectedResponse.byName}</Text>
-        <Text style={styles.complaintDesc}>{selectedResponse.description}</Text>
-        <Text style={styles.complaintTime}>
-          {new Date(selectedResponse.createdAt).toLocaleDateString()} at {new Date(selectedResponse.createdAt).toLocaleTimeString()}
-        </Text>
-        
-        <View style={styles.repliesContainer}>
-          <Text style={styles.repliesTitle}>Replies</Text>
-          {selectedResponse.replies?.length > 0 ? selectedResponse.replies.map(reply => (
-            <View key={reply._id || reply.id} style={styles.replyItem}>
-              <Text style={styles.replyBy}>{reply.by}</Text>
-              <Text style={styles.replyText}>{reply.text}</Text>
-              <Text style={styles.replyTime}>
-                {new Date(reply.date).toLocaleDateString()} at {reply.time}
-              </Text>
-            </View>
-          )) : (
-            <Text style={styles.noRepliesText}>No replies yet</Text>
+  const PassengerRequestsSection = () => (
+    <ScrollView style={styles.section}>
+      <Text style={styles.sectionTitle}>Passenger Requests</Text>
+      {passengerRequests.length > 0 ? passengerRequests.map(request => (
+        <View key={request._id} style={styles.card}>
+          <Text style={styles.cardTitle}>{request.name}</Text>
+          <Text style={styles.requestDetail}>📧 {request.email}</Text>
+          <Text style={styles.requestDetail}>📞 {request.phone}</Text>
+          {request.pickupPoint && (
+            <Text style={styles.requestDetail}>📍 {request.pickupPoint}</Text>
           )}
-        </View>
-        
-        {selectedResponse.status === 'Open' && (
-          <View style={styles.replyInputContainer}>
-            <TextInput
-              style={[styles.input, styles.replyInput]}
-              placeholder="Type your reply..."
-              value={newReply}
-              onChangeText={setNewReply}
-              multiline
-            />
-            <TouchableOpacity 
-              style={styles.replyBtn} 
-              onPress={() => replyToComplaint(selectedResponse._id)}
+          <View style={styles.requestActions}>
+            <TouchableOpacity
+              style={[styles.actionBtn, styles.acceptBtn]}
+              onPress={async () => {
+                try {
+                  await apiService.approvePassengerRequest(request._id);
+                  await loadPassengerRequests();
+                  await loadPassengers();
+                  Alert.alert('Success', 'Request approved');
+                } catch (error) {
+                  Alert.alert('Error', 'Failed to approve request');
+                }
+              }}
             >
-              <Text style={styles.replyBtnText}>Send Reply</Text>
+              <Text style={styles.actionBtnText}>Accept</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.actionBtn, styles.rejectBtn]}
+              onPress={async () => {
+                try {
+                  await apiService.rejectPassengerRequest(request._id);
+                  await loadPassengerRequests();
+                  Alert.alert('Success', 'Request rejected');
+                } catch (error) {
+                  Alert.alert('Error', 'Failed to reject request');
+                }
+              }}
+            >
+              <Text style={styles.actionBtnText}>Reject</Text>
             </TouchableOpacity>
           </View>
-        )}
-        
-        {selectedResponse.status === 'Open' && (
-          <TouchableOpacity 
-            style={styles.resolveBtn} 
-            onPress={() => resolveComplaint(selectedResponse._id)}
-          >
-            <Text style={styles.resolveBtnText}>Mark as Resolved</Text>
-          </TouchableOpacity>
-        )}
+        </View>
+      )) : (
+        <View style={styles.emptyState}>
+          <Icon name="inbox" size={48} color={COLORS.gray} />
+          <Text style={styles.emptyText}>No pending requests</Text>
+        </View>
+      )}
+    </ScrollView>
+  );
+
+  const PaymentsSection = () => (
+    <ScrollView style={styles.section}>
+      <Text style={styles.sectionTitle}>Payments</Text>
+      <View style={styles.emptyState}>
+        <Icon name="account-balance-wallet" size={48} color={COLORS.gray} />
+        <Text style={styles.emptyText}>No payments yet</Text>
       </View>
-    ) : (
-      <>
-        {complaints.length > 0 ? complaints.map(complaint => (
-          <TouchableOpacity 
-            key={complaint._id} 
-            style={styles.complaintCard} 
-            onPress={() => setSelectedResponse(complaint)}
-          >
-            <View style={styles.complaintHeader}>
-              <Text style={styles.complaintTitle}>{complaint.title}</Text>
-              <View style={[
-                styles.complaintStatusBadge, 
-                complaint.status === 'Open' && styles.complaintStatusOpen,
-                complaint.status === 'Resolved' && styles.complaintStatusResolved
-              ]}>
-                <Text style={styles.complaintStatusText}>{complaint.status}</Text>
-              </View>
-            </View>
-            <Text style={styles.complaintBy}>By: {complaint.byName}</Text>
-            <Text style={styles.complaintDesc}>
-              {complaint.description?.length > 100 
-                ? complaint.description.substring(0, 100) + '...' 
-                : complaint.description
+    </ScrollView>
+  );
+
+  const ComplaintsSection = () => (
+    <ScrollView style={styles.section}>
+      <Text style={styles.sectionTitle}>Complaints</Text>
+      {complaints.length > 0 ? complaints.map(complaint => (
+        <View key={complaint._id} style={styles.card}>
+          <Text style={styles.cardTitle}>{complaint.title}</Text>
+          <Text style={styles.complaintDesc}>{complaint.description}</Text>
+          <View style={styles.complaintMeta}>
+            <Text style={styles.complaintDetail}>By: {complaint.byName}</Text>
+            <View style={[
+              styles.statusBadge,
+              {
+                backgroundColor: 
+                  complaint.status === 'Resolved' ? COLORS.success :
+                  complaint.status === 'In Progress' ? COLORS.warning :
+                  COLORS.danger
               }
-            </Text>
-            <Text style={styles.complaintTime}>
-              {new Date(complaint.createdAt).toLocaleDateString()}
+            ]}>
+              <Text style={styles.statusBadgeText}>{complaint.status}</Text>
+            </View>
+          </View>
+          <Text style={styles.complaintDate}>
+            {new Date(complaint.createdAt).toLocaleDateString()}
+          </Text>
+        </View>
+      )) : (
+        <View style={styles.emptyState}>
+          <Icon name="check-circle" size={48} color={COLORS.gray} />
+          <Text style={styles.emptyText}>No complaints</Text>
+        </View>
+      )}
+    </ScrollView>
+  );
+
+  const NotificationsSection = () => (
+    <ScrollView style={styles.section}>
+      <Text style={styles.sectionTitle}>Notifications</Text>
+      {notifications.length > 0 ? notifications.map(notification => (
+        <TouchableOpacity
+          key={notification._id}
+          style={[styles.card, !notification.read && styles.unreadNotification]}
+          onPress={async () => {
+            try {
+              await apiService.markNotificationAsRead(notification._id);
+              await loadNotifications();
+            } catch (error) {
+              console.error('Error marking notification as read:', error);
+            }
+          }}
+        >
+          <View style={styles.notificationHeader}>
+            <Icon 
+              name={notification.icon || 'notifications'} 
+              size={24} 
+              color={notification.color || COLORS.primary} 
+            />
+            <Text style={styles.notificationTitle}>{notification.title}</Text>
+          </View>
+          <Text style={styles.notificationMessage}>{notification.message}</Text>
+          <Text style={styles.notificationDate}>
+            {new Date(notification.createdAt).toLocaleString()}
+          </Text>
+        </TouchableOpacity>
+      )) : (
+        <View style={styles.emptyState}>
+          <Icon name="notifications-none" size={48} color={COLORS.gray} />
+          <Text style={styles.emptyText}>No notifications</Text>
+        </View>
+      )}
+    </ScrollView>
+  );
+
+  const Sidebar = () => (
+    <Animated.View style={[styles.sidebar, { transform: [{ translateX: slideAnim }] }]}>
+      <View style={styles.sidebarHeader}>
+        <View>
+          <Text style={styles.sidebarTitle}>{profile.name}</Text>
+          <Text style={styles.sidebarSubtitle}>{profile.company}</Text>
+        </View>
+        <TouchableOpacity onPress={() => setSidebarVisible(false)}>
+          <Icon name="close" size={24} color={COLORS.white} />
+        </TouchableOpacity>
+      </View>
+      <ScrollView style={styles.sidebarMenu}>
+        {[
+          { key: 'overview', label: 'Dashboard', icon: 'dashboard' },
+          { key: 'profile', label: 'Profile', icon: 'account-circle' },
+          { key: 'poll', label: 'Polls', icon: 'poll' },
+          { key: 'routes', label: 'Routes', icon: 'map' },
+          { key: 'assign', label: 'Assign', icon: 'assignment-ind' },
+          { key: 'tracking', label: 'Tracking', icon: 'my-location' },
+          { key: 'driver-req', label: 'Driver Requests', icon: 'group-add' },
+          { key: 'pass-req', label: 'Passenger Requests', icon: 'person-add' },
+          { key: 'payments', label: 'Payments', icon: 'account-balance-wallet' },
+          { key: 'complaints', label: 'Complaints', icon: 'support-agent' },
+          { key: 'notifications', label: 'Notifications', icon: 'notifications-active' },
+        ].map(item => (
+          <TouchableOpacity
+            key={item.key}
+            style={[styles.menuItem, activeSection === item.key && styles.menuItemActive]}
+            onPress={() => {
+              setActiveSection(item.key);
+              setSidebarVisible(false);
+            }}
+          >
+            <Icon
+              name={item.icon}
+              size={22}
+              color={activeSection === item.key ? COLORS.primary : COLORS.gray}
+            />
+            <Text
+              style={[
+                styles.menuItemText,
+                activeSection === item.key && styles.menuItemTextActive
+              ]}
+            >
+              {item.label}
             </Text>
           </TouchableOpacity>
-        )) : (
-          <View style={styles.emptyState}>
-            <Icon name="check-circle" size={48} color="#999" />
-            <Text style={styles.emptyText}>No complaints</Text>
-          </View>
-        )}
-      </>
-    )}
-  </ScrollView>
-);
-
-const Sidebar = () => (
-  <Animated.View style={[styles.sidebar, { transform: [{ translateX: slideAnim }] }]}>
-    <View style={styles.sidebarHeader}>
-      <TouchableOpacity onPress={() => { setActiveSection('profile'); setSidebarVisible(false); }}>
-        <Text style={styles.sidebarTitle}>{profile.name}</Text>
-        <Text style={styles.sidebarSubtitle}>{profile.company}</Text>
-      </TouchableOpacity>
-      <TouchableOpacity onPress={() => setSidebarVisible(false)}>
-        <Icon name="close" size={24} color={COLORS.white} />
-      </TouchableOpacity>
-    </View>
-    <ScrollView style={styles.sidebarMenu}>
-      {[
-        { key: 'overview', label: 'Dashboard', icon: 'dashboard' },
-        { key: 'profile', label: 'My Profile', icon: 'account-circle' },
-        { key: 'poll', label: 'Create Poll', icon: 'poll' },
-        { key: 'responses', label: 'Poll Insights', icon: 'insights' },
-        { key: 'routes', label: 'Route Manager', icon: 'map' },
-        { key: 'assign', label: 'Smart Assign', icon: 'assignment-ind' },
-        { key: 'tracking', label: 'Live Tracker', icon: 'my-location' },
-        { key: 'driver-req', label: 'Driver Requests', icon: 'group-add' },
-        { key: 'pass-req', label: 'Rider Requests', icon: 'person-add' },
-        { key: 'payments', label: 'Finances', icon: 'account-balance-wallet' },
-        { key: 'complaints', label: 'Support Desk', icon: 'support-agent' },
-        { key: 'notifications', label: 'Notifications', icon: 'notifications-active' },
-      ].map(item => (
-        <TouchableOpacity 
-          key={item.key} 
-          style={[styles.menuItem, activeSection === item.key && styles.menuItemActive]} 
-          onPress={() => { setActiveSection(item.key); setSidebarVisible(false); }}
-        >
-          <Icon name={item.icon} size={22} color={activeSection === item.key ? COLORS.primary : COLORS.gray} />
-          <Text style={[styles.menuItemText, activeSection === item.key && styles.menuItemTextActive]}>
-            {item.label}
-          </Text>
-          {item.key === 'notifications' && notifications.filter(n => !n.read).length > 0 && (
-            <View style={styles.menuNotificationBadge}>
-              <Text style={styles.menuNotificationBadgeText}>
-                {notifications.filter(n => !n.read).length}
-              </Text>
-            </View>
-          )}
+        ))}
+        <View style={styles.menuDivider} />
+        <TouchableOpacity style={styles.logoutMenuItem} onPress={handleLogout}>
+          <Icon name="logout" size={22} color={COLORS.danger} />
+          <Text style={styles.logoutMenuText}>Logout</Text>
         </TouchableOpacity>
-      ))}
-      <View style={styles.menuDivider} />
-<TouchableOpacity style={styles.logoutMenuItem} onPress={handleLogout}>
-  <Icon name="logout" size={22} color={COLORS.danger} />
-  <Text style={styles.logoutMenuText}>Logout</Text>
-</TouchableOpacity>
-
-    </ScrollView>
-  </Animated.View>
-);
-
-  // For brevity, I'm showing that you should keep all your existing UI components
-  // The only changes needed are replacing static data with state variables that now contain API data
+      </ScrollView>
+    </Animated.View>
+  );
 
   const renderSection = () => {
-    const sections = { 
-      overview: <OverviewSection />, 
+    const sections = {
+      overview: <OverviewSection />,
       profile: <ProfileSection />,
-      poll: <PollSection />, 
-      responses: <ResponsesSection />, 
-      routes: <RouteSchedulingSection />, 
-      assign: <AssignDriversSection />, 
-      tracking: <LiveTrackingSection />, 
-      'driver-req': <DriverRequestsSection />, 
-      'pass-req': <PassengerRequestsSection />, 
-      payments: <PaymentsSection />, 
+      poll: <PollSection />,
+      routes: <RoutesSection />,
+      assign: <AssignSection />,
+      tracking: <TrackingSection />,
+      'driver-req': <DriverRequestsSection />,
+      'pass-req': <PassengerRequestsSection />,
+      payments: <PaymentsSection />,
       complaints: <ComplaintsSection />,
-      notifications: <NotificationsSection />
+      notifications: <NotificationsSection />,
     };
     return sections[activeSection] || <OverviewSection />;
   };
 
   return (
     <SafeAreaView style={styles.container}>
-      <View style={[styles.header, { backgroundColor: COLORS.primary }]}>
+      <View style={styles.header}>
         <TouchableOpacity style={styles.menuBtn} onPress={() => setSidebarVisible(true)}>
-          <Icon name="menu" size={24} color={COLORS.black} />
+          <Icon name="menu" size={24} color={COLORS.white} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Transporter Dashboard</Text>
         <View style={styles.headerRight} />
       </View>
+
       {sidebarVisible && <Sidebar />}
-      {sidebarVisible && <TouchableOpacity style={styles.overlay} onPress={() => setSidebarVisible(false)} />}
+      {sidebarVisible && (
+        <TouchableOpacity
+          style={styles.overlay}
+          onPress={() => setSidebarVisible(false)}
+        />
+      )}
+
       {renderSection()}
+
       {isLoading && (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color={COLORS.primary} />
@@ -3740,13 +1891,11 @@ const Sidebar = () => (
   );
 };
 
-// Keep all your existing styles exactly as they are
+// ==================== STYLES ====================
 const styles = StyleSheet.create({
-  // ... ALL YOUR EXISTING STYLES REMAIN EXACTLY THE SAME ...
   container: {
     flex: 1,
     backgroundColor: '#f8f9fa',
-    paddingTop: 10,
   },
   header: {
     flexDirection: 'row',
@@ -3755,38 +1904,8 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
     paddingHorizontal: 20,
     backgroundColor: COLORS.primary,
-    elevation: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
+    elevation: 4,
   },
-  // ==================== CONTAINER & LAYOUT ====================
-  container: {
-    flex: 1,
-    backgroundColor: '#f8f9fa',
-    paddingTop: 10,
-  },
-
-  // ==================== HEADER ====================
-  header: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: 16,
-    paddingHorizontal: 20,
-    backgroundColor: COLORS.primary,
-    elevation: 8,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 8,
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
-  },
-  
   menuBtn: {
     width: 40,
     height: 40,
@@ -3795,2236 +1914,607 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     backgroundColor: 'rgba(255,255,255,0.2)',
   },
-  
-  headerCenter: {
-    flex: 1,
-    alignItems: 'center',
-    paddingHorizontal: 12,
-  },
-  
   headerTitle: {
     fontSize: 20,
-    fontWeight: '800',
+    fontWeight: '700',
     color: COLORS.white,
-    letterSpacing: -0.3,
   },
-  
-  headerDate: {
-    fontSize: 11,
-    color: COLORS.white,
-    marginTop: 3,
-    opacity: 0.9,
-    fontWeight: '500',
-  },
-  
   headerRight: {
     width: 40,
-    height: 40,
-    alignItems: 'center',
-    justifyContent: 'center',
-    position: 'relative',
   },
-  
-  notificationBadge: {
-    position: 'absolute',
-    top: -2,
-    right: -2,
-    backgroundColor: COLORS.danger,
-    borderRadius: 10,
-    minWidth: 18,
-    height: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 2,
-    borderColor: COLORS.primary,
-  },
-  
-  notificationBadgeText: {
-    color: COLORS.white,
-    fontSize: 9,
-    fontWeight: '800',
-  },
-
-  // ==================== SIDEBAR ====================
   sidebar: {
     position: 'absolute',
     top: 0,
     left: 0,
     bottom: 0,
-    width: 300,
+    width: 280,
     backgroundColor: COLORS.white,
     elevation: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 4, height: 0 },
-    shadowOpacity: 0.3,
-    shadowRadius: 12,
     zIndex: 1000,
   },
-  
   sidebarHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    padding: 24,
+    padding: 20,
     paddingTop: 50,
     backgroundColor: COLORS.primary,
-    borderBottomRightRadius: 32,
   },
-  
   sidebarTitle: {
-    fontSize: 22,
-    fontWeight: '800',
+    fontSize: 20,
+    fontWeight: '700',
     color: COLORS.white,
-    letterSpacing: -0.5,
   },
-  
   sidebarSubtitle: {
     fontSize: 13,
     color: COLORS.white,
-    opacity: 0.95,
     marginTop: 4,
-    fontWeight: '500',
   },
-  
   sidebarMenu: {
     flex: 1,
     paddingTop: 16,
   },
-  
   menuItem: {
     flexDirection: 'row',
     alignItems: 'center',
     padding: 16,
     marginHorizontal: 12,
-    marginVertical: 3,
-    borderRadius: 14,
-    position: 'relative',
+    marginVertical: 2,
+    borderRadius: 12,
   },
-  
   menuItemActive: {
     backgroundColor: '#F0F9D9',
-    borderLeftWidth: 4,
-    borderLeftColor: COLORS.primary,
   },
-  
   menuItemText: {
     fontSize: 15,
-    color: COLORS.darkGray,
-    marginLeft: 14,
+    color: COLORS.gray,
+    marginLeft: 12,
     fontWeight: '600',
-    flex: 1,
   },
-  
   menuItemTextActive: {
     color: COLORS.primary,
     fontWeight: '700',
   },
-  
-  menuNotificationBadge: {
-    backgroundColor: COLORS.danger,
-    borderRadius: 10,
-    minWidth: 22,
-    height: 22,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginLeft: 'auto',
-  },
-  
-  menuNotificationBadgeText: {
-    color: COLORS.white,
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  
   menuDivider: {
     height: 1,
     backgroundColor: '#e0e0e0',
     marginVertical: 16,
     marginHorizontal: 24,
   },
-  
   logoutMenuItem: {
     flexDirection: 'row',
     alignItems: 'center',
     padding: 16,
     marginHorizontal: 12,
-    borderRadius: 14,
+    borderRadius: 12,
     backgroundColor: '#ffebee',
-    marginTop: 8,
   },
-  
   logoutMenuText: {
     fontSize: 15,
     color: COLORS.danger,
-    marginLeft: 14,
+    marginLeft: 12,
     fontWeight: '700',
   },
-  
   overlay: {
     position: 'absolute',
     top: 0,
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: 'rgba(0, 0, 0, 0.6)',
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
     zIndex: 999,
   },
-
-  // ==================== SECTIONS ====================
   section: {
     flex: 1,
     padding: 20,
-    backgroundColor: '#f8f9fa',
   },
-  
   sectionTitle: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: COLORS.black,
-    marginBottom: 20,
-    letterSpacing: -0.8,
-  },
-  
-  sectionSubtitle: {
-    fontSize: 19,
+    fontSize: 24,
     fontWeight: '700',
     color: COLORS.black,
-    marginTop: 24,
-    marginBottom: 14,
-    letterSpacing: -0.3,
+    marginBottom: 16,
   },
-
-  // ==================== OVERVIEW SECTION ====================
-  overviewGrid: {
+  sectionSubtitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: COLORS.black,
+    marginTop: 20,
+    marginBottom: 12,
+  },
+  updateText: {
+    fontSize: 12,
+    color: COLORS.gray,
+    marginBottom: 16,
+  },
+  statsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
-    marginBottom: 24,
+    marginBottom: 20,
   },
-  
-  overviewCard: {
-    width: '48%',
-    alignItems: 'center',
-    padding: 24,
-    borderRadius: 20,
-    marginBottom: 14,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-  },
-  
-  overviewValue: {
-    fontSize: 32,
-    fontWeight: '900',
-    color: COLORS.black,
-    marginTop: 10,
-    letterSpacing: -1,
-  },
-  
-  overviewLabel: {
-    fontSize: 13,
-    color: COLORS.gray,
-    marginTop: 6,
-    textAlign: 'center',
-    fontWeight: '600',
-  },
-
-  // ==================== STATS CARD ====================
-  statsContainer: {
-    backgroundColor: COLORS.white,
-    padding: 20,
-    borderRadius: 20,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    marginBottom: 24,
-  },
-  
   statCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    width: '48%',
     backgroundColor: COLORS.white,
     borderRadius: 16,
-    padding: 18,
+    padding: 20,
     marginBottom: 12,
+    alignItems: 'center',
+    borderWidth: 2,
     elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.06,
-    shadowRadius: 4,
-    borderWidth: 1,
-    borderColor: '#f0f0f0',
   },
-  
-  statIcon: {
-    marginRight: 16,
-  },
-  
-  statContent: {
-    flex: 1,
-  },
-  
   statValue: {
-    fontSize: 26,
-    fontWeight: '800',
+    fontSize: 28,
+    fontWeight: '700',
     color: COLORS.black,
-    marginBottom: 2,
-    letterSpacing: -0.5,
+    marginTop: 8,
   },
-  
   statLabel: {
-    fontSize: 14,
+    fontSize: 13,
     color: COLORS.gray,
-    fontWeight: '600',
+    marginTop: 4,
+    textAlign: 'center',
   },
-
-  // ==================== QUICK ACTIONS ====================
   quickActionsGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
-    marginBottom: 24,
   },
-  
   quickActionCard: {
     width: '48%',
     backgroundColor: COLORS.white,
-    borderRadius: 18,
-    padding: 20,
-    marginBottom: 14,
-    alignItems: 'center',
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    borderWidth: 1,
-    borderColor: '#f0f0f0',
-  },
-  
-  quickActionIcon: {
-    width: 56,
-    height: 56,
     borderRadius: 16,
+    padding: 20,
+    marginBottom: 12,
+    alignItems: 'center',
+    elevation: 2,
+  },
+  quickActionIcon: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
     backgroundColor: '#F0F9D9',
     justifyContent: 'center',
     alignItems: 'center',
     marginBottom: 12,
   },
-  
   quickActionTitle: {
     fontSize: 14,
     color: COLORS.black,
+    fontWeight: '600',
     textAlign: 'center',
-    fontWeight: '700',
-    letterSpacing: -0.2,
   },
-
-  // ==================== CARDS ====================
   card: {
     backgroundColor: COLORS.white,
-    borderRadius: 20,
-    padding: 22,
-    marginBottom: 22,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    borderWidth: 1,
-    borderColor: '#f0f0f0',
-  },
-  
-  cardTitle: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: COLORS.black,
-    marginBottom: 16,
-    letterSpacing: -0.3,
-  },
-
-  // ==================== INPUT FIELDS ====================
-  input: {
-    borderWidth: 1.5,
-    borderColor: '#e0e0e0',
-    borderRadius: 14,
-    padding: 16,
-    marginBottom: 14,
-    fontSize: 15,
-    color: COLORS.black,
-    backgroundColor: COLORS.white,
-    fontWeight: '500',
-  },
-  
-  textArea: {
-    height: 120,
-    textAlignVertical: 'top',
-    paddingTop: 16,
-  },
-  
-  inputLabel: {
-    fontSize: 15,
-    color: COLORS.black,
-    marginBottom: 10,
-    fontWeight: '700',
-    letterSpacing: -0.2,
-  },
-
-  // ==================== TIME SLOTS ====================
-  customTimeSlotContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 18,
-  },
-  
-  addTimeSlotBtn: {
-    backgroundColor: COLORS.primary,
-    borderRadius: 14,
-    padding: 16,
-    minWidth: 90,
-    alignItems: 'center',
+    borderRadius: 16,
+    padding: 20,
+    marginBottom: 12,
     elevation: 2,
   },
-  
-  addTimeSlotBtnText: {
-    color: COLORS.white,
-    fontSize: 15,
+  cardTitle: {
+    fontSize: 17,
     fontWeight: '700',
+    color: COLORS.black,
+    marginBottom: 8,
   },
-  
+  cardText: {
+    fontSize: 14,
+    color: COLORS.gray,
+    marginBottom: 12,
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    borderRadius: 12,
+    padding: 14,
+    marginBottom: 12,
+    fontSize: 15,
+    backgroundColor: COLORS.white,
+  },
+  inputLabel: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.black,
+    marginBottom: 8,
+    marginTop: 8,
+  },
   timeSlotOption: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: 16,
-    borderRadius: 14,
-    marginBottom: 10,
+    padding: 14,
+    borderRadius: 12,
+    marginBottom: 8,
     backgroundColor: '#f8f9fa',
-    borderWidth: 2,
+    borderWidth: 1,
     borderColor: '#e0e0e0',
   },
-  
   timeSlotSelected: {
     backgroundColor: '#F0F9D9',
     borderColor: COLORS.primary,
   },
-  
   checkbox: {
-    width: 26,
-    height: 26,
-    borderRadius: 8,
+    width: 24,
+    height: 24,
+    borderRadius: 6,
     borderWidth: 2,
     borderColor: COLORS.gray,
     justifyContent: 'center',
     alignItems: 'center',
-    marginRight: 14,
+    marginRight: 12,
   },
-  
   checkboxSelected: {
     backgroundColor: COLORS.primary,
     borderColor: COLORS.primary,
   },
-  
   timeSlotLabel: {
     fontSize: 15,
     color: COLORS.black,
-    fontWeight: '600',
   },
-
-  // ==================== BUTTONS ====================
   primaryBtn: {
     backgroundColor: COLORS.primary,
-    borderRadius: 14,
-    padding: 18,
+    borderRadius: 12,
+    padding: 16,
     alignItems: 'center',
-    marginTop: 10,
-    elevation: 4,
-    shadowColor: COLORS.primary,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
+    marginTop: 8,
+    elevation: 3,
   },
-  
+  primaryBtnDisabled: {
+    backgroundColor: COLORS.gray,
+    opacity: 0.6,
+  },
   primaryBtnText: {
     color: COLORS.white,
     fontSize: 16,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-  },
-  
-  backBtn: {
-    padding: 10,
-    marginBottom: 14,
-    alignSelf: 'flex-start',
-  },
-  
-  backBtnText: {
-    fontSize: 15,
-    color: COLORS.primary,
     fontWeight: '700',
   },
-
-  // ==================== POLL CARDS ====================
-  pollCard: {
-    backgroundColor: COLORS.white,
-    borderRadius: 18,
-    padding: 20,
-    marginBottom: 14,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    borderWidth: 1,
-    borderColor: '#f0f0f0',
-  },
-  
-  pollTitle: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: COLORS.black,
-    marginBottom: 10,
-    letterSpacing: -0.3,
-  },
-  
   pollSlots: {
-    fontSize: 15,
+    fontSize: 14,
     color: COLORS.gray,
-    marginBottom: 10,
-    fontWeight: '500',
+    marginBottom: 4,
   },
-  
-  pollStats: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 6,
-    paddingTop: 12,
-    borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
+  pollDate: {
+    fontSize: 12,
+    color: COLORS.gray,
+    marginTop: 8,
   },
-  
-  pollStat: {
+  responseSummary: {
+    marginTop: 12,
+    padding: 12,
+    backgroundColor: '#f8f9fa',
+    borderRadius: 8,
+  },
+  responseCount: {
     fontSize: 14,
     color: COLORS.black,
-    fontWeight: '700',
+    marginBottom: 4,
   },
-
-  // ==================== TABS ====================
   tabContainer: {
     flexDirection: 'row',
     backgroundColor: '#f0f0f0',
-    borderRadius: 14,
-    marginBottom: 20,
+    borderRadius: 12,
+    marginBottom: 16,
     padding: 4,
   },
-  
   tab: {
     flex: 1,
-    padding: 14,
+    padding: 12,
     alignItems: 'center',
-    borderRadius: 12,
+    borderRadius: 10,
   },
-  
   tabActive: {
     backgroundColor: COLORS.white,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
+    elevation: 2,
   },
-  
   tabText: {
-    fontSize: 15,
+    fontSize: 14,
     color: COLORS.gray,
     fontWeight: '600',
   },
-  
   tabTextActive: {
     color: COLORS.primary,
-    fontWeight: '800',
+    fontWeight: '700',
   },
-
-  // ==================== RESPONSE CARDS ====================
-  responseCard: {
+  profileInfo: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    backgroundColor: COLORS.white,
-    borderRadius: 18,
-    padding: 20,
-    marginBottom: 14,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    borderWidth: 1,
-    borderColor: '#f0f0f0',
-  },
-  
-  responseInfo: {
-    flex: 1,
-    paddingRight: 12,
-  },
-  
-  responseName: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: COLORS.black,
-    marginBottom: 10,
-    letterSpacing: -0.3,
-  },
-  
-  responseLocation: {
-    fontSize: 14,
-    color: COLORS.gray,
-    marginBottom: 6,
-    fontWeight: '500',
-  },
-  
-  responseDetail: {
-    fontSize: 14,
-    color: COLORS.gray,
-    marginBottom: 4,
-    fontWeight: '500',
-  },
-  
-  statusBadge: {
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderRadius: 20,
-    alignSelf: 'flex-start',
-    elevation: 2,
-  },
-  
-  statusText: {
-    fontSize: 13,
-    color: COLORS.white,
-    fontWeight: '700',
-  },
-
-  // ==================== DRIVER RESPONSE CARDS ====================
-  driverResponseCard: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    backgroundColor: COLORS.white,
-    borderRadius: 18,
-    padding: 20,
-    marginBottom: 14,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    borderWidth: 1,
-    borderColor: '#f0f0f0',
-  },
-  
-  driverInfo: {
-    flex: 1,
-    paddingRight: 12,
-  },
-  
-  driverName: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: COLORS.black,
-    marginBottom: 10,
-    letterSpacing: -0.3,
-  },
-  
-  driverVan: {
-    fontSize: 15,
-    color: COLORS.gray,
-    marginBottom: 6,
-    fontWeight: '600',
-  },
-  
-  driverDetail: {
-    fontSize: 14,
-    color: COLORS.gray,
-    marginBottom: 4,
-    fontWeight: '500',
-  },
-
-  // ==================== ROUTE CARDS ====================
-  routeCard: {
-    backgroundColor: COLORS.white,
-    borderRadius: 18,
-    padding: 20,
-    marginBottom: 14,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    borderWidth: 1,
-    borderColor: '#f0f0f0',
-  },
-  
-  routeName: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: COLORS.black,
-    marginBottom: 14,
-    letterSpacing: -0.3,
-  },
-  
-  stopsContainer: {
-    marginBottom: 14,
-    paddingLeft: 6,
-  },
-  
-  stopItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
     marginBottom: 12,
+    paddingBottom: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
   },
-  
-  stopDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: COLORS.gray,
-    marginRight: 14,
-  },
-  
-  destinationDot: {
-    backgroundColor: COLORS.primary,
-    width: 16,
-    height: 16,
-    borderRadius: 8,
-  },
-  
-  stopText: {
-    fontSize: 15,
-    color: COLORS.darkGray,
-    fontWeight: '500',
-  },
-  
-  destinationText: {
-    fontWeight: '700',
-    color: COLORS.primary,
-    fontSize: 16,
-  },
-  
-  routeInfo: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 14,
-    paddingTop: 10,
-    borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
-  },
-  
-  routeInfoText: {
+  profileLabel: {
     fontSize: 14,
+    fontWeight: '600',
     color: COLORS.gray,
-    fontWeight: '600',
+    width: 120,
   },
-  
-  assignedDriverBadge: {
-    backgroundColor: '#F0F9D9',
-    borderRadius: 14,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: COLORS.primary,
-  },
-  
-  assignedDriverText: {
+  profileValue: {
     fontSize: 14,
     color: COLORS.black,
-    marginBottom: 4,
-    fontWeight: '600',
-  },
-
-  // ==================== ASSIGN SECTION ====================
-  assignCard: {
-    backgroundColor: COLORS.white,
-    borderRadius: 18,
-    padding: 20,
-    marginBottom: 14,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    borderWidth: 1,
-    borderColor: '#f0f0f0',
-  },
-  
-  assignRouteName: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: COLORS.black,
-    marginBottom: 10,
-    letterSpacing: -0.3,
-  },
-  
-  assignRouteStops: {
-    fontSize: 14,
-    color: COLORS.gray,
-    marginBottom: 14,
-    fontWeight: '500',
-  },
-  
-  alreadyAssigned: {
-    backgroundColor: '#F0F9D9',
-    borderRadius: 14,
-    padding: 16,
-    borderWidth: 1,
-    borderColor: COLORS.primary,
-  },
-  
-  alreadyAssignedText: {
-    fontSize: 14,
-    color: COLORS.black,
-    marginBottom: 4,
-    fontWeight: '600',
-  },
-  
-  timeSlotAssignSection: {
-    marginBottom: 18,
-  },
-  
-  timeSlotAssignTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: COLORS.black,
-    marginBottom: 10,
-    letterSpacing: -0.2,
-  },
-  
-  passengerCount: {
-    fontSize: 14,
-    color: COLORS.gray,
-    marginBottom: 12,
-    fontWeight: '600',
-  },
-  
-  driverSelectBtn: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    backgroundColor: '#f8f9fa',
-    borderRadius: 14,
-    padding: 16,
-    marginBottom: 10,
-    borderWidth: 1.5,
-    borderColor: '#e0e0e0',
-  },
-  
-  driverSelectInfo: {
     flex: 1,
   },
-  
-  driverSelectText: {
-    fontSize: 15,
-    color: COLORS.black,
-    fontWeight: '700',
-    marginBottom: 4,
-  },
-  
-  driverCapacity: {
-    fontSize: 13,
-    color: COLORS.gray,
-    marginTop: 2,
-    fontWeight: '500',
-  },
-  
-  assignArrow: {
-    fontSize: 22,
-    color: COLORS.primary,
-    fontWeight: '800',
-  },
-
-  // ==================== TRACKING SECTION ====================
-  controlPanel: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    backgroundColor: COLORS.white,
-    borderRadius: 18,
-    padding: 18,
-    marginBottom: 18,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    borderWidth: 1,
-    borderColor: '#f0f0f0',
-  },
-  
-  activeVansText: {
-    fontSize: 15,
-    color: COLORS.black,
-    fontWeight: '600',
-  },
-  
-  activeVansCount: {
-    fontWeight: '800',
-    color: COLORS.primary,
-  },
-  
-  selectVanText: {
-    fontSize: 16,
-    color: COLORS.black,
-    fontWeight: '700',
-    marginBottom: 14,
-    letterSpacing: -0.2,
-  },
-  
-  trackingDetailCard: {
-    backgroundColor: COLORS.white,
-    borderRadius: 20,
-    padding: 20,
-    marginBottom: 18,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    borderWidth: 1,
-    borderColor: '#f0f0f0',
-  },
-  
-  vanHeader: {
-    padding: 18,
-    borderRadius: 16,
-    marginBottom: 18,
-  },
-  
-  vanDetailName: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: COLORS.white,
-    letterSpacing: -0.3,
-  },
-  
-  vanDetailRoute: {
-    fontSize: 14,
-    color: COLORS.white,
-    marginTop: 6,
-    opacity: 0.95,
-    fontWeight: '600',
-  },
-
-  // ==================== MAP ====================
-  mapContainer: {
-    marginBottom: 18,
-    borderRadius: 16,
-    overflow: 'hidden',
-  },
-  
-  mapHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 14,
-  },
-  
-  mapSimulationTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: COLORS.black,
-    letterSpacing: -0.2,
-  },
-  
-  liveBadge: {
-    backgroundColor: COLORS.danger,
-    borderRadius: 20,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  
-  liveBadgeText: {
-    color: COLORS.white,
-    fontSize: 12,
-    fontWeight: '800',
-    letterSpacing: 0.5,
-  },
-  
-  map: {
-    width: '100%',
-    height: 320,
-    borderRadius: 16,
-    overflow: 'hidden',
-  },
-  
-  mapOverlay: {
-    position: 'absolute',
-    bottom: 14,
-    right: 14,
-    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-    borderRadius: 12,
-    padding: 12,
-  },
-  
-  coordinates: {
-    fontSize: 11,
-    color: COLORS.white,
-    fontWeight: '600',
-    marginBottom: 2,
-  },
-  
-  speedText: {
-    fontSize: 11,
-    color: COLORS.white,
-    fontWeight: '600',
-    marginBottom: 2,
-  },
-  
-  etaText: {
-    fontSize: 11,
-    color: COLORS.white,
-    fontWeight: '600',
-  },
-  
-  vanMarker: {
-    backgroundColor: COLORS.white,
-    borderRadius: 24,
-    padding: 8,
-    borderWidth: 3,
-    borderColor: COLORS.black,
-    elevation: 5,
-  },
-  
-  stopMarker: {
-    backgroundColor: COLORS.white,
-    borderRadius: 20,
-    padding: 6,
-    borderWidth: 2,
-    borderColor: COLORS.gray,
-    elevation: 3,
-  },
-
-  // ==================== VAN INFO ====================
-  vanInfoCard: {
-    backgroundColor: '#f8f9fa',
-    borderRadius: 16,
-    padding: 18,
-    marginBottom: 14,
-  },
-  
-  vanInfoRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 12,
-  },
-  
-  vanInfoLabel: {
-    fontSize: 14,
-    color: COLORS.gray,
-    fontWeight: '600',
-  },
-  
-  vanInfoValue: {
-    fontSize: 14,
-    color: COLORS.black,
-    fontWeight: '700',
-  },
-  
-  progressBarContainer: {
-    height: 10,
-    backgroundColor: '#e0e0e0',
-    borderRadius: 6,
-    overflow: 'hidden',
-    marginTop: 10,
-  },
-  
-  progressBar: {
-    height: '100%',
-    backgroundColor: COLORS.primary,
-    borderRadius: 6,
-  },
-
-  // ==================== PASSENGER LIST ====================
-  passengerListCard: {
-    backgroundColor: '#f8f9fa',
-    borderRadius: 16,
-    padding: 18,
-    marginBottom: 14,
-  },
-  
-  passengerListHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 14,
-  },
-  
-  passengerCountBadge: {
-    backgroundColor: COLORS.primary,
-    borderRadius: 20,
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    minWidth: 36,
-    alignItems: 'center',
-  },
-  
-  passengerCountText: {
-    color: COLORS.white,
-    fontSize: 14,
-    fontWeight: '800',
-  },
-  
-  passengerItem: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    padding: 16,
-    borderRadius: 12,
-    marginBottom: 10,
-    backgroundColor: COLORS.white,
-  },
-  
-  passengerPicked: {
-    backgroundColor: '#d1fae5',
-    borderLeftWidth: 4,
-    borderLeftColor: COLORS.success,
-  },
-  
-  passengerCurrent: {
-    backgroundColor: '#fef3c7',
-    borderLeftWidth: 4,
-    borderLeftColor: COLORS.warning,
-  },
-  
-  passengerPending: {
-    backgroundColor: COLORS.white,
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
-  },
-  
-  passengerName: {
-    fontSize: 15,
-    color: COLORS.black,
-    fontWeight: '700',
-  },
-  
-  passengerTime: {
-    fontSize: 13,color: COLORS.gray,
-    marginTop: 6,
-    fontWeight: '500',
-  },
-  
-  passengerStatusBadge: {
-    paddingHorizontal: 14,
-    paddingVertical: 7,
-    borderRadius: 16,
-  },
-  
-  statusPicked: {
-    backgroundColor: COLORS.success,
-  },
-  
-  statusCurrent: {
-    backgroundColor: COLORS.warning,
-  },
-  
-  statusPending: {
-    backgroundColor: COLORS.gray,
-  },
-  
-  passengerStatusText: {
-    color: COLORS.white,
-    fontSize: 12,
-    fontWeight: '700',
-  },
-
-  // ==================== TIMELINE ====================
-  stopsTimeline: {
-    marginTop: 14,
-  },
-  
-  timelineTitle: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: COLORS.black,
-    marginBottom: 14,
-    letterSpacing: -0.3,
-  },
-  
-  timelineItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 18,
-  },
-  
-  timelineDot: {
-    width: 14,
-    height: 14,
-    borderRadius: 7,
-    backgroundColor: '#e0e0e0',
-    marginRight: 14,
-    borderWidth: 3,
-    borderColor: COLORS.gray,
-  },
-  
-  timelineDotCompleted: {
-    backgroundColor: COLORS.success,
-    borderColor: COLORS.success,
-  },
-  
-  timelineDotCurrent: {
-    backgroundColor: COLORS.primary,
-    borderColor: COLORS.primary,
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-  },
-  
-  timelineContent: {
-    flex: 1,
-  },
-  
-  timelineText: {
-    fontSize: 15,
-    color: COLORS.darkGray,
-    fontWeight: '600',
-  },
-  
-  timelineTextCompleted: {
-    color: COLORS.success,
-    fontWeight: '700',
-  },
-  
-  timelineTextCurrent: {
-    fontWeight: '800',
-    color: COLORS.primary,
-  },
-  
-  timelineStatus: {
-    fontSize: 12,
-    color: COLORS.success,
-    marginTop: 4,
-    fontWeight: '600',
-  },
-  
-  timelineStatusCurrent: {
-    fontSize: 12,
-    color: COLORS.primary,
-    marginTop: 4,
-    fontWeight: '700',
-  },
-  
-  timelineEta: {
-    fontSize: 13,
-    color: COLORS.black,
-    fontWeight: '700',
-  },
-
-  // ==================== VAN CARDS ====================
-  vanCard: {
-    backgroundColor: COLORS.white,
-    borderRadius: 18,
-    padding: 20,
-    marginBottom: 14,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    borderWidth: 1,
-    borderColor: '#f0f0f0',
-    borderLeftWidth: 5,
-  },
-  
-  vanColorIndicator: {
-    width: 5,
-    height: '100%',
-    position: 'absolute',
-    left: 0,
-    top: 0,
-    borderTopLeftRadius: 18,
-    borderBottomLeftRadius: 18,
-  },
-  
-  vanName: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: COLORS.black,
-    marginBottom: 6,
-    letterSpacing: -0.3,
-  },
-  
-  vanDriver: {
-    fontSize: 14,
-    color: COLORS.gray,
-    marginBottom: 4,
-    fontWeight: '600',
-  },
-  
-  vanRoute: {
-    fontSize: 14,
-    color: COLORS.gray,
-    marginBottom: 4,
-    fontWeight: '600',
-  },
-  
-  vanTimeSlot: {
-    fontSize: 14,
-    color: COLORS.gray,
-    marginBottom: 4,
-    fontWeight: '600',
-  },
-  
-  vanLocation: {
-    fontSize: 14,
-    color: COLORS.gray,
-    marginBottom: 4,
-    fontWeight: '600',
-  },
-  
-  vanPassengers: {
-    fontSize: 14,
-    color: COLORS.gray,
-    marginBottom: 4,
-    fontWeight: '600',
-  },
-  
-  vanEta: {
-    fontSize: 14,
-    color: COLORS.black,
-    fontWeight: '700',
-  },
-  
-  vanStatusBadge: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 16,
-    alignSelf: 'flex-start',
-    marginBottom: 10,
-    elevation: 2,
-  },
-  
-  vanStatusCompleted: {
-    backgroundColor: COLORS.success,
-  },
-  
-  vanStatusEnRoute: {
-    backgroundColor: COLORS.warning,
-  },
-  
-  vanStatusPaused: {
-    backgroundColor: COLORS.gray,
-  },
-  
-  vanStatusText: {
-    color: COLORS.white,
-    fontSize: 13,
-    fontWeight: '700',
-  },
-
-  
-  // ==================== AUTO ASSIGNMENT STYLES ====================
-  assignModeSelector: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 20,
-  },
-
-  modeSwitcher: {
-    flexDirection: 'row',
-    backgroundColor: '#f0f0f0',
-    borderRadius: 12,
-    padding: 4,
-  },
-
-  modeBtn: {
-    paddingHorizontal: 20,
-    paddingVertical: 10,
-    borderRadius: 10,
-  },
-
-  modeBtnActive: {
-    backgroundColor: COLORS.white,
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
-  },
-
-  modeBtnText: {
-    fontSize: 14,
-    color: COLORS.gray,
-    fontWeight: '600',
-  },
-
-  modeBtnTextActive: {
-    color: COLORS.primary,
-    fontWeight: '800',
-  },
-
-  autoAssignHeader: {
-    backgroundColor: COLORS.white,
-    borderRadius: 18,
-    padding: 20,
-    marginBottom: 18,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    borderWidth: 1,
-    borderColor: '#f0f0f0',
-  },
-
-  autoAssignSubtitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: COLORS.black,
-    marginBottom: 6,
-    letterSpacing: -0.3,
-  },
-
-  autoAssignDesc: {
-    fontSize: 14,
-    color: COLORS.gray,
-    marginBottom: 16,
-    fontWeight: '500',
-  },
-
-  autoAssignActions: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-
-  autoAssignBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: COLORS.primary,
-    borderRadius: 12,
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    flex: 1,
-    justifyContent: 'center',
-    elevation: 3,
-  },
-
-  autoAssignBtnText: {
-    color: COLORS.white,
-    fontSize: 15,
-    fontWeight: '700',
-  },
-
-  approveAllBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: COLORS.success,
-    borderRadius: 12,
-    paddingHorizontal: 20,
-    paddingVertical: 14,
-    flex: 1,
-    justifyContent: 'center',
-    elevation: 3,
-  },
-
-  approveAllBtnText: {
-    color: COLORS.white,
-    fontSize: 15,
-    fontWeight: '700',
-  },
-
-  autoStatsCard: {
-    backgroundColor: '#F0F9D9',
-    borderRadius: 18,
-    padding: 20,
-    marginBottom: 18,
-    borderWidth: 2,
-    borderColor: COLORS.primary,
-  },
-
-  autoStatsTitle: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: COLORS.black,
-    marginBottom: 14,
-    letterSpacing: -0.3,
-  },
-
-  autoStatsGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    justifyContent: 'space-between',
-  },
-
-  autoStatItem: {
-    width: '48%',
-    backgroundColor: COLORS.white,
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 10,
-    alignItems: 'center',
-  },
-
-  autoStatLabel: {
-    fontSize: 12,
-    color: COLORS.gray,
-    marginBottom: 6,
-    fontWeight: '600',
-  },
-
-  autoStatValue: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: COLORS.black,
-    letterSpacing: -0.5,
-  },
-
-  autoRouteCard: {
-    backgroundColor: COLORS.white,
-    borderRadius: 18,
-    padding: 20,
-    marginBottom: 14,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    borderWidth: 2,
-    borderColor: '#f0f0f0',
-  },
-
-  autoRouteApproved: {
-    backgroundColor: '#d1fae5',
-    borderColor: COLORS.success,
-  },
-
-  autoRouteSelected: {
-    borderColor: COLORS.primary,
-    backgroundColor: '#F0F9D9',
-  },
-
-  autoRouteHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 16,
-  },
-
-  autoRouteDriverInfo: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-
-  autoRouteDriverText: {
-    flex: 1,
-  },
-
-  autoRouteDriverName: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: COLORS.black,
-    letterSpacing: -0.3,
-  },
-
-  autoRouteDriverVan: {
-    fontSize: 14,
-    color: COLORS.gray,
-    marginTop: 2,
-    fontWeight: '600',
-  },
-
-  autoRouteMetrics: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 12,
-    marginBottom: 16,
-  },
-
-  autoRouteMetricItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#f8f9fa',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 10,
-  },
-
-  autoRouteMetricText: {
-    fontSize: 13,
-    color: COLORS.black,
-    fontWeight: '700',
-  },
-
-  capacityBarContainer: {
-    marginBottom: 16,
-  },
-
-  capacityBarHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginBottom: 8,
-  },
-
-  capacityBarLabel: {
-    fontSize: 13,
-    color: COLORS.gray,
-    fontWeight: '600',
-  },
-
-  capacityBarValue: {
-    fontSize: 13,
-    color: COLORS.black,
-    fontWeight: '800',
-  },
-
-  capacityBarTrack: {
-    height: 10,
-    backgroundColor: '#e0e0e0',
-    borderRadius: 6,
-    overflow: 'hidden',
-  },
-
-  capacityBarFill: {
-    height: '100%',
-    backgroundColor: COLORS.primary,
-    borderRadius: 6,
-  },
-
-  algorithmInfo: {
-    backgroundColor: '#F0F9D9',
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 16,
-  },
-
-  algorithmTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: COLORS.black,
-    marginBottom: 8,
-  },
-
-  algorithmText: {
-    fontSize: 12,
-    color: COLORS.gray,
-    marginBottom: 4,
-    fontWeight: '500',
-  },
-
-  passengerSequence: {
-    backgroundColor: '#f8f9fa',
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 16,
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
-  },
-
-  passengerSequenceTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: COLORS.black,
-    marginBottom: 12,
-    letterSpacing: -0.2,
-  },
-
-  passengerSequenceItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    backgroundColor: COLORS.white,
-    padding: 12,
-    borderRadius: 10,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: '#e0e0e0',
-  },
-
-  passengerSequenceNumber: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: COLORS.primary,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-
-  passengerSequenceNumberText: {
-    color: COLORS.white,
-    fontSize: 14,
-    fontWeight: '800',
-  },
-
-  passengerSequenceInfo: {
-    flex: 1,
-  },
-
-  passengerSequenceName: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: COLORS.black,
-    marginBottom: 4,
-  },
-
-  passengerSequenceLocation: {
-    fontSize: 12,
-    color: COLORS.gray,
-    fontWeight: '500',
-  },
-
-  autoRouteActions: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-
-  viewDetailsBtn: {
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 12,
-    borderWidth: 2,
-    borderColor: COLORS.primary,
-    alignItems: 'center',
-  },
-
-  viewDetailsBtnText: {
-    color: COLORS.primary,
-    fontSize: 14,
-    fontWeight: '700',
-  },
-
-  approveRouteBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    flex: 1,
-    paddingVertical: 12,
-    borderRadius: 12,
-    backgroundColor: COLORS.success,
-    justifyContent: 'center',
-    elevation: 2,
-  },
-
-  approveRouteBtnText: {
-    color: COLORS.white,
-    fontSize: 14,
-    fontWeight: '700',
-  },
-
-  unassignedAlert: {
-    flexDirection: 'row',
-    gap: 12,
-    backgroundColor: '#fee2e2',
-    borderRadius: 18,
-    padding: 18,
-    borderWidth: 2,
-    borderColor: COLORS.danger,
-    marginTop: 10,
-  },
-
-  unassignedAlertContent: {
-    flex: 1,
-  },
-
-  unassignedAlertTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: COLORS.danger,
-    marginBottom: 10,
-    letterSpacing: -0.2,
-  },
-
-  unassignedPassenger: {
-    fontSize: 13,
-    color: '#7f1d1d',
-    marginBottom: 4,
-    fontWeight: '500',
-  }, 
-  // ==================== REQUEST CARDS ====================
-  requestCard: {
-    backgroundColor: COLORS.white,
-    borderRadius: 18,
-    padding: 20,
-    marginBottom: 14,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    borderWidth: 1,
-    borderColor: '#f0f0f0',
-  },
-  
-  requestName: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: COLORS.black,
-    marginBottom: 12,
-    letterSpacing: -0.3,
-  },
-  
-  requestDetail: {
-    fontSize: 14,
-    color: COLORS.gray,
-    marginBottom: 6,
-    fontWeight: '500',
-  },
-  
   requestActions: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
-    marginTop: 18,
-    gap: 12,
+    marginTop: 12,
+    gap: 10,
   },
-  
   actionBtn: {
-    paddingHorizontal: 24,
-    paddingVertical: 12,
-    borderRadius: 12,
-    minWidth: 100,
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+    minWidth: 80,
     alignItems: 'center',
-    elevation: 2,
   },
-  
   acceptBtn: {
     backgroundColor: COLORS.success,
   },
-  
   rejectBtn: {
     backgroundColor: COLORS.danger,
   },
-  
   actionBtnText: {
     color: COLORS.white,
     fontSize: 14,
     fontWeight: '700',
   },
-
-  // ==================== EMPTY STATE ====================
+  driverOption: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 14,
+    borderRadius: 12,
+    marginBottom: 8,
+    backgroundColor: '#f8f9fa',
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  driverOptionSelected: {
+    backgroundColor: '#F0F9D9',
+    borderColor: COLORS.primary,
+  },
+  driverName: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: COLORS.black,
+  },
+  driverDetail: {
+    fontSize: 13,
+    color: COLORS.gray,
+    marginTop: 2,
+  },
+  mapContainer: {
+    flex: 1,
+  },
+  map: {
+    width: '100%',
+    height: 300,
+    borderRadius: 16,
+    marginBottom: 16,
+  },
+  markerContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  vansList: {
+    marginTop: 8,
+  },
+  vanCard: {
+    backgroundColor: COLORS.white,
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    elevation: 2,
+  },
+  vanHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  vanName: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: COLORS.black,
+  },
+  vanStatus: {
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  vanStatusText: {
+    color: COLORS.white,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  vanDetail: {
+    fontSize: 14,
+    color: COLORS.gray,
+    marginBottom: 4,
+  },
   emptyState: {
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 50,
+    padding: 40,
     backgroundColor: COLORS.white,
-    borderRadius: 20,
-    marginTop: 24,
-    elevation: 2,
+    borderRadius: 16,
+    marginTop: 20,
   },
-  
   emptyText: {
     fontSize: 16,
     color: COLORS.gray,
-    marginTop: 14,
+    marginTop: 12,
     fontWeight: '600',
   },
-
-  // ==================== PAYMENT SECTION ====================
-  passengerPaymentCard: {
-    backgroundColor: COLORS.white,
-    borderRadius: 18,
-    padding: 20,
-    marginBottom: 14,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    borderWidth: 1,
-    borderColor: '#f0f0f0',
+  emptySubtext: {
+    fontSize: 14,
+    color: COLORS.gray,
+    marginTop: 8,
+    textAlign: 'center',
   },
-  
-  paymentHeader: {
+  modalContainer: {
+    flex: 1,
+    backgroundColor: COLORS.white,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: COLORS.black,
+  },
+  modalContent: {
+    flex: 1,
+    padding: 16,
+  },
+  responseCard: {
+    backgroundColor: '#f8f9fa',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+  },
+  responseHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 12,
   },
-  
-  passengerName: {
-    fontSize: 17,
+  responseName: {
+    fontSize: 16,
     fontWeight: '700',
     color: COLORS.black,
-    letterSpacing: -0.3,
   },
-  
-  statusPaid: {
-    backgroundColor: COLORS.success,
+  statusBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 12,
   },
-  
-  statusPending: {
-    backgroundColor: COLORS.warning,
+  statusBadgeText: {
+    color: COLORS.white,
+    fontSize: 11,
+    fontWeight: '700',
   },
-  
-  statusExpired: {
-    backgroundColor: COLORS.danger,
+  responseDetail: {
+    fontSize: 14,
+    color: COLORS.black,
+    marginBottom: 6,
   },
-  
-  paymentDetail: {
+  responseDate: {
+    fontSize: 12,
+    color: COLORS.gray,
+    marginTop: 8,
+  },
+  pollSelectOption: {
+    backgroundColor: '#f8f9fa',
+    borderRadius: 12,
+    padding: 16,
+    marginBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    borderWidth: 2,
+    borderColor: '#e0e0e0',
+  },
+  pollSelectOptionActive: {
+    backgroundColor: '#F0F9D9',
+    borderColor: COLORS.primary,
+  },
+  pollSelectContent: {
+    flex: 1,
+  },
+  pollSelectTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: COLORS.black,
+    marginBottom: 4,
+  },
+  pollSelectInfo: {
+    fontSize: 13,
+    color: COLORS.gray,
+    marginTop: 2,
+  },
+  summaryTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: COLORS.black,
+    marginBottom: 12,
+  },
+  summaryText: {
+    fontSize: 14,
+    color: COLORS.black,
+    marginBottom: 6,
+  },
+  routeHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  routeInfo: {
+    marginTop: 8,
+  },
+  routeInfoRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  routeInfoText: {
+    fontSize: 14,
+    color: COLORS.gray,
+    marginLeft: 8,
+  },
+  requestDetail: {
     fontSize: 14,
     color: COLORS.gray,
     marginBottom: 6,
-    fontWeight: '500',
   },
-  
-  passengerActions: {
-    flexDirection: 'row',
-    justifyContent: 'flex-end',
-    marginTop: 18,
-    gap: 10,
-  },
-  
-  reminderBtn: {
-    backgroundColor: COLORS.warning,
-    borderRadius: 12,
-    paddingHorizontal: 18,
-    paddingVertical: 11,
-    elevation: 2,
-  },
-  
-  reminderBtnText: {
-    color: COLORS.white,
+  complaintDesc: {
     fontSize: 14,
-    fontWeight: '700',
+    color: COLORS.gray,
+    marginBottom: 12,
   },
-  
-  renewalBtn: {
-    backgroundColor: COLORS.primary,
-    borderRadius: 12,
-    paddingHorizontal: 18,
-    paddingVertical: 11,
-    elevation: 2,
-  },
-  
-  renewalBtnText: {
-    color: COLORS.white,
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  
-  updateStatusBtn: {
-    backgroundColor: COLORS.success,
-    borderRadius: 12,
-    paddingHorizontal: 18,
-    paddingVertical: 11,
-    elevation: 2,
-  },
-  
-  updateStatusBtnText: {
-    color: COLORS.white,
-    fontSize: 14,
-    fontWeight: '700',
-  },
-
-  // ==================== COMPLAINTS SECTION ====================
-  complaintCard: {
-    backgroundColor: COLORS.white,
-    borderRadius: 18,
-    padding: 20,
-    marginBottom: 14,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    borderWidth: 1,
-    borderColor: '#f0f0f0',
-  },
-  
-  complaintDetailCard: {
-    backgroundColor: COLORS.white,
-    borderRadius: 20,
-    padding: 22,
-    marginBottom: 18,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
-    borderWidth: 1,
-    borderColor: '#f0f0f0',
-  },
-  
-  complaintHeader: {
+  complaintMeta: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 14,
+    alignItems: 'center',
+    marginBottom: 8,
   },
-  
-  complaintTitle: {
-    fontSize: 17,
-    fontWeight: '700',
-    color: COLORS.black,
-    flex: 1,
-    paddingRight: 12,
-    letterSpacing: -0.3,
-  },
-  
-  complaintStatusBadge: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 16,
-    elevation: 2,
-  },
-  
-  complaintStatusOpen: {
-    backgroundColor: COLORS.warning,
-  },
-  
-  complaintStatusResolved: {
-    backgroundColor: COLORS.success,
-  },
-  
-  complaintStatusText: {
-    color: COLORS.white,
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  
-  complaintBy: {
-    fontSize: 14,
-    color: COLORS.gray,
-    marginBottom: 10,
-    fontWeight: '600',
-  },
-  // یہ نئے styles اپنے existing styles میں شامل کریں
-passengerCheckboxSelected: {
-  backgroundColor: COLORS.primary,
-  borderColor: COLORS.primary,
-},
-noPassengersText: {
-  textAlign: 'center',
-  color: COLORS.gray,
-  fontStyle: 'italic',
-  padding: 16,
-},
-useRouteBtn: {
-  backgroundColor: COLORS.primary,
-  padding: 12,
-  borderRadius: 8,
-  alignItems: 'center',
-  marginTop: 12,
-},
-useRouteBtnText: {
-  color: '#fff',
-  fontWeight: '600',
-},
-  complaintDesc: {
-    fontSize: 15,
-    color: COLORS.darkGray,
-    marginBottom: 10,
-    lineHeight: 22,
-    fontWeight: '500',
-  },
-  
-  complaintTime: {
+  complaintDetail: {
     fontSize: 13,
     color: COLORS.gray,
-    fontWeight: '500',
   },
-  
-  repliesContainer: {
-    marginTop: 18,
-    paddingTop: 18,
-    borderTopWidth: 1,
-    borderTopColor: '#f0f0f0',
+  complaintDate: {
+    fontSize: 12,
+    color: COLORS.gray,
+    marginTop: 8,
   },
-  
-  repliesTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: COLORS.black,
-    marginBottom: 14,
-    letterSpacing: -0.2,
-  },
-  
-  replyItem: {
-    backgroundColor: '#f8f9fa',
-    borderRadius: 14,
-    padding: 16,
-    marginBottom: 12,
+  unreadNotification: {
     borderLeftWidth: 4,
     borderLeftColor: COLORS.primary,
   },
-  
-  replyBy: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: COLORS.black,
-    marginBottom: 8,
-  },
-  
-  replyText: {
-    fontSize: 14,
-    color: COLORS.darkGray,
-    marginBottom: 8,
-    lineHeight: 20,
-    fontWeight: '500',
-  },
-  
-  replyTime: {
-    fontSize: 12,
-    color: COLORS.gray,
-    fontStyle: 'italic',
-  },
-  
-  noRepliesText: {
-    fontSize: 14,
-    color: COLORS.gray,
-    fontStyle: 'italic',
-    textAlign: 'center',
-    paddingVertical: 14,
-  },
-  
-  replyInputContainer: {
-    marginTop: 18,
-  },
-  
-  replyInput: {
-    height: 100,
-    textAlignVertical: 'top',
-    paddingTop: 16,
-  },
-  
-  replyBtn: {
-    backgroundColor: COLORS.primary,
-    borderRadius: 14,
-    padding: 18,
-    alignItems: 'center',
-    marginTop: 14,
-    elevation: 3,
-  },
-  
-  replyBtnText: {
-    color: COLORS.white,
-    fontSize: 16,
-    fontWeight: '700',
-  },
-  
-  resolveBtn: {
-    backgroundColor: COLORS.success,
-    borderRadius: 14,
-    padding: 18,
-    alignItems: 'center',
-    marginTop: 14,
-    elevation: 3,
-  },
-  
-  resolveBtnText: {
-    color: COLORS.white,
-    fontSize: 16,
-    fontWeight: '700',
-  },
-
-  // ==================== PROFILE SECTION ====================
-  profileInfo: {
-    flexDirection: 'row',
-    marginBottom: 16,
-    paddingBottom: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f0f0f0',
-  },
-  
-  profileLabel: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: COLORS.gray,
-    width: 150,
-  },
-  
-  profileValue: {
-    fontSize: 15,
-    color: COLORS.black,
-    flex: 1,
-    fontWeight: '600',
-  },
-
-  // ==================== NOTIFICATIONS SECTION ====================
   notificationHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 18,
+    marginBottom: 8,
   },
-  
-  markAllBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
-    borderRadius: 10,
-    backgroundColor: '#F0F9D9',
-    elevation: 2,
-  },
-  
-  markAllBtnText: {
-    color: COLORS.primary,
-    fontSize: 13,
-    fontWeight: '700',
-  },
-  
-  notificationCard: {
-    flexDirection: 'row',
-    backgroundColor: COLORS.white,
-    borderRadius: 18,
-    padding: 18,
-    marginBottom: 14,
-    elevation: 3,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
-    borderWidth: 1,
-    borderColor: '#f0f0f0',
-  },
-  
-  notificationUnread: {
-    backgroundColor: '#F0F9D9',
-    borderLeftWidth: 5,
-    borderLeftColor: COLORS.primary,
-  },
-  
-  notificationIcon: {
-    width: 50,
-    height: 50,
-    borderRadius: 25,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 14,
-  },
-  
-  notificationContent: {
-    flex: 1,
-    paddingRight: 10,
-  },
-  
   notificationTitle: {
     fontSize: 16,
     fontWeight: '700',
     color: COLORS.black,
-    marginBottom: 6,
-    letterSpacing: -0.2,
+    marginLeft: 12,
+    flex: 1,
   },
-  
   notificationMessage: {
     fontSize: 14,
     color: COLORS.gray,
-    lineHeight: 20,
-    fontWeight: '500',
+    marginBottom: 8,
   },
-  
-  notificationTime: {
+  notificationDate: {
     fontSize: 12,
     color: COLORS.gray,
-    marginTop: 8,
-    fontWeight: '600',
   },
-
-  // ==================== LOADING ====================
   loadingContainer: {
     position: 'absolute',
     top: 0,
@@ -6036,26 +2526,12 @@ useRouteBtnText: {
     backgroundColor: 'rgba(0, 0, 0, 0.5)',
     zIndex: 9999,
   },
-  
   loadingText: {
     fontSize: 16,
     color: COLORS.white,
-    marginTop: 14,
-    fontWeight: '700',
-  },
-
-  // ==================== UPDATE TEXT ====================
-  updateText: {
-    fontSize: 13,
-    color: COLORS.gray,
-    textAlign: 'right',
-    marginTop: 10,
-    fontStyle: 'italic',
-    fontWeight: '500',
+    marginTop: 12,
+    fontWeight: '600',
   },
 });
-
-
-
 
 export default TransporterDashboard;

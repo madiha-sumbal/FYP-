@@ -1,10 +1,10 @@
-import React, { useState, useEffect, useContext } from 'react';
+import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, Alert, StyleSheet, StatusBar } from 'react-native';
 import { createDrawerNavigator } from '@react-navigation/drawer';
 import { createStackNavigator } from '@react-navigation/stack';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { useAuth } from '../../context/AuthContext';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // Import screens
 import PassengerDashboard from './PassengerDashboard';
@@ -21,6 +21,9 @@ import TermsConditionsScreen from './TermsConditionsScreen';
 const Stack = createStackNavigator();
 const Drawer = createDrawerNavigator();
 
+// API Configuration
+const API_BASE_URL = "http://192.168.10.6:3000/api";
+
 // Dashboard Stack
 function DashboardStack() {
   return (
@@ -33,52 +36,35 @@ function DashboardStack() {
 
 // Custom Drawer Content Component
 function CustomDrawerContent({ navigation }) {
-  const { userInfo, userToken, logout } = useAuth();
   const [userData, setUserData] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // Fetch user profile data from backend
-  const fetchUserProfile = async () => {
+  // Load user data from AsyncStorage
+  const loadUserData = async () => {
     try {
-      if (!userToken) {
-        console.log('No token available');
-        setLoading(false);
-        return;
-      }
+      const storedUserData = await AsyncStorage.getItem('userData');
+      const storedRole = await AsyncStorage.getItem('userRole');
+      
+      console.log('📦 Loading stored data...');
+      console.log('🎭 Stored role:', storedRole);
 
-      const response = await fetch('http://192.168.10.8:5001/api/passenger/profile', {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${userToken}`,
-          'Content-Type': 'application/json',
-        },
-      });
-
-      const data = await response.json();
-
-      if (data.success) {
-        setUserData(data.passenger);
+      if (storedUserData) {
+        const parsedData = JSON.parse(storedUserData);
+        console.log('✅ User data loaded:', parsedData.fullName || parsedData.name);
+        setUserData(parsedData);
       } else {
-        console.log('Failed to fetch profile:', data.message);
-        // Use basic user info from auth context if profile fetch fails
-        if (userInfo) {
-          setUserData(userInfo);
-        }
+        console.log('⚠️ No stored user data found');
       }
     } catch (error) {
-      console.error('Profile fetch error:', error);
-      // Use basic user info from auth context on error
-      if (userInfo) {
-        setUserData(userInfo);
-      }
+      console.error('❌ Error loading user data:', error);
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchUserProfile();
-  }, [userToken]);
+    loadUserData();
+  }, []);
 
   const menuItems = [
     { icon: "grid-outline", name: "Dashboard", screen: "Dashboard" },
@@ -110,12 +96,24 @@ function CustomDrawerContent({ navigation }) {
         { 
           text: "Logout", 
           style: "destructive",
-          onPress: () => {
-            logout();
-            navigation.reset({
-              index: 0,
-              routes: [{ name: 'PassengerLogin' }],
-            });
+          onPress: async () => {
+            try {
+              // Clear all stored data
+              await AsyncStorage.removeItem('userToken');
+              await AsyncStorage.removeItem('userData');
+              await AsyncStorage.removeItem('userRole');
+              
+              console.log("✅ Logged out successfully");
+              
+              // Reset navigation to login screen
+              navigation.reset({
+                index: 0,
+                routes: [{ name: 'PassengerLogin' }],
+              });
+            } catch (error) {
+              console.error('❌ Logout error:', error);
+              Alert.alert('Error', 'Failed to logout properly');
+            }
           }
         }
       ]
@@ -132,6 +130,14 @@ function CustomDrawerContent({ navigation }) {
         .toUpperCase()
         .slice(0, 2);
     }
+    if (userData?.name) {
+      return userData.name
+        .split(' ')
+        .map(name => name[0])
+        .join('')
+        .toUpperCase()
+        .slice(0, 2);
+    }
     return 'PK';
   };
 
@@ -140,8 +146,8 @@ function CustomDrawerContent({ navigation }) {
     if (userData?.fullName) {
       return userData.fullName;
     }
-    if (userInfo?.fullName) {
-      return userInfo.fullName;
+    if (userData?.name) {
+      return userData.name;
     }
     return 'Passenger User';
   };
@@ -151,18 +157,18 @@ function CustomDrawerContent({ navigation }) {
     if (userData?.email) {
       return userData.email;
     }
-    if (userInfo?.email) {
-      return userInfo.email;
-    }
     return 'user@email.com';
   };
 
   // Helper function to get member status
   const getMemberStatus = () => {
+    if (userData?.status === 'approved') {
+      return 'Approved Member';
+    }
     if (userData?.isVerified) {
       return 'Verified Member';
     }
-    return 'Premium Member';
+    return 'Member';
   };
 
   return (
@@ -321,7 +327,6 @@ function PassengerAppNavigation() {
     </Drawer.Navigator>
   );
 }
-
 
 // Enhanced Styles
 const styles = StyleSheet.create({

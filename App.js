@@ -2,24 +2,23 @@ import "react-native-gesture-handler";
 import { NavigationContainer } from "@react-navigation/native";
 import { createStackNavigator } from "@react-navigation/stack";
 import { createDrawerNavigator } from "@react-navigation/drawer";
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React from 'react';
+
 // Screens
 import Onboarding from "./frontend/screens/Onboarding";
 import WelcomeScreen from "./frontend/screens/WelcomeScreen";
 import LoginScreen from "./frontend/screens/LoginScreen";
 import DashboardRegisterScreen from "./frontend/screens/DashboardRegisterScreen";
-
 import DriverRegisterScreen from "./frontend/screens/DriverRegisterScreen";
 import TransporterRegisterScreen from "./frontend/screens/TransporterRegisterScreen";
-import PassengerTransporterSelectionScreen from "./frontend/screens/PassengerTransporterSelectionScreen";
 import TransporterLoginScreen from "./frontend/screens/TransporterLoginScreen";
-import AsyncStorage from '@react-native-async-storage/async-storage';
+
 // Passenger Screens
 import PassengerAppNavigation from "./frontend/Passenger/screens/PassengerAppNavigation";
 import PassengerLoginScreen from "./frontend/Passenger/screens/PassengerLoginScreen";
-import PassengerDashboard from "./frontend/Passenger/screens/PassengerDashboard";
-import  PassengerRegistrationScreen  from "./frontend/Passenger/screens/PassengerRegistrationScreen";
-import { AuthProvider } from './frontend/context/AuthContext';
+import PassengerRequestScreen from "./frontend/Passenger/screens/PassengerRequestScreen";
+import AlertScreen from './frontend/Passenger/screens/AlertScreen';
+
 
 // Transporter Screens
 import TransporterDashboardScreen from "./frontend/Transporter/TransporterDashboard";
@@ -37,7 +36,6 @@ import SmartScheduling from "./frontend/Transporter/SmartScheduling";
 import CreateDailyPoll from "./frontend/Transporter/CreateDailyPoll";
 import AssignRoutesScreen from "./frontend/Transporter/AssignRoutesScreen";
 import DriverProfile from "./frontend/Transporter/DriverProfile";
-import PassengerProfile from "./frontend/Transporter/PassengerProfile";
 import ProfileScreen from "./frontend/Transporter/ProfileScreen";
 import ViewResponces from "./frontend/Transporter/ViewResponces";
 import PassengerDataList from "./frontend/Transporter/PassengerDataList";
@@ -50,20 +48,20 @@ import DriverTripHistoryScreen from "./frontend/Driver/DriverTripHistoryScreen";
 import DriverRegistrationScreen from "./frontend/Driver/DriverRegistrationScreen";
 import DriverLoginScreen from "./frontend/Driver/DriverLoginScreen";
 
+// Context
+import { AuthProvider } from './frontend/context/AuthContext';
+
 const Stack = createStackNavigator();
 const Drawer = createDrawerNavigator();
 
-// ✅ Transporter Drawer Navigation
+// Transporter Drawer
 function TransporterDrawer() {
   return (
     <Drawer.Navigator
       screenOptions={{
         headerShown: false,
         drawerType: "slide",
-        drawerStyle: {
-          backgroundColor: "#fff",
-          width: 240,
-        },
+        drawerStyle: { backgroundColor: "#fff", width: 240 },
       }}
     >
       <Drawer.Screen name="Dashboard" component={TransporterDashboardScreen} />
@@ -75,17 +73,15 @@ function TransporterDrawer() {
   );
 }
 
+// Driver Drawer
 function DriverDrawer() {
   return (
     <Drawer.Navigator
       screenOptions={{
         headerShown: false,
         drawerType: "slide",
-        drawerStyle: {
-          backgroundColor: "#fff",
-          width: 240,
-        },
-        drawerActiveTintColor: "#FF6F00", // Primary color inline
+        drawerStyle: { backgroundColor: "#fff", width: 240 },
+        drawerActiveTintColor: "#FF6F00",
         drawerLabelStyle: { fontSize: 15, fontWeight: "600" },
       }}
     >
@@ -99,7 +95,6 @@ function DriverDrawer() {
         component={DriverAssignedRoutesScreen}
         options={{ title: "Assigned Routes" }}
       />
-     
       <Drawer.Screen
         name="DriverPayments"
         component={DriverPaymentsScreen}
@@ -119,105 +114,56 @@ function DriverDrawer() {
   );
 }
 
-
 export default function App() {
-   const [isLoading, setIsLoading] = useState(true);
-  const [userToken, setUserToken] = useState(null);
-  const [userProfile, setUserProfile] = useState(null);
-
-  useEffect(() => {
-    checkAuthentication();
-  }, []);
-
-  const checkAuthentication = async () => {
-    try {
-      const token = await AsyncStorage.getItem('token');
-      const profile = await AsyncStorage.getItem('transporter');
-      
-      if (token && profile) {
-        setUserToken(token);
-        setUserProfile(JSON.parse(profile));
-      }
-    } catch (error) {
-      console.error('Auth check error:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const authContext = {
-    signIn: async (token, transporter) => {
-      try {
-        await AsyncStorage.setItem('token', token);
-        await AsyncStorage.setItem('transporter', JSON.stringify(transporter));
-        setUserToken(token);
-        setUserProfile(transporter);
-      } catch (error) {
-        console.error('Sign in error:', error);
-      }
-    },
-    signOut: async () => {
-      try {
-        await AsyncStorage.removeItem('token');
-        await AsyncStorage.removeItem('transporter');
-        setUserToken(null);
-        setUserProfile(null);
-      } catch (error) {
-        console.error('Sign out error:', error);
-      }
-    },
-    userToken,
-    userProfile,
-  };
   return (
-     <AuthProvider>
-    <NavigationContainer>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
-        {/* 🌟 Initial Flow */}
-        <Stack.Screen name="Onboarding" component={Onboarding} />
-        <Stack.Screen name="Welcome" component={WelcomeScreen} />
-        <Stack.Screen name="Login" component={LoginScreen} />
+    <AuthProvider>
+      <NavigationContainer>
+        <Stack.Navigator 
+          initialRouteName="Onboarding"
+          screenOptions={{ headerShown: false }}
+        >
+          {/* 🌟 Onboarding + Role Selection */}
+          <Stack.Screen name="Onboarding" component={Onboarding} />
+          <Stack.Screen name="Welcome" component={WelcomeScreen} />
+          <Stack.Screen name="Login" component={LoginScreen} />
+          <Stack.Screen name="DashboardRegister" component={DashboardRegisterScreen} />
+          <Stack.Screen name="DriverRegister" component={DriverRegisterScreen} />
+          <Stack.Screen name="TransporterRegister" component={TransporterRegisterScreen} />
+          <Stack.Screen name="TransporterLogin" component={TransporterLoginScreen} />
 
-        {/* 🌟 Registration Flow */}
-        <Stack.Screen name="DashboardRegister" component={DashboardRegisterScreen} />
-      
-        <Stack.Screen name="DriverRegister" component={DriverRegisterScreen} />
-        <Stack.Screen name="TransporterRegister" component={TransporterRegisterScreen} />
-        <Stack.Screen name="TransporterLogin" component={TransporterLoginScreen} />
+          {/* 🌟 Passenger Flow */}
+          <Stack.Screen name="PassengerRequestScreen" component={PassengerRequestScreen} />
+          <Stack.Screen name="PassengerLoginScreen" component={PassengerLoginScreen} />
+          <Stack.Screen name="PassengerAppNavigation" component={PassengerAppNavigation} />
+          <Stack.Screen name="AlertScreen" component={AlertScreen} />
+          {/* 🌟 Transporter Flow */}
+          <Stack.Screen name="Transporter" component={TransporterDrawer} />
+          <Stack.Screen name="TransporterDashboard" component={TransporterDashboardScreen} />
+          <Stack.Screen name="PassengerList" component={PassengerList} />
+          <Stack.Screen name="DriverList" component={DriverList} />
+          <Stack.Screen name="AddDriver" component={AddDriverScreen} />
+          <Stack.Screen name="AddPassenger" component={AddPassengerScreen} />
+          <Stack.Screen name="Payments" component={PaymentsScreen} />
+          <Stack.Screen name="VanTracking" component={VanTrackingScreen} />
+          <Stack.Screen name="Alerts" component={AlertsScreen} />
+          <Stack.Screen name="DriverPerformance" component={DriverPerformance} />
+          <Stack.Screen name="PassengerPerformance" component={PassengerPerformance} />
+          <Stack.Screen name="CreateRoute" component={RouteAssignment} />
+          <Stack.Screen name="SmartScheduling" component={SmartScheduling} />
+          <Stack.Screen name="CreatePoll" component={CreateDailyPoll} />
+          <Stack.Screen name="AssignRoute" component={AssignRoutesScreen} />
+          <Stack.Screen name="PassengerProfile" component={DriverProfile} />
+          <Stack.Screen name="DriverProfile" component={DriverProfile} />
+          <Stack.Screen name="ProfileScreen" component={ProfileScreen} />
+          <Stack.Screen name="ViewResponse" component={ViewResponces} />
+          <Stack.Screen name="PassengerDataList" component={PassengerDataList} />
 
-        {/* 🌟 Passenger Flow */}
-                <Stack.Screen name="PassengerLoginScreen" component={PassengerLoginScreen} />
-                <Stack.Screen name="PassengerAppNavigation" component={PassengerAppNavigation} />
-
-        {/* 🌟 Transporter Flow */}
-        <Stack.Screen name="Transporter" component={TransporterDrawer} />
-        <Stack.Screen name="TransporterDashboard" component={TransporterDashboardScreen} />
-        <Stack.Screen name="PassengerList" component={PassengerList} />
-        <Stack.Screen name="DriverList" component={DriverList} />
-        <Stack.Screen name="AddDriver" component={AddDriverScreen} />
-        <Stack.Screen name="AddPassenger" component={AddPassengerScreen} />
-        <Stack.Screen name="Payments" component={PaymentsScreen} />
-        <Stack.Screen name="VanTracking" component={VanTrackingScreen} />
-        <Stack.Screen name="Alerts" component={AlertsScreen} />
-        <Stack.Screen name="DriverPerformance" component={DriverPerformance} />
-        <Stack.Screen name="PassengerPerformance" component={PassengerPerformance} />
-        <Stack.Screen name="CreateRoute" component={RouteAssignment} />
-        <Stack.Screen name="SmartScheduling" component={SmartScheduling} />
-        <Stack.Screen name="CreatePoll" component={CreateDailyPoll} />
-        <Stack.Screen name="AssignRoute" component={AssignRoutesScreen} />
-        <Stack.Screen name="PassengerProfile" component={DriverProfile} />
-        <Stack.Screen name="DriverProfile" component={DriverProfile} />
-        <Stack.Screen name="ProfileScreen" component={ProfileScreen} />
-        <Stack.Screen name="ViewResponse" component={ViewResponces} />
-        <Stack.Screen name="PassengerDataList" component={PassengerDataList} />
-        <Stack.Screen name="PassengerRegistrationScreen" component={PassengerRegistrationScreen} />
-        {/* 🌟 Driver Flow */}
-         <Stack.Screen name="DriverLogin" component={DriverLoginScreen} />
-
-        <Stack.Screen name="Driver" component={DriverDrawer} />
-
-        <Stack.Screen name="DriverRegistration" component={DriverRegistrationScreen} />
-      </Stack.Navigator>
-    </NavigationContainer></AuthProvider>
+          {/* 🌟 Driver Flow */}
+          <Stack.Screen name="DriverLogin" component={DriverLoginScreen} />
+          <Stack.Screen name="Driver" component={DriverDrawer} />
+          <Stack.Screen name="DriverRegistration" component={DriverRegistrationScreen} />
+        </Stack.Navigator>
+      </NavigationContainer>
+    </AuthProvider>
   );
 }

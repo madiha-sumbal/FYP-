@@ -9,10 +9,10 @@ app.use(express.json());
 
 // Microservices URLs
 const SERVICES = {
-  TRANSPORTER: 'http://192.168.0.109:3000',
-  DRIVER: 'http://192.168.0.109:3001', 
-  PASSENGER: 'http://192.168.0.109:5001',
-  NOTIFICATIONS: 'http://192.168.0.109:5001'
+  TRANSPORTER: 'http://192.168.10.16:3000',
+  DRIVER: 'http://192.168.10.16:3001', 
+  PASSENGER: 'http://192.168.10.16:5001',
+  NOTIFICATIONS: 'http://192.168.10.16:5001'
 };
 
 // ==================== CROSS-SERVICE COMMUNICATION ====================

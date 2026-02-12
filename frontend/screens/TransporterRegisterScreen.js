@@ -16,14 +16,14 @@ import {
 } from "react-native";
 import * as ImagePicker from 'expo-image-picker';
 import { Ionicons } from '@expo/vector-icons';
+import * as Location from 'expo-location';
+import MapView, { Marker } from 'react-native-maps';
 
-const API_BASE_URL = 'http://192.168.10.8:3000/api';
+const API_BASE_URL = 'http://192.168.10.6:3000/api';
+const GOOGLE_API_KEY = "AIzaSyDiZhjAhYniDLe4Ndr1u87NdDfIdZS6SME";
 
 export default function TransporterRegisterScreen({ navigation }) {
   const [formData, setFormData] = useState({
-    country: "",
-    city: "",
-    zone: "",
     email: "",
     password: "",
     confirmPassword: "",
@@ -35,12 +35,18 @@ export default function TransporterRegisterScreen({ navigation }) {
   const [errorMsg, setErrorMsg] = useState("");
   const [loading, setLoading] = useState(false);
   const [imageModalVisible, setImageModalVisible] = useState(false);
+  const [locationModalVisible, setLocationModalVisible] = useState(false);
+  const [location, setLocation] = useState(null);
+  const [region, setRegion] = useState({
+    latitude: 33.6844,
+    longitude: 73.0479,
+    latitudeDelta: 0.05,
+    longitudeDelta: 0.05
+  });
+  const [areaDetails, setAreaDetails] = useState({ country: "", city: "", zone: "" });
 
   const updateFormData = (field, value) => {
-    setFormData(prev => ({
-      ...prev,
-      [field]: value
-    }));
+    setFormData(prev => ({ ...prev, [field]: value }));
     setErrorMsg("");
   };
 
@@ -84,10 +90,58 @@ export default function TransporterRegisterScreen({ navigation }) {
     setImageModalVisible(false);
   };
 
+  const selectLocation = async () => {
+    let { status } = await Location.requestForegroundPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert("Permission Denied", "Location permission is required to select area.");
+      return;
+    }
+    let loc = await Location.getCurrentPositionAsync({});
+    setRegion({
+      ...region,
+      latitude: loc.coords.latitude,
+      longitude: loc.coords.longitude
+    });
+    setLocationModalVisible(true);
+  };
+
+  const fetchAreaDetails = async (lat, lng) => {
+    try {
+      const response = await fetch(
+        `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_API_KEY}`
+      );
+      const data = await response.json();
+      if (data.status === "OK") {
+        const addressComponents = data.results[0].address_components;
+        let country = "", city = "", zone = "";
+        addressComponents.forEach(component => {
+          if (component.types.includes("country")) country = component.long_name;
+          else if (component.types.includes("administrative_area_level_1")) city = component.long_name;
+          else if (component.types.includes("sublocality_level_1") || component.types.includes("locality")) zone = component.long_name;
+        });
+        setAreaDetails({ country, city, zone });
+        setFormData(prev => ({
+          ...prev,
+          country,
+          city,
+          zone
+        }));
+      }
+    } catch (err) {
+      console.error("Error fetching area details:", err);
+      Alert.alert("Error", "Could not fetch area details from map.");
+    }
+  };
+
+  const confirmLocation = () => {
+    if (location) {
+      fetchAreaDetails(location.latitude, location.longitude);
+    }
+    setLocationModalVisible(false);
+  };
+
   const validateAndRegister = async () => {
     setErrorMsg("");
-
-    // Client-side validation
     const { fullName, companyName, phone, country, city, zone, email, password, confirmPassword } = formData;
 
     if (!fullName.trim() || !companyName.trim() || !phone.trim() || !country.trim() || !city.trim() || !zone.trim() || !email.trim() || !password || !confirmPassword) {
@@ -96,87 +150,38 @@ export default function TransporterRegisterScreen({ navigation }) {
     }
 
     const nameRegex = /^[A-Za-z ]{2,50}$/;
-    if (!nameRegex.test(fullName)) {
-      setErrorMsg("Full name must be 2-50 characters long and contain only letters and spaces.");
-      return;
-    }
+    if (!nameRegex.test(fullName)) { setErrorMsg("Full name must be 2-50 characters long and contain only letters and spaces."); return; }
 
     const phoneRegex = /^[0-9+]{10,15}$/;
-    if (!phoneRegex.test(phone)) {
-      setErrorMsg("Please enter a valid phone number (10-15 digits).");
-      return;
-    }
-
-    const textRegex = /^[A-Za-z0-9, ]{1,100}$/;
-    if (!textRegex.test(country) || !textRegex.test(city) || !textRegex.test(zone)) {
-      setErrorMsg("Country, city, and zone must be 1-100 characters long and may only contain letters, digits, commas and spaces.");
-      return;
-    }
+    if (!phoneRegex.test(phone)) { setErrorMsg("Please enter a valid phone number (10-15 digits)."); return; }
 
     const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      setErrorMsg("Invalid email format. Please enter a valid email address.");
-      return;
-    }
+    if (!emailRegex.test(email)) { setErrorMsg("Invalid email format. Please enter a valid email address."); return; }
 
     const passRegex = /^(?=.*[A-Z])(?=.*\d)(?=.*[!@#$%^&*]).{8,16}$/;
-    if (!passRegex.test(password)) {
-      setErrorMsg("Password must be 8-16 characters and contain an uppercase letter, a digit, and a special character.");
-      return;
-    }
+    if (!passRegex.test(password)) { setErrorMsg("Password must be 8-16 characters and contain an uppercase letter, a digit, and a special character."); return; }
 
-    if (password !== confirmPassword) {
-      setErrorMsg("Passwords do not match.");
-      return;
-    }
+    if (password !== confirmPassword) { setErrorMsg("Passwords do not match."); return; }
 
-    if (!profileImage) {
-      setErrorMsg("Please upload a profile image.");
-      return;
-    }
+    if (!profileImage) { setErrorMsg("Please upload a profile image."); return; }
 
     setLoading(true);
-
     try {
       const response = await fetch(`${API_BASE_URL}/transporter/register`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          fullName: formData.fullName,
-          companyName: formData.companyName,
-          phone: formData.phone,
-          country: formData.country,
-          city: formData.city,
-          zone: formData.zone,
-          email: formData.email,
-          password: formData.password,
-          confirmPassword: formData.confirmPassword,
-          profileImage: profileImage
-        }),
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...formData, profileImage })
       });
-
       const data = await response.json();
-
       if (data.success) {
         Alert.alert("Success", data.message, [
-          {
-            text: "OK",
-            onPress: () => {
-              navigation.navigate("TransporterDashboard");
-            },
-          },
+          { text: "OK", onPress: () => navigation.navigate("TransporterDashboard") },
         ]);
-      } else {
-        setErrorMsg(data.message);
-      }
+      } else setErrorMsg(data.message);
     } catch (error) {
       console.error('Registration error:', error);
       setErrorMsg("Network error. Please check your connection and try again.");
-    } finally {
-      setLoading(false);
-    }
+    } finally { setLoading(false); }
   };
 
   return (
@@ -186,174 +191,92 @@ export default function TransporterRegisterScreen({ navigation }) {
     >
       {/* Header */}
       <View style={styles.header}>
-        <Image
-          source={{
-            uri: "https://cdn.prod.website-files.com/6846c2be8f3d7d1f31b5c7e3/6846e5d971c7bbaa7308cb70_img.webp",
-          }}
-          style={styles.logo}
-          resizeMode="contain"
-        />
+        <Image source={{ uri: "https://cdn.prod.website-files.com/6846c2be8f3d7d1f31b5c7e3/6846e5d971c7bbaa7308cb70_img.webp" }}
+          style={styles.logo} resizeMode="contain" />
         <Text style={styles.headerTitle}>Transporter Registration</Text>
         <Text style={styles.headerSubtitle}>Create your transporter account</Text>
       </View>
 
-      <ScrollView 
-        style={styles.formContainer} 
-        showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"
-      >
-        {/* Profile Image Upload */}
+      <ScrollView style={styles.formContainer} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+        {/* Profile Image */}
         <View style={styles.profileImageContainer}>
-          <TouchableOpacity 
-            style={styles.profileImageWrapper}
-            onPress={() => setImageModalVisible(true)}
-          >
-            {profileImage ? (
-              <Image source={{ uri: profileImage }} style={styles.profileImage} />
-            ) : (
-              <Ionicons name="camera" size={40} color="#9ca3af" />
-            )}
+          <TouchableOpacity style={styles.profileImageWrapper} onPress={() => setImageModalVisible(true)}>
+            {profileImage ? (<Image source={{ uri: profileImage }} style={styles.profileImage} />)
+              : (<Ionicons name="camera" size={40} color="#9ca3af" />)}
           </TouchableOpacity>
-          <TouchableOpacity 
-            style={styles.uploadButton}
-            onPress={() => setImageModalVisible(true)}
-          >
+          <TouchableOpacity style={styles.uploadButton} onPress={() => setImageModalVisible(true)}>
             <Ionicons name={profileImage ? "sync" : "cloud-upload"} size={16} color="#fff" />
-            <Text style={styles.uploadButtonText}>
-              {profileImage ? "Change Photo" : "Upload Photo"}
-            </Text>
+            <Text style={styles.uploadButtonText}>{profileImage ? "Change Photo" : "Upload Photo"}</Text>
           </TouchableOpacity>
         </View>
 
-        {/* Form Fields */}
+        {/* Full Name */}
         <Text style={styles.label}>Full Name</Text>
         <View style={styles.inputContainer}>
-          <TextInput
-            placeholder="Enter your full name"
-            placeholderTextColor="#9ca3af"
-            value={formData.fullName}
-            onChangeText={(text) => updateFormData('fullName', text)}
-            style={styles.input}
-          />
+          <TextInput placeholder="Enter your full name" placeholderTextColor="#9ca3af"
+            value={formData.fullName} onChangeText={text => updateFormData('fullName', text)} style={styles.input} />
         </View>
 
+        {/* Company Name */}
         <Text style={styles.label}>Company Name</Text>
         <View style={styles.inputContainer}>
-          <TextInput
-            placeholder="Enter your company name"
-            placeholderTextColor="#9ca3af"
-            value={formData.companyName}
-            onChangeText={(text) => updateFormData('companyName', text)}
-            style={styles.input}
-          />
+          <TextInput placeholder="Enter your company name" placeholderTextColor="#9ca3af"
+            value={formData.companyName} onChangeText={text => updateFormData('companyName', text)} style={styles.input} />
         </View>
 
+        {/* Phone Number */}
         <Text style={styles.label}>Phone Number</Text>
         <View style={styles.inputContainer}>
-          <TextInput
-            placeholder="Enter your phone number"
-            placeholderTextColor="#9ca3af"
-            value={formData.phone}
-            onChangeText={(text) => updateFormData('phone', text)}
-            keyboardType="phone-pad"
-            style={styles.input}
-          />
+          <TextInput placeholder="Enter your phone number" placeholderTextColor="#9ca3af"
+            value={formData.phone} onChangeText={text => updateFormData('phone', text)}
+            keyboardType="phone-pad" style={styles.input} />
         </View>
 
-        <Text style={styles.label}>Country</Text>
-        <View style={styles.inputContainer}>
-          <TextInput
-            placeholder="Enter your country"
-            placeholderTextColor="#9ca3af"
-            value={formData.country}
-            onChangeText={(text) => updateFormData('country', text)}
-            style={styles.input}
-          />
-        </View>
-
-        <Text style={styles.label}>City</Text>
-        <View style={styles.inputContainer}>
-          <TextInput
-            placeholder="Enter your city"
-            placeholderTextColor="#9ca3af"
-            value={formData.city}
-            onChangeText={(text) => updateFormData('city', text)}
-            style={styles.input}
-          />
-        </View>
-
-        <Text style={styles.label}>Local Zone</Text>
-        <View style={styles.inputContainer}>
-          <TextInput
-            placeholder="Enter your local zone"
-            placeholderTextColor="#9ca3af"
-            value={formData.zone}
-            onChangeText={(text) => updateFormData('zone', text)}
-            style={styles.input}
-          />
-        </View>
-
-        <Text style={styles.label}>Email Address</Text>
-        <View style={styles.inputContainer}>
-          <TextInput
-            placeholder="Enter your email address"
-            placeholderTextColor="#9ca3af"
-            value={formData.email}
-            onChangeText={(text) => updateFormData('email', text)}
-            keyboardType="email-address"
-            autoCapitalize="none"
-            style={styles.input}
-          />
-        </View>
-
-        <Text style={styles.label}>Password</Text>
-        <View style={styles.inputContainer}>
-          <TextInput
-            placeholder="Create a password"
-            placeholderTextColor="#9ca3af"
-            value={formData.password}
-            onChangeText={(text) => updateFormData('password', text)}
-            secureTextEntry
-            style={styles.input}
-          />
-        </View>
-
-        <Text style={styles.label}>Confirm Password</Text>
-        <View style={styles.inputContainer}>
-          <TextInput
-            placeholder="Confirm your password"
-            placeholderTextColor="#9ca3af"
-            value={formData.confirmPassword}
-            onChangeText={(text) => updateFormData('confirmPassword', text)}
-            secureTextEntry
-            style={styles.input}
-          />
-        </View>
-
-        {/* Error Message */}
-        {errorMsg ? (
-          <View style={styles.errorContainer}>
-            <Text style={styles.errorText}>{errorMsg}</Text>
-          </View>
-        ) : null}
-
-        {/* Register Button */}
+        {/* Location Picker */}
+        <Text style={styles.label}>Select Your Area</Text>
         <TouchableOpacity
-          onPress={validateAndRegister}
-          style={styles.registerButton}
-          disabled={loading}
+          style={[styles.inputContainer, { justifyContent: "center" }]}
+          onPress={selectLocation}
         >
-          {loading ? (
-            <ActivityIndicator color="#fff" size="small" />
-          ) : (
-            <Ionicons name="person-add" size={20} color="#fff" />
-          )}
-          <Text style={styles.registerButtonText}>
-            {loading ? "Registering..." : "Register"}
+          <Text style={{ color: areaDetails.city ? "#111827" : "#9ca3af" }}>
+            {areaDetails.city ? `${areaDetails.zone}, ${areaDetails.city}, ${areaDetails.country}` : "Tap to choose your area on map"}
           </Text>
         </TouchableOpacity>
 
-        {/* Login Link */}
+        {/* Email */}
+        <Text style={styles.label}>Email Address</Text>
+        <View style={styles.inputContainer}>
+          <TextInput placeholder="Enter your email address" placeholderTextColor="#9ca3af"
+            value={formData.email} onChangeText={text => updateFormData('email', text)}
+            keyboardType="email-address" autoCapitalize="none" style={styles.input} />
+        </View>
+
+        {/* Password */}
+        <Text style={styles.label}>Password</Text>
+        <View style={styles.inputContainer}>
+          <TextInput placeholder="Create a password" placeholderTextColor="#9ca3af"
+            value={formData.password} onChangeText={text => updateFormData('password', text)}
+            secureTextEntry style={styles.input} />
+        </View>
+
+        {/* Confirm Password */}
+        <Text style={styles.label}>Confirm Password</Text>
+        <View style={styles.inputContainer}>
+          <TextInput placeholder="Confirm your password" placeholderTextColor="#9ca3af"
+            value={formData.confirmPassword} onChangeText={text => updateFormData('confirmPassword', text)}
+            secureTextEntry style={styles.input} />
+        </View>
+
+        {/* Error */}
+        {errorMsg ? (<View style={styles.errorContainer}><Text style={styles.errorText}>{errorMsg}</Text></View>) : null}
+
+        {/* Register Button */}
+        <TouchableOpacity onPress={validateAndRegister} style={styles.registerButton} disabled={loading}>
+          {loading ? <ActivityIndicator color="#fff" size="small" /> : <Ionicons name="person-add" size={20} color="#fff" />}
+          <Text style={styles.registerButtonText}>{loading ? "Registering..." : "Register"}</Text>
+        </TouchableOpacity>
+
+        {/* Login */}
         <View style={styles.loginContainer}>
           <Text style={styles.loginText}>Already have an account?</Text>
           <TouchableOpacity onPress={() => navigation.navigate("TransporterLogin")}>
@@ -363,54 +286,45 @@ export default function TransporterRegisterScreen({ navigation }) {
       </ScrollView>
 
       {/* Image Picker Modal */}
-      <Modal
-        visible={imageModalVisible}
-        animationType="slide"
-        transparent
-        onRequestClose={() => setImageModalVisible(false)}
-      >
+      <Modal visible={imageModalVisible} animationType="slide" transparent onRequestClose={() => setImageModalVisible(false)}>
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Choose Profile Photo</Text>
-            
-            <TouchableOpacity 
-              style={styles.modalOption}
-              onPress={() => pickImage('camera')}
-            >
-              <Ionicons name="camera" size={24} color="#374151" />
-              <Text style={styles.modalOptionText}>Take Photo</Text>
+            <TouchableOpacity style={styles.modalOption} onPress={() => pickImage('camera')}>
+              <Ionicons name="camera" size={24} color="#374151" /><Text style={styles.modalOptionText}>Take Photo</Text>
             </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={styles.modalOption}
-              onPress={() => pickImage('gallery')}
-            >
-              <Ionicons name="image" size={24} color="#374151" />
-              <Text style={styles.modalOptionText}>Choose from Gallery</Text>
+            <TouchableOpacity style={styles.modalOption} onPress={() => pickImage('gallery')}>
+              <Ionicons name="image" size={24} color="#374151" /><Text style={styles.modalOptionText}>Choose from Gallery</Text>
             </TouchableOpacity>
-
-            {profileImage && (
-              <TouchableOpacity 
-                style={styles.modalOption}
-                onPress={removeImage}
-              >
-                <Ionicons name="trash" size={24} color="#dc2626" />
-                <Text style={[styles.modalOptionText, { color: "#dc2626" }]}>Remove Photo</Text>
-              </TouchableOpacity>
-            )}
-
-            <TouchableOpacity 
-              style={styles.cancelButton}
-              onPress={() => setImageModalVisible(false)}
-            >
+            {profileImage && (<TouchableOpacity style={styles.modalOption} onPress={removeImage}>
+              <Ionicons name="trash" size={24} color="#dc2626" /><Text style={[styles.modalOptionText, { color: "#dc2626" }]}>Remove Photo</Text>
+            </TouchableOpacity>)}
+            <TouchableOpacity style={styles.cancelButton} onPress={() => setImageModalVisible(false)}>
               <Text style={styles.cancelButtonText}>Cancel</Text>
             </TouchableOpacity>
           </View>
         </View>
       </Modal>
+
+      {/* Location Picker Modal */}
+      <Modal visible={locationModalVisible} animationType="slide" onRequestClose={() => setLocationModalVisible(false)}>
+        <View style={{ flex: 1 }}>
+          <MapView
+            style={{ flex: 1 }}
+            initialRegion={region}
+            onPress={e => setLocation(e.nativeEvent.coordinate)}
+          >
+            {location && <Marker coordinate={location} />}
+          </MapView>
+          <TouchableOpacity onPress={confirmLocation} style={{ padding: 16, backgroundColor: "#afd826", alignItems: "center" }}>
+            <Text style={{ color: "#fff", fontWeight: "700" }}>Confirm Location</Text>
+          </TouchableOpacity>
+        </View>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
+
 
 const styles = StyleSheet.create({
   container: { 

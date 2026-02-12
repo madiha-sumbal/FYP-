@@ -7,12 +7,12 @@ import {
   TouchableOpacity, 
   ScrollView, 
   Alert,
-  Image ,
-   ActivityIndicator 
+  Image,
+  ActivityIndicator 
 } from "react-native";
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-
-const API_BASE_URL = 'http://192.168.10.3:3000/api';
+const API_BASE_URL = 'http://192.168.10.6:3000/api';
 
 export default function TransporterLoginScreen({ navigation }) {
   const [email, setEmail] = useState("");
@@ -36,31 +36,117 @@ export default function TransporterLoginScreen({ navigation }) {
     setErrorMsg("");
 
     try {
+      console.log('🔐 Attempting login with:', email);
+      
       const response = await fetch(`${API_BASE_URL}/transporter/login`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          email: email.toLowerCase(),
+          email: email.toLowerCase().trim(),
           password: password
         }),
       });
 
       const data = await response.json();
+      console.log('📥 Full Login response:', JSON.stringify(data, null, 2));
 
-      if (data.success) {
-        // Save token to AsyncStorage
-        // await AsyncStorage.setItem('authToken', data.token);
-        // await AsyncStorage.setItem('transporter', JSON.stringify(data.transporter));
-        
-        Alert.alert("Success", data.message);
-        navigation.navigate("TransporterDashboard");
+      if (response.ok && data.success) {
+        // Clear any previous data first
+        await AsyncStorage.multiRemove([
+          'authToken',
+          'transporterId',
+          'transporterData',
+          'transporterEmail',
+          'transporterName',
+          'transporterCompany',
+          'userRole'
+        ]);
+
+        console.log('🧹 Cleared previous session data');
+
+        // Store authentication token
+        if (data.token) {
+          await AsyncStorage.setItem('authToken', data.token);
+          console.log('✅ Token saved');
+        } else {
+          console.warn('⚠️ No token in response');
+        }
+
+        // Store transporter data with all possible field variations
+        if (data.transporter || data.data) {
+          const transporterInfo = data.transporter || data.data;
+          
+          // Extract ID with multiple fallbacks
+          const transporterId = transporterInfo._id || 
+                               transporterInfo.id || 
+                               transporterInfo.transporterId;
+          
+          // Extract company/name with multiple fallbacks
+          const company = transporterInfo.company || 
+                         transporterInfo.companyName || 
+                         transporterInfo.businessName ||
+                         'Transport Company';
+          
+          const name = transporterInfo.name || 
+                      transporterInfo.fullName || 
+                      transporterInfo.ownerName ||
+                      company;
+
+          console.log('📋 Extracted transporter info:', {
+            id: transporterId,
+            name: name,
+            email: transporterInfo.email,
+            company: company
+          });
+
+          // Save all data
+          await AsyncStorage.setItem('transporterData', JSON.stringify(transporterInfo));
+          await AsyncStorage.setItem('transporterId', transporterId);
+          await AsyncStorage.setItem('transporterEmail', transporterInfo.email || email);
+          await AsyncStorage.setItem('transporterName', name);
+          await AsyncStorage.setItem('transporterCompany', company);
+          await AsyncStorage.setItem('userRole', 'transporter');
+
+          console.log('✅ All transporter data saved successfully');
+
+          // Verify data was saved
+          const savedId = await AsyncStorage.getItem('transporterId');
+          const savedName = await AsyncStorage.getItem('transporterName');
+          const savedCompany = await AsyncStorage.getItem('transporterCompany');
+          
+          console.log('✅ Verification - Saved data:', {
+            id: savedId,
+            name: savedName,
+            company: savedCompany
+          });
+
+          Alert.alert(
+            "Success", 
+            `Welcome ${name}!`,
+            [
+              {
+                text: "OK",
+                onPress: () => {
+                  navigation.reset({
+                    index: 0,
+                    routes: [{ name: "TransporterDashboard" }],
+                  });
+                }
+              }
+            ]
+          );
+        } else {
+          console.error('❌ No transporter data in response');
+          setErrorMsg("Login successful but profile data missing. Please contact support.");
+        }
       } else {
-        setErrorMsg(data.message);
+        setErrorMsg(data.message || "Login failed. Please check your credentials.");
+        console.error('❌ Login failed:', data.message);
       }
     } catch (error) {
-      console.error('Login error:', error);
+      console.error('❌ Login error:', error);
       setErrorMsg("Network error. Please check your connection and try again.");
     } finally {
       setLoading(false);
@@ -79,7 +165,7 @@ export default function TransporterLoginScreen({ navigation }) {
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ email: email.toLowerCase() }),
+        body: JSON.stringify({ email: email.toLowerCase().trim() }),
       });
 
       const data = await response.json();
@@ -89,10 +175,6 @@ export default function TransporterLoginScreen({ navigation }) {
       Alert.alert("Error", "Failed to send reset link. Please try again.");
     }
   };
-
- 
-
-// ... (styles remain the same)
 
   const styles = {
     container: { 
@@ -241,7 +323,6 @@ export default function TransporterLoginScreen({ navigation }) {
     }
   };
 
-  
   return (
     <View style={styles.container}>
       {/* Header */}

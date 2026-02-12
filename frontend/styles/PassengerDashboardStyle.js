@@ -513,4 +513,124 @@ noteText: {
     shadowRadius: 4,
     elevation: 3,
   },
+  // Add these styles to your PassengerDashboardStyle.js file
+
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  pollModalContent: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    maxHeight: '80%',
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#fff',
+    flex: 1,
+  },
+  modalBody: {
+    padding: 20,
+  },
+  modalQuestion: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#2c3e50',
+    marginBottom: 20,
+  },
+  responseButtons: {
+    marginBottom: 20,
+  },
+  responseBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderColor: '#e0e0e0',
+    marginBottom: 12,
+    backgroundColor: '#fff',
+  },
+  responseBtnActive: {
+    backgroundColor: '#A1D826',
+    borderColor: '#A1D826',
+  },
+  responseBtnText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#2c3e50',
+    marginLeft: 12,
+  },
+  responseBtnTextActive: {
+    color: '#fff',
+  },
+  modalSectionTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#2c3e50',
+    marginTop: 20,
+    marginBottom: 12,
+  },
+  timeSlotBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    marginBottom: 10,
+    backgroundColor: '#f8f9fa',
+  },
+  timeSlotBtnActive: {
+    backgroundColor: '#F0F9D9',
+    borderColor: '#A1D826',
+  },
+  timeSlotText: {
+    fontSize: 15,
+    color: '#2c3e50',
+    marginLeft: 10,
+  },
+  timeSlotTextActive: {
+    color: '#A1D826',
+    fontWeight: '600',
+  },
+  pickupInput: {
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+    borderRadius: 10,
+    padding: 14,
+    fontSize: 15,
+    color: '#2c3e50',
+    backgroundColor: '#f8f9fa',
+    marginBottom: 20,
+  },
+  submitBtn: {
+    marginTop: 10,
+    marginBottom: 20,
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  submitBtnGradient: {
+    padding: 16,
+    alignItems: 'center',
+  },
+  submitBtnText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#fff',
+  },
 });
+
+// Copy the above styles and add them to your main PassengerDashboardStyle.js
+// Or import them: import { pollModalStyles } from './PollModalStyles';

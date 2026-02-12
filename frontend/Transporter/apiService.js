@@ -41,7 +41,7 @@ const COLORS = {
 const GOOGLE_MAPS_API_KEY = 'AIzaSyDiZhjAhYniDLe4Ndr1u87NdDfIdZS6SME';
 
 // API Base URL - Update this to your actual backend URL
-const API_BASE_URL = 'http://192.168.10.3:3000/api';
+const API_BASE_URL = 'http://172.21.247.218:3000/api';
 
 // API Service Functions
 const apiService = {

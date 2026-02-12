@@ -1,604 +1,1206 @@
 import React, { useState, useEffect } from "react";
-import {
-  View,
-  Text,
-  TextInput,
-  TouchableOpacity,
+import { 
+  View, 
+  Text, 
+  TextInput, 
+  TouchableOpacity, 
+  Modal, 
+  ScrollView, 
+  FlatList, 
+  ActivityIndicator, 
+  Alert, 
   Image,
-  Modal,
-  Alert,
-  ScrollView,
-  FlatList,
+  StyleSheet 
 } from "react-native";
+import * as Location from "expo-location";
+import Icon from "react-native-vector-icons/Ionicons";
+import { LinearGradient } from 'expo-linear-gradient';
+import axios from "axios";
+
+const API_BASE_URL = "http://192.168.10.6:3000/api";
+const GOOGLE_MAPS_API_KEY = "AIzaSyDiZhjAhYniDLe4Ndr1u87NdDfIdZS6SME";
 
 export default function PassengerRequestScreen({ navigation }) {
-  const [email, setEmail] = useState("");
+  // Form fields
   const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
-  const [inviteLink, setInviteLink] = useState("");
-  const [inviteModalVisible, setInviteModalVisible] = useState(false);
+  const [password, setPassword] = useState("");
+  const [pickupAddress, setPickupAddress] = useState("");
+  const [dropoffAddress, setDropoffAddress] = useState("");
+  const [pickupLocation, setPickupLocation] = useState(null);
+  const [dropoffLocation, setDropoffLocation] = useState(null);
+
+  // Modals
   const [registerModalVisible, setRegisterModalVisible] = useState(false);
   const [transporterModalVisible, setTransporterModalVisible] = useState(false);
-  const [selectedTransporter, setSelectedTransporter] = useState(null);
+  const [searchModalVisible, setSearchModalVisible] = useState(false);
+  
+  // Search
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchResults, setSearchResults] = useState([]);
+  const [searchingLocation, setSearchingLocation] = useState(false);
+  const [searchType, setSearchType] = useState("pickup"); // "pickup" or "dropoff"
+  
+  // Data
   const [transporters, setTransporters] = useState([]);
+  const [selectedTransporter, setSelectedTransporter] = useState(null);
+  
+  // Loading states
+  const [loading, setLoading] = useState(false);
+  const [fetchingTransporters, setFetchingTransporters] = useState(false);
 
-  // ✅ Fetch transporters list (mock data for demonstration)
+  // Fetch transporters on component mount
   useEffect(() => {
-    const mockTransporters = [
-      { id: 1, name: "City Transport Services", email: "city@transport.com", phone: "+1234567890" },
-      { id: 2, name: "Metro Van Pool", email: "metro@vanpool.com", phone: "+1234567891" },
-      { id: 3, name: "Express Commuters", email: "express@commute.com", phone: "+1234567892" },
-      { id: 4, name: "Safe Ride Transport", email: "saferide@transport.com", phone: "+1234567893" },
-      { id: 5, name: "Urban Mobility Solutions", email: "urban@mobility.com", phone: "+1234567894" },
-    ];
-    setTransporters(mockTransporters);
+    fetchTransporters();
   }, []);
 
-  // ✅ Show transporter selection after basic info is filled
-  const handleRegisterInitial = () => {
-    if (!fullName || !email || !phone) {
-      Alert.alert("Error", "Please fill all fields");
-      return;
+  const fetchTransporters = async () => {
+    setFetchingTransporters(true);
+    try {
+      console.log('🔍 Fetching transporters from:', `${API_BASE_URL}/users`);
+      const res = await axios.get(`${API_BASE_URL}/users`);
+      
+      if (res.data.success && res.data.users) {
+        // Filter to show only users with role "transporter"
+        const transporterUsers = res.data.users.filter(user => user.role === 'transporter');
+        setTransporters(transporterUsers);
+        console.log('✅ Transporters loaded:', transporterUsers.length);
+        
+        if (transporterUsers.length === 0) {
+          Alert.alert("Info", "No transporters found. Please try again later.");
+        }
+      } else {
+        setTransporters([]);
+      }
+    } catch (err) {
+      console.error('❌ Fetch transporters error:', err);
+      Alert.alert("Error", "Failed to load transporters. Please check your connection.");
+      setTransporters([]);
+    } finally {
+      setFetchingTransporters(false);
     }
-    if (!email.includes("@")) {
-      Alert.alert("Error", "Please enter a valid email address");
-      return;
+  };
+
+  const getCurrentLocation = async (type) => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Permission Denied", "Please allow location access to continue");
+        return;
+      }
+
+      const loc = await Location.getCurrentPositionAsync({ 
+        accuracy: Location.Accuracy.Highest 
+      });
+      
+      const coordinates = { 
+        latitude: loc.coords.latitude, 
+        longitude: loc.coords.longitude 
+      };
+
+      // Get address from coordinates
+      try {
+        const res = await axios.get(
+          `https://maps.googleapis.com/maps/api/geocode/json?latlng=${loc.coords.latitude},${loc.coords.longitude}&key=${GOOGLE_MAPS_API_KEY}`
+        );
+        
+        if (res.data.status === "OK" && res.data.results.length > 0) {
+          const address = res.data.results[0].formatted_address;
+          
+          if (type === "pickup") {
+            setPickupAddress(address);
+            setPickupLocation(coordinates);
+          } else {
+            setDropoffAddress(address);
+            setDropoffLocation(coordinates);
+          }
+        }
+      } catch (geocodeErr) {
+        console.error('Geocode error:', geocodeErr);
+        const address = `${coordinates.latitude.toFixed(6)}, ${coordinates.longitude.toFixed(6)}`;
+        
+        if (type === "pickup") {
+          setPickupAddress(address);
+          setPickupLocation(coordinates);
+        } else {
+          setDropoffAddress(address);
+          setDropoffLocation(coordinates);
+        }
+      }
+    } catch (err) {
+      console.error("Location error:", err);
+      Alert.alert("Error", "Failed to get current location");
     }
-    if (phone.length < 10) {
-      Alert.alert("Error", "Please enter a valid phone number");
+  };
+
+  const searchLocation = async (query) => {
+    if (!query || query.trim().length < 3) {
+      setSearchResults([]);
       return;
     }
 
+    setSearchingLocation(true);
+    try {
+      const res = await axios.get(
+        `https://maps.googleapis.com/maps/api/place/autocomplete/json?input=${encodeURIComponent(query)}&key=${GOOGLE_MAPS_API_KEY}&components=country:pk`
+      );
+
+      if (res.data.status === "OK") {
+        setSearchResults(res.data.predictions);
+      } else {
+        setSearchResults([]);
+      }
+    } catch (err) {
+      console.error("Search error:", err);
+      setSearchResults([]);
+    } finally {
+      setSearchingLocation(false);
+    }
+  };
+
+  const selectSearchResult = async (placeId, description) => {
+    try {
+      // Get place details
+      const res = await axios.get(
+        `https://maps.googleapis.com/maps/api/place/details/json?place_id=${placeId}&key=${GOOGLE_MAPS_API_KEY}`
+      );
+
+      if (res.data.status === "OK") {
+        const location = res.data.result.geometry.location;
+        const coordinates = {
+          latitude: location.lat,
+          longitude: location.lng
+        };
+
+        if (searchType === "pickup") {
+          setPickupAddress(description);
+          setPickupLocation(coordinates);
+        } else {
+          setDropoffAddress(description);
+          setDropoffLocation(coordinates);
+        }
+
+        setSearchModalVisible(false);
+        setSearchQuery("");
+        setSearchResults([]);
+      }
+    } catch (err) {
+      console.error("Place details error:", err);
+      Alert.alert("Error", "Failed to get location details");
+    }
+  };
+
+  const openSearchModal = (type) => {
+    setSearchType(type);
+    setSearchModalVisible(true);
+  };
+
+  const handleRegisterInitial = () => {
+    // Validate all fields
+    if (!fullName.trim()) {
+      return Alert.alert("Validation Error", "Please enter your full name");
+    }
+    if (!email.trim()) {
+      return Alert.alert("Validation Error", "Please enter your email");
+    }
+    if (!phone.trim()) {
+      return Alert.alert("Validation Error", "Please enter your phone number");
+    }
+    if (!password.trim()) {
+      return Alert.alert("Validation Error", "Please enter a password");
+    }
+    if (!pickupLocation) {
+      return Alert.alert("Validation Error", "Please select your pickup location");
+    }
+    if (!dropoffLocation) {
+      return Alert.alert("Validation Error", "Please select your drop-off location");
+    }
+
+    // Close register modal and open transporter selection
     setRegisterModalVisible(false);
     setTransporterModalVisible(true);
   };
 
-  // ✅ Final registration with selected transporter
-  const handleFinalRegistration = () => {
+  const handleFinalRegistration = async () => {
     if (!selectedTransporter) {
-      Alert.alert("Error", "Please select a transporter");
-      return;
+      return Alert.alert("Error", "Please select a transporter");
     }
 
-    // ✅ Send request to selected transporter
-    Alert.alert(
-      "Registration Request Sent",
-      `Your account request has been sent to ${selectedTransporter.name} for approval. You'll receive an email/SMS with an invite link once approved.`,
-      [
-        {
-          text: "OK",
-          onPress: () => {
-            setTransporterModalVisible(false);
-            // Reset form
-            setFullName("");
-            setEmail("");
-            setPhone("");
-            setSelectedTransporter(null);
-          }
+    setLoading(true);
+    try {
+      console.log('📤 Sending passenger request...');
+      
+      const requestData = {
+        fullName: fullName.trim(),
+        email: email.trim(),
+        phone: phone.trim(),
+        password: password.trim(),
+        address: pickupAddress,
+        latitude: pickupLocation.latitude,
+        longitude: pickupLocation.longitude,
+        destination: dropoffAddress,
+        destinationLatitude: dropoffLocation.latitude,
+        destinationLongitude: dropoffLocation.longitude,
+        transporterId: selectedTransporter._id,
+      };
+
+      console.log('📋 Request data:', requestData);
+
+      const res = await axios.post(`${API_BASE_URL}/passenger/request`, requestData);
+
+      console.log('✅ Response:', res.data);
+
+      if (res.data.success) {
+        setTransporterModalVisible(false);
+        
+        Alert.alert(
+          "Request Sent Successfully! ✅", 
+          "Your request has been sent to the transporter. You will be notified once approved.",
+          [
+            { 
+              text: "OK", 
+              onPress: () => {
+                pollApproval(res.data.requestId);
+              }
+            },
+          ]
+        );
+
+        // Reset form
+        setFullName("");
+        setEmail("");
+        setPhone("");
+        setPassword("");
+        setPickupAddress("");
+        setDropoffAddress("");
+        setPickupLocation(null);
+        setDropoffLocation(null);
+        setSelectedTransporter(null);
+      } else {
+        Alert.alert("Error", res.data.message || "Failed to send request");
+      }
+    } catch (err) {
+      console.error('❌ Request error:', err);
+      
+      if (err.response) {
+        Alert.alert("Error", err.response.data.message || "Failed to send request");
+      } else if (err.request) {
+        Alert.alert("Network Error", "Cannot connect to server. Please check your connection.");
+      } else {
+        Alert.alert("Error", "Failed to send request");
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const pollApproval = (requestId) => {
+    console.log('⏳ Starting to poll for approval:', requestId);
+    
+    let pollCount = 0;
+    const maxPolls = 60;
+    
+    const interval = setInterval(async () => {
+      pollCount++;
+      
+      try {
+        const res = await axios.get(`${API_BASE_URL}/passenger/request-status/${requestId}`);
+        
+        console.log(`🔄 Poll #${pollCount} response:`, res.data);
+        
+        if (res.data.approved) {
+          clearInterval(interval);
+          
+          Alert.alert(
+            "Congratulations! 🎉", 
+            "Your request has been approved! You can now login to your account.",
+            [
+              {
+                text: "Go to Login",
+                onPress: () => navigation.navigate("PassengerLogin")
+              }
+            ]
+          );
+        } else if (res.data.status === 'rejected') {
+          clearInterval(interval);
+          Alert.alert("Request Rejected", "Your request was rejected. Please try with a different transporter.");
+        } else if (pollCount >= maxPolls) {
+          clearInterval(interval);
+          Alert.alert(
+            "Still Pending", 
+            "Your request is still pending approval. You will be notified once approved."
+          );
         }
-      ]
-    );
+      } catch (err) {
+        console.error('❌ Poll error:', err);
+        
+        if (pollCount >= maxPolls) {
+          clearInterval(interval);
+        }
+      }
+    }, 3000);
   };
 
-  // ✅ Navigate to Login Screen - FIXED
-  const handleNavigateToLogin = () => {
-    console.log("Navigating to login...");
-    navigation.navigate("PassengerLogin");
-  };
+  const pickupMapUrl = pickupLocation
+    ? `https://maps.googleapis.com/maps/api/staticmap?center=${pickupLocation.latitude},${pickupLocation.longitude}&zoom=15&size=600x200&markers=color:green%7Clabel:P%7C${pickupLocation.latitude},${pickupLocation.longitude}&key=${GOOGLE_MAPS_API_KEY}`
+    : null;
 
-  // ✅ Handle Invite Link - FIXED (Add this function)
-  const handleInviteLink = () => {
-    setInviteModalVisible(true);
-  };
-
-  // ✅ Verify Invite Link - FIXED (Add this function)
-  const verifyInviteLink = () => {
-    if (inviteLink.startsWith("https://raahi.com/invite/passenger/")) {
-      Alert.alert("Success", "Your invite link is valid!");
-      setInviteModalVisible(false);
-      setInviteLink("");
-      // Navigate to main app
-      navigation.navigate("PassengerAppNavigation");
-    } else {
-      Alert.alert("Invalid Link", "Please enter a valid invite link received from your transporter.");
-    }
-  };
-
-  // ✅ Render transporter item
-  const renderTransporterItem = ({ item }) => (
-    <TouchableOpacity
-      style={[
-        styles.transporterItem,
-        selectedTransporter?.id === item.id && styles.selectedTransporterItem
-      ]}
-      onPress={() => setSelectedTransporter(item)}
-    >
-      <Text style={styles.transporterName}>{item.name}</Text>
-      <Text style={styles.transporterContact}>Email: {item.email}</Text>
-      <Text style={styles.transporterContact}>Phone: {item.phone}</Text>
-    </TouchableOpacity>
-  );
+  const dropoffMapUrl = dropoffLocation
+    ? `https://maps.googleapis.com/maps/api/staticmap?center=${dropoffLocation.latitude},${dropoffLocation.longitude}&zoom=15&size=600x200&markers=color:red%7Clabel:D%7C${dropoffLocation.latitude},${dropoffLocation.longitude}&key=${GOOGLE_MAPS_API_KEY}`
+    : null;
 
   return (
-    <ScrollView
-      contentContainerStyle={{
-        flexGrow: 1,
-        justifyContent: "center",
-        alignItems: "center",
-        padding: 20,
-        backgroundColor: "#F9FAFB",
-      }}
-    >
-      {/* ✅ Logo */}
-      <View style={{ alignItems: "center", marginBottom: 30 }}>
-        <View
-          style={{
-            width: 100,
-            height: 100,
-            backgroundColor: "#fff",
-            borderRadius: 50,
-            justifyContent: "center",
-            alignItems: "center",
-            borderWidth: 3,
-            borderColor: "#afd826",
-            shadowColor: "#000",
-            shadowOpacity: 0.2,
-            shadowRadius: 4,
-            elevation: 5,
-          }}
+    <View style={styles.container}>
+      {/* Header */}
+      <LinearGradient
+        colors={['#A1D826', '#8BC220']}
+        start={{ x: 0, y: 0 }}
+        end={{ x: 1, y: 0 }}
+        style={styles.header}
+      >
+        <TouchableOpacity 
+          style={styles.backButton}
+          onPress={() => navigation.goBack()}
         >
-          <Image
-            source={{
-              uri: "https://cdn.prod.website-files.com/6846c2be8f3d7d1f31b5c7e3/6846e5d971c7bbaa7308cb70_img.webp",
-            }}
-            style={{ width: 60, height: 60 }}
-            resizeMode="contain"
-          />
+          <Icon name="arrow-back" size={24} color="#fff" />
+        </TouchableOpacity>
+        <View style={styles.headerTextContainer}>
+          <Text style={styles.headerTitle}>Passenger Registration</Text>
+          <Text style={styles.headerSubtitle}>Join our transport service</Text>
+        </View>
+        <View style={{ width: 40 }} />
+      </LinearGradient>
+
+      {/* Main Content */}
+      <ScrollView 
+        style={styles.content}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.infoCard}>
+          <Icon name="information-circle" size={24} color="#A1D826" />
+          <Text style={styles.infoText}>
+            Complete the registration form and select your preferred transporter to get started.
+          </Text>
         </View>
 
-        <Text
-          style={{
-            fontSize: 26,
-            fontWeight: "bold",
-            color: "#afd826",
-            marginTop: 15,
-          }}
-        >
-          RAAHI
-        </Text>
-        <Text style={{ color: "#555", fontSize: 14 }}>
-          Passenger Portal
-        </Text>
-      </View>
-
-      {/* ✅ Card Container */}
-      <View
-        style={{
-          width: "100%",
-          backgroundColor: "#fff",
-          borderRadius: 16,
-          padding: 20,
-          shadowColor: "#000",
-          shadowOpacity: 0.1,
-          shadowRadius: 6,
-          elevation: 4,
-        }}
-      >
-        <Text
-          style={{
-            fontSize: 20,
-            fontWeight: "700",
-            textAlign: "center",
-            marginBottom: 5,
-          }}
-        >
-          Welcome to Raahi Van Services
-        </Text>
-        <Text
-          style={{
-            textAlign: "center",
-            color: "#666",
-            marginBottom: 20,
-            fontSize: 14,
-          }}
-        >
-          Send request to transporter to get started
-        </Text>
-
-        {/* ✅ Register Button - Main Action */}
         <TouchableOpacity
-          style={styles.registerBtn}
+          style={styles.registerButton}
           onPress={() => setRegisterModalVisible(true)}
         >
-          <Text style={[styles.registerText, { color: "#afd826" }]}>
-            Send Request to Transporter
-          </Text>
+          <LinearGradient
+            colors={['#A1D826', '#8BC220']}
+            start={{ x: 0, y: 0 }}
+            end={{ x: 1, y: 0 }}
+            style={styles.registerButtonGradient}
+          >
+            <Icon name="person-add" size={24} color="#fff" />
+            <Text style={styles.registerButtonText}>Start Registration</Text>
+            <Icon name="arrow-forward" size={20} color="#fff" />
+          </LinearGradient>
         </TouchableOpacity>
+      </ScrollView>
 
-        {/* ✅ Divider */}
-        <View
-          style={{
-            flexDirection: "row",
-            alignItems: "center",
-            marginVertical: 15,
-          }}
-        >
-          <View style={{ flex: 1, height: 1, backgroundColor: "#090909ff" }} />
-          <Text style={{ marginHorizontal: 10, color: "#000000ff" }}>or</Text>
-          <View style={{ flex: 1, height: 1, backgroundColor: "#000000ff" }} />
-        </View>
-
-        {/* ✅ Login Button for Existing Users */}
-        <TouchableOpacity
-          style={styles.loginBtn}
-          onPress={handleNavigateToLogin}
-        >
-          <Text style={[styles.loginText, { color: "#fff" }]}>
-            Already Have an Account?
-          </Text>
-          <Text style={[styles.loginSubText, { color: "#fff" }]}>
-            Click here to login
-          </Text>
-        </TouchableOpacity>
-
-        {/* ✅ Add Invite Link Option */}
-        <TouchableOpacity
-          style={styles.inviteBtn}
-          onPress={handleInviteLink}
-        >
-          <Text style={[styles.inviteText, { color: "#666" }]}>
-            Have an Invite Link?
-          </Text>
-          <Text style={[styles.inviteSubText, { color: "#afd826" }]}>
-            Click here to access dashboard
-          </Text>
-        </TouchableOpacity>
-      </View>
-
-      {/* ✅ Footer */}
-      <Text
-        style={{
-          marginTop: 20,
-          color: "#888",
-          fontSize: 12,
-          textAlign: "center",
-        }}
+      {/* REGISTER MODAL */}
+      <Modal 
+        visible={registerModalVisible} 
+        transparent 
+        animationType="slide"
       >
-        Secure and reliable Raahi service
-      </Text>
-
-      {/* ✅ How it works section */}
-      <View style={styles.howItWorks}>
-        <Text style={styles.howItWorksTitle}>How it works:</Text>
-        <View style={styles.stepContainer}>
-          <View style={styles.step}>
-            <Text style={styles.stepNumber}>1</Text>
-            <Text style={styles.stepText}>Send request to transporter</Text>
-          </View>
-          <View style={styles.step}>
-            <Text style={styles.stepNumber}>2</Text>
-            <Text style={styles.stepText}>Transporter approves your request</Text>
-          </View>
-          <View style={styles.step}>
-            <Text style={styles.stepNumber}>3</Text>
-            <Text style={styles.stepText}>Receive invite link via email/SMS</Text>
-          </View>
-          <View style={styles.step}>
-            <Text style={styles.stepNumber}>4</Text>
-            <Text style={styles.stepText}>Use invite link to access dashboard</Text>
-          </View>
-        </View>
-      </View>
-
-      {/* ✅ Registration Modal - Basic Info */}
-      <Modal visible={registerModalVisible} animationType="fade" transparent>
         <View style={styles.modalOverlay}>
-          <View style={styles.modalBox}>
-            <Text style={styles.modalTitle}>Send Request to Transporter</Text>
-            <Text style={styles.modalDesc}>
-              Fill your details to send registration request
-            </Text>
+          <View style={styles.modalContainer}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Register as Passenger</Text>
+              <TouchableOpacity onPress={() => setRegisterModalVisible(false)}>
+                <Icon name="close-circle" size={28} color="#666" />
+              </TouchableOpacity>
+            </View>
 
-            <TextInput
-              style={[styles.input, { marginTop: 10 }]}
-              placeholder="Full Name *"
-              placeholderTextColor="#999"
-              value={fullName}
-              onChangeText={setFullName}
-            />
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {/* Personal Information Section */}
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Personal Information</Text>
+                
+                <View style={styles.inputGroup}>
+                  <Icon name="person" size={20} color="#A1D826" style={styles.inputIcon} />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Full Name"
+                    value={fullName}
+                    onChangeText={setFullName}
+                    placeholderTextColor="#999"
+                  />
+                </View>
+                
+                <View style={styles.inputGroup}>
+                  <Icon name="mail" size={20} color="#A1D826" style={styles.inputIcon} />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Email Address"
+                    value={email}
+                    onChangeText={setEmail}
+                    keyboardType="email-address"
+                    autoCapitalize="none"
+                    placeholderTextColor="#999"
+                  />
+                </View>
+                
+                <View style={styles.inputGroup}>
+                  <Icon name="call" size={20} color="#A1D826" style={styles.inputIcon} />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Phone Number"
+                    value={phone}
+                    onChangeText={setPhone}
+                    keyboardType="phone-pad"
+                    placeholderTextColor="#999"
+                  />
+                </View>
+                
+                <View style={styles.inputGroup}>
+                  <Icon name="lock-closed" size={20} color="#A1D826" style={styles.inputIcon} />
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Password"
+                    secureTextEntry
+                    value={password}
+                    onChangeText={setPassword}
+                    placeholderTextColor="#999"
+                  />
+                </View>
+              </View>
 
-            <TextInput
-              style={[styles.input, { marginTop: 10 }]}
-              placeholder="Email Address *"
-              placeholderTextColor="#999"
-              value={email}
-              onChangeText={setEmail}
-              keyboardType="email-address"
-            />
+              {/* Location Section */}
+              <View style={styles.section}>
+                <Text style={styles.sectionTitle}>Travel Route</Text>
+                
+                {/* Pickup Location */}
+                <View style={styles.locationCard}>
+                  <View style={styles.locationHeader}>
+                    <Icon name="location" size={20} color="#4CAF50" />
+                    <Text style={styles.locationLabel}>Pickup Location</Text>
+                  </View>
+                  
+                  {pickupAddress ? (
+                    <View style={styles.selectedLocation}>
+                      <Text style={styles.selectedLocationText}>{pickupAddress}</Text>
+                      {pickupMapUrl && (
+                        <Image 
+                          source={{ uri: pickupMapUrl }} 
+                          style={styles.miniMap}
+                          resizeMode="cover"
+                        />
+                      )}
+                    </View>
+                  ) : null}
+                  
+                  <View style={styles.locationButtons}>
+                    <TouchableOpacity 
+                      style={styles.locationActionBtn}
+                      onPress={() => getCurrentLocation("pickup")}
+                    >
+                      <Icon name="navigate" size={18} color="#A1D826" />
+                      <Text style={styles.locationActionText}>Current Location</Text>
+                    </TouchableOpacity>
+                    
+                    <TouchableOpacity 
+                      style={styles.locationActionBtn}
+                      onPress={() => openSearchModal("pickup")}
+                    >
+                      <Icon name="search" size={18} color="#A1D826" />
+                      <Text style={styles.locationActionText}>Search Area</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
 
-            <TextInput
-              style={[styles.input, { marginTop: 10 }]}
-              placeholder="Phone Number *"
-              placeholderTextColor="#999"
-              value={phone}
-              onChangeText={setPhone}
-              keyboardType="phone-pad"
-            />
+                {/* Drop-off Location */}
+                <View style={styles.locationCard}>
+                  <View style={styles.locationHeader}>
+                    <Icon name="flag" size={20} color="#FF5722" />
+                    <Text style={styles.locationLabel}>Drop-off Location</Text>
+                  </View>
+                  
+                  {dropoffAddress ? (
+                    <View style={styles.selectedLocation}>
+                      <Text style={styles.selectedLocationText}>{dropoffAddress}</Text>
+                      {dropoffMapUrl && (
+                        <Image 
+                          source={{ uri: dropoffMapUrl }} 
+                          style={styles.miniMap}
+                          resizeMode="cover"
+                        />
+                      )}
+                    </View>
+                  ) : null}
+                  
+                  <View style={styles.locationButtons}>
+                    <TouchableOpacity 
+                      style={styles.locationActionBtn}
+                      onPress={() => getCurrentLocation("dropoff")}
+                    >
+                      <Icon name="navigate" size={18} color="#A1D826" />
+                      <Text style={styles.locationActionText}>Current Location</Text>
+                    </TouchableOpacity>
+                    
+                    <TouchableOpacity 
+                      style={styles.locationActionBtn}
+                      onPress={() => openSearchModal("dropoff")}
+                    >
+                      <Icon name="search" size={18} color="#A1D826" />
+                      <Text style={styles.locationActionText}>Search Area</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
 
-            <TouchableOpacity
-              style={[styles.primaryBtn, { marginTop: 20 }]}
-              onPress={handleRegisterInitial}
-            >
-              <Text style={styles.primaryBtnText}>Next - Choose Transporter</Text>
-            </TouchableOpacity>
+              <View style={styles.modalButtonRow}>
+                <TouchableOpacity 
+                  style={styles.modalCancelButton} 
+                  onPress={() => setRegisterModalVisible(false)}
+                >
+                  <Text style={styles.modalCancelButtonText}>Cancel</Text>
+                </TouchableOpacity>
 
-            <TouchableOpacity
-              style={[styles.cancelBtn, { marginTop: 10 }]}
-              onPress={() => setRegisterModalVisible(false)}
-            >
-              <Text style={styles.cancelBtnText}>Cancel</Text>
-            </TouchableOpacity>
+                <TouchableOpacity 
+                  style={styles.modalNextButton} 
+                  onPress={handleRegisterInitial}
+                >
+                  <LinearGradient
+                    colors={['#A1D826', '#8BC220']}
+                    start={{ x: 0, y: 0 }}
+                    end={{ x: 1, y: 0 }}
+                    style={styles.modalNextButtonGradient}
+                  >
+                    <Text style={styles.modalNextButtonText}>Next</Text>
+                    <Icon name="arrow-forward" size={18} color="#fff" />
+                  </LinearGradient>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
           </View>
         </View>
       </Modal>
 
-      {/* ✅ Transporter Selection Modal */}
-      <Modal visible={transporterModalVisible} animationType="fade" transparent>
+      {/* LOCATION SEARCH MODAL */}
+      <Modal 
+        visible={searchModalVisible} 
+        transparent 
+        animationType="slide"
+      >
         <View style={styles.modalOverlay}>
-          <View style={[styles.modalBox, { height: '80%' }]}>
-            <Text style={styles.modalTitle}>Select Transporter</Text>
-            <Text style={styles.modalDesc}>
-              Choose a transporter to send your registration request
-            </Text>
+          <View style={styles.searchModalContainer}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                Search {searchType === "pickup" ? "Pickup" : "Drop-off"} Location
+              </Text>
+              <TouchableOpacity onPress={() => {
+                setSearchModalVisible(false);
+                setSearchQuery("");
+                setSearchResults([]);
+              }}>
+                <Icon name="close-circle" size={28} color="#666" />
+              </TouchableOpacity>
+            </View>
 
-            {selectedTransporter && (
-              <View style={styles.selectedTransporterBox}>
-                <Text style={styles.selectedText}>Selected: {selectedTransporter.name}</Text>
-              </View>
-            )}
+            <View style={styles.searchInputContainer}>
+              <Icon name="search" size={20} color="#999" style={styles.searchIcon} />
+              <TextInput
+                style={styles.searchInput}
+                placeholder="Search for area, street, or landmark..."
+                value={searchQuery}
+                onChangeText={(text) => {
+                  setSearchQuery(text);
+                  searchLocation(text);
+                }}
+                autoFocus
+                placeholderTextColor="#999"
+              />
+              {searchingLocation && (
+                <ActivityIndicator size="small" color="#A1D826" />
+              )}
+            </View>
 
             <FlatList
-              data={transporters}
-              renderItem={renderTransporterItem}
-              keyExtractor={(item) => item.id.toString()}
-              style={styles.transporterList}
-              showsVerticalScrollIndicator={false}
+              data={searchResults}
+              keyExtractor={(item) => item.place_id}
+              style={styles.searchResults}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={styles.searchResultItem}
+                  onPress={() => selectSearchResult(item.place_id, item.description)}
+                >
+                  <Icon name="location-outline" size={20} color="#A1D826" />
+                  <View style={styles.searchResultText}>
+                    <Text style={styles.searchResultMain}>
+                      {item.structured_formatting.main_text}
+                    </Text>
+                    <Text style={styles.searchResultSecondary}>
+                      {item.structured_formatting.secondary_text}
+                    </Text>
+                  </View>
+                  <Icon name="chevron-forward" size={18} color="#999" />
+                </TouchableOpacity>
+              )}
+              ListEmptyComponent={
+                <View style={styles.emptySearch}>
+                  <Icon name="search-outline" size={48} color="#ddd" />
+                  <Text style={styles.emptySearchText}>
+                    {searchQuery ? "No results found" : "Type to search for location"}
+                  </Text>
+                </View>
+              }
             />
-
-            <TouchableOpacity
-              style={[styles.primaryBtn, { marginTop: 20 }]}
-              onPress={handleFinalRegistration}
-            >
-              <Text style={styles.primaryBtnText}>Send Request to Transporter</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.cancelBtn, { marginTop: 10 }]}
-              onPress={() => setTransporterModalVisible(false)}
-            >
-              <Text style={styles.cancelBtnText}>Back</Text>
-            </TouchableOpacity>
           </View>
         </View>
       </Modal>
 
-      {/* ✅ Invite Link Modal */}
-      <Modal visible={inviteModalVisible} animationType="fade" transparent>
+      {/* TRANSPORTER SELECTION MODAL */}
+      <Modal 
+        visible={transporterModalVisible} 
+        transparent 
+        animationType="slide"
+      >
         <View style={styles.modalOverlay}>
-          <View style={styles.modalBox}>
-            <Text style={styles.modalTitle}>Enter Invite Link</Text>
-            <Text style={styles.modalDesc}>
-              Paste the invite link received from your transporter
-            </Text>
+          <View style={styles.modalContainer}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Select Transporter</Text>
+              <TouchableOpacity onPress={() => {
+                setTransporterModalVisible(false);
+                setRegisterModalVisible(true);
+              }}>
+                <Icon name="close-circle" size={28} color="#666" />
+              </TouchableOpacity>
+            </View>
+            
+            {fetchingTransporters ? (
+              <View style={styles.loadingContainer}>
+                <ActivityIndicator size="large" color="#A1D826" />
+                <Text style={styles.loadingText}>Loading transporters...</Text>
+              </View>
+            ) : transporters.length === 0 ? (
+              <View style={styles.emptyContainer}>
+                <Icon name="business-outline" size={64} color="#ddd" />
+                <Text style={styles.emptyText}>No transporters available</Text>
+                <Text style={styles.emptySubtext}>
+                  Please try again later or contact support
+                </Text>
+                <TouchableOpacity 
+                  style={styles.retryButton}
+                  onPress={fetchTransporters}
+                >
+                  <Icon name="refresh" size={20} color="#fff" />
+                  <Text style={styles.retryButtonText}>Retry</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <FlatList
+                data={transporters}
+                keyExtractor={(item) => item._id}
+                style={styles.transporterList}
+                renderItem={({ item }) => (
+                  <TouchableOpacity
+                    style={[
+                      styles.transporterCard,
+                      selectedTransporter?._id === item._id && styles.selectedTransporterCard
+                    ]}
+                    onPress={() => setSelectedTransporter(item)}
+                  >
+                    <View style={styles.transporterCardHeader}>
+                      <View style={styles.transporterAvatar}>
+                        <Icon 
+                          name="business" 
+                          size={24} 
+                          color={selectedTransporter?._id === item._id ? "#A1D826" : "#666"} 
+                        />
+                      </View>
+                      <View style={styles.transporterInfo}>
+                        <View style={styles.transporterNameRow}>
+                          <Text style={styles.transporterName}>{item.name}</Text>
+                          {selectedTransporter?._id === item._id && (
+                            <Icon name="checkmark-circle" size={20} color="#A1D826" />
+                          )}
+                        </View>
+                        {item.company && (
+                          <Text style={styles.transporterCompany}>🏢 {item.company}</Text>
+                        )}
+                      </View>
+                    </View>
+                    
+                    <View style={styles.transporterDetails}>
+                      {item.email && (
+                        <View style={styles.transporterDetailRow}>
+                          <Icon name="mail" size={16} color="#666" />
+                          <Text style={styles.transporterDetailText}>{item.email}</Text>
+                        </View>
+                      )}
+                      {item.phone && (
+                        <View style={styles.transporterDetailRow}>
+                          <Icon name="call" size={16} color="#666" />
+                          <Text style={styles.transporterDetailText}>{item.phone}</Text>
+                        </View>
+                      )}
+                      {(item.city || item.zone || item.address) && (
+                        <View style={styles.transporterDetailRow}>
+                          <Icon name="location" size={16} color="#A1D826" />
+                          <Text style={styles.transporterAreaText}>
+                            Service Area: {item.zone || item.city || item.address}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  </TouchableOpacity>
+                )}
+              />
+            )}
 
-            <TextInput
-              style={[styles.input, { marginTop: 10 }]}
-              placeholder="https://raahi.com/invite/passenger/..."
-              value={inviteLink}
-              onChangeText={setInviteLink}
-              autoCapitalize="none"
-            />
+            <View style={styles.modalButtonRow}>
+              <TouchableOpacity 
+                style={styles.modalCancelButton} 
+                onPress={() => {
+                  setTransporterModalVisible(false);
+                  setRegisterModalVisible(true);
+                }}
+              >
+                <Icon name="arrow-back" size={18} color="#666" />
+                <Text style={styles.modalCancelButtonText}>Back</Text>
+              </TouchableOpacity>
 
-            <TouchableOpacity
-              style={[styles.primaryBtn, { marginTop: 20 }]}
-              onPress={verifyInviteLink}
-            >
-              <Text style={styles.primaryBtnText}>Access Dashboard</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.cancelBtn, { marginTop: 10 }]}
-              onPress={() => setInviteModalVisible(false)}
-            >
-              <Text style={styles.cancelBtnText}>Cancel</Text>
-            </TouchableOpacity>
+              <TouchableOpacity 
+                style={[
+                  styles.modalNextButton,
+                  (!selectedTransporter || loading) && styles.disabledButton
+                ]} 
+                onPress={handleFinalRegistration}
+                disabled={!selectedTransporter || loading}
+              >
+                <LinearGradient
+                  colors={
+                    !selectedTransporter || loading 
+                      ? ['#ccc', '#ccc'] 
+                      : ['#A1D826', '#8BC220']
+                  }
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 0 }}
+                  style={styles.modalNextButtonGradient}
+                >
+                  {loading ? (
+                    <ActivityIndicator color="#fff" size="small" />
+                  ) : (
+                    <>
+                      <Text style={styles.modalNextButtonText}>Send Request</Text>
+                      <Icon name="send" size={18} color="#fff" />
+                    </>
+                  )}
+                </LinearGradient>
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
-    </ScrollView>
+    </View>
   );
 }
 
-const styles = {
-  input: {
-    width: "100%",
-    height: 48,
-    borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    fontSize: 15,
-    color: "#333",
-    backgroundColor: "#F5F5F5",
+const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: '#f5f5f5',
   },
-  primaryBtn: {
-    backgroundColor: "#afd826",
-    borderRadius: 10,
-    paddingVertical: 12,
-    alignItems: "center",
-    marginTop: 20,
+  header: {
+    paddingTop: 60,
+    paddingBottom: 24,
+    paddingHorizontal: 20,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 5,
   },
-  primaryBtnText: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#fff",
+  backButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  registerBtn: {
-    borderWidth: 2,
-    borderColor: "#afd826",
-    borderRadius: 10,
-    paddingVertical: 12,
-    alignItems: "center",
-    marginTop: 10,
+  headerTextContainer: {
+    flex: 1,
+    alignItems: 'center',
   },
-  loginBtn: {
-    backgroundColor: "#afd826",
-    borderRadius: 10,
-    paddingVertical: 12,
-    alignItems: "center",
-    marginTop: 10,
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#fff',
   },
-  inviteBtn: {
-    borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 10,
-    paddingVertical: 12,
-    alignItems: "center",
-    marginTop: 10,
-  },
-  loginText: {
-    fontSize: 16,
-    fontWeight: "600",
-  },
-  loginSubText: {
-    fontSize: 12,
-    fontWeight: "400",
-    marginTop: 4,
-  },
-  inviteText: {
+  headerSubtitle: {
     fontSize: 14,
-    fontWeight: "500",
-    color: "#666",
-  },
-  inviteSubText: {
-    fontSize: 12,
-    fontWeight: "400",
+    color: 'rgba(255,255,255,0.9)',
     marginTop: 4,
   },
-  registerText: {
-    fontSize: 16,
-    fontWeight: "600",
+  content: {
+    flex: 1,
+    padding: 20,
   },
-  cancelBtn: {
-    backgroundColor: "#d9534f",
-    borderRadius: 10,
-    paddingVertical: 12,
-    alignItems: "center",
+  infoCard: {
+    flexDirection: 'row',
+    backgroundColor: '#fff',
+    padding: 16,
+    borderRadius: 12,
+    marginBottom: 20,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 2,
   },
-  cancelBtnText: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#fff",
+  infoText: {
+    flex: 1,
+    marginLeft: 12,
+    fontSize: 14,
+    color: '#666',
+    lineHeight: 20,
+  },
+  registerButton: {
+    borderRadius: 12,
+    overflow: 'hidden',
+    shadowColor: '#A1D826',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  registerButtonGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 18,
+    gap: 12,
+  },
+  registerButtonText: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: 'bold',
   },
   modalOverlay: {
     flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: "rgba(0,0,0,0.5)",
-  },
-  modalBox: {
-    width: "85%",
-    backgroundColor: "#fff",
-    borderRadius: 15,
+    justifyContent: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)',
     padding: 20,
-    elevation: 6,
+  },
+  modalContainer: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 20,
+    maxHeight: '90%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    elevation: 10,
+  },
+  searchModalContainer: {
+    backgroundColor: '#fff',
+    borderRadius: 20,
+    padding: 20,
+    maxHeight: '80%',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    elevation: 10,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 20,
+    paddingBottom: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
   },
   modalTitle: {
     fontSize: 20,
-    fontWeight: "700",
-    color: "#333",
-    textAlign: "center",
+    fontWeight: 'bold',
+    color: '#333',
   },
-  modalDesc: {
-    color: "#555",
+  section: {
+    marginBottom: 24,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 12,
+  },
+  inputGroup: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8f8f8',
+    borderRadius: 12,
+    paddingHorizontal: 15,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  inputIcon: {
+    marginRight: 10,
+  },
+  input: {
+    flex: 1,
+    paddingVertical: 14,
+    fontSize: 15,
+    color: '#333',
+  },
+  locationCard: {
+    backgroundColor: '#f8f8f8',
+    borderRadius: 12,
+    padding: 15,
+    marginBottom: 15,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  locationHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  locationLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#333',
+    marginLeft: 8,
+  },
+  selectedLocation: {
+    marginBottom: 10,
+  },
+  selectedLocationText: {
     fontSize: 14,
-    textAlign: "center",
-    marginVertical: 10,
+    color: '#666',
+    marginBottom: 10,
   },
-  transporterList: {
-    maxHeight: 300,
+  miniMap: {
+    width: '100%',
+    height: 120,
+    borderRadius: 8,
+  },
+  locationButtons: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  locationActionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#fff',
+    padding: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#A1D826',
+    gap: 6,
+  },
+  locationActionText: {
+    fontSize: 13,
+    color: '#A1D826',
+    fontWeight: '500',
+  },
+  searchInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8f8f8',
+    borderRadius: 12,
+    paddingHorizontal: 15,
+    marginBottom: 15,
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  searchIcon: {
+    marginRight: 10,
+  },
+  searchInput: {
+    flex: 1,
+    paddingVertical: 14,
+    fontSize: 15,
+    color: '#333',
+  },
+  searchResults: {
+    maxHeight: 400,
+  },
+  searchResultItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  searchResultText: {
+    flex: 1,
+    marginLeft: 12,
+  },
+  searchResultMain: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: '#333',
+  },
+  searchResultSecondary: {
+    fontSize: 13,
+    color: '#666',
+    marginTop: 2,
+  },
+  emptySearch: {
+    alignItems: 'center',
+    padding: 40,
+  },
+  emptySearchText: {
+    fontSize: 14,
+    color: '#999',
     marginTop: 10,
   },
-  transporterItem: {
-    padding: 15,
-    borderWidth: 1,
-    borderColor: "#ddd",
-    borderRadius: 10,
-    marginBottom: 10,
-    backgroundColor: "#F9F9F9",
+  modalButtonRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 20,
   },
-  selectedTransporterItem: {
-    borderColor: "#afd826",
-    backgroundColor: "#f8ffde",
+  modalCancelButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#f0f0f0',
+    padding: 14,
+    borderRadius: 12,
+    gap: 6,
+  },
+  modalCancelButtonText: {
+    color: '#666',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  modalNextButton: {
+    flex: 1,
+    borderRadius: 12,
+    overflow: 'hidden',
+  },
+  modalNextButtonGradient: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 14,
+    gap: 6,
+  },
+  modalNextButtonText: {
+    color: '#fff',
+    fontSize: 15,
+    fontWeight: '600',
+  },
+  disabledButton: {
+    opacity: 0.5,
+  },
+  transporterList: {
+    maxHeight: 400,
+  },
+  transporterCard: {
+    backgroundColor: '#fff',
+    borderRadius: 12,
+    padding: 15,
+    marginBottom: 12,
     borderWidth: 2,
+    borderColor: '#e0e0e0',
+  },
+  selectedTransporterCard: {
+    borderColor: '#A1D826',
+    backgroundColor: '#f0f9e6',
+  },
+  transporterCardHeader: {
+    flexDirection: 'row',
+    marginBottom: 12,
+  },
+  transporterAvatar: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: '#f0f0f0',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginRight: 12,
+  },
+  transporterInfo: {
+    flex: 1,
+  },
+  transporterNameRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
   },
   transporterName: {
     fontSize: 16,
-    fontWeight: "600",
-    color: "#333",
+    fontWeight: '600',
+    color: '#333',
   },
-  transporterContact: {
-    fontSize: 12,
-    color: "#666",
-    marginTop: 2,
+  transporterCompany: {
+    fontSize: 13,
+    color: '#666',
+    marginTop: 4,
   },
-  selectedTransporterBox: {
-    backgroundColor: "#afd826",
-    padding: 10,
-    borderRadius: 8,
-    marginVertical: 10,
+  transporterDetails: {
+    gap: 8,
   },
-  selectedText: {
-    color: "#fff",
-    fontWeight: "600",
-    textAlign: "center",
+  transporterDetailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
-  howItWorks: {
-    marginTop: 30,
-    padding: 20,
-    backgroundColor: "#fff",
-    borderRadius: 15,
-    width: "100%",
+  transporterDetailText: {
+    fontSize: 13,
+    color: '#666',
   },
-  howItWorksTitle: {
-    fontSize: 18,
-    fontWeight: "700",
-    color: "#333",
-    marginBottom: 15,
-    textAlign: "center",
+  transporterAreaText: {
+    fontSize: 13,
+    color: '#A1D826',
+    fontWeight: '500',
   },
-  stepContainer: {
+  loadingContainer: {
+    padding: 40,
+    alignItems: 'center',
+  },
+  loadingText: {
     marginTop: 10,
-  },
-  step: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 12,
-  },
-  stepNumber: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: "#afd826",
-    color: "#fff",
-    textAlign: "center",
-    lineHeight: 24,
-    fontWeight: "600",
-    marginRight: 12,
-  },
-  stepText: {
+    color: '#666',
     fontSize: 14,
-    color: "#666",
-    flex: 1,
   },
-};
+  emptyContainer: {
+    padding: 40,
+    alignItems: 'center',
+  },
+  emptyText: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#999',
+    marginTop: 15,
+  },
+  emptySubtext: {
+    fontSize: 14,
+    color: '#bbb',
+    marginTop: 8,
+    textAlign: 'center',
+  },
+  retryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#A1D826',
+    paddingHorizontal: 20,
+    paddingVertical: 10,
+    borderRadius: 8,
+    marginTop: 15,
+    gap: 6,
+  },
+  retryButtonText: {
+    color: '#fff',
+    fontWeight: '600',
+    fontSize: 14,
+  },
+});
