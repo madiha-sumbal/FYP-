@@ -21,7 +21,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // ==================== API BASE URL ====================
-const API_BASE_URL = "http://192.168.10.10:3000/api";
+const API_BASE_URL = "http://192.168.10.12:3000/api";
 const GOOGLE_MAPS_API_KEY = "AIzaSyDiZhjAhYniDLe4Ndr1u87NdDfIdZS6SME";
 
 export default function PassengerDashboard({ navigation }) {
@@ -106,25 +106,28 @@ export default function PassengerDashboard({ navigation }) {
         }
         
         console.log("✅ Auth data loaded for passenger");
+        console.log("  - User ID:", userId);
+        console.log("  - Token:", token ? "Present" : "Missing");
         
         // Load all data
-        fetchActivePolls();
-        fetchNotifications();
-        fetchCurrentTrip();
+        await fetchActivePolls();
+        await fetchNotifications();
+        await fetchCurrentTrip();
         
-        // Set up polling for real-time updates
+        // Set up polling for real-time updates - every 5 seconds
         const pollInterval = setInterval(() => {
           fetchActivePolls();
           fetchNotifications();
           fetchCurrentTrip();
-        }, 10000); // Every 10 seconds
+        }, 5000);
         
         return () => clearInterval(pollInterval);
       } else {
         console.log("⚠️ No auth data found, redirecting to login");
+        // ✅ FIXED: Changed from 'PassengerLogin' to 'PassengerLoginScreen'
         navigation.reset({
           index: 0,
-          routes: [{ name: 'PassengerLogin' }],
+          routes: [{ name: 'PassengerLoginScreen' }],
         });
       }
     } catch (error) {
@@ -142,6 +145,7 @@ export default function PassengerDashboard({ navigation }) {
   // Fetch Active Polls
   const fetchActivePolls = async () => {
     try {
+      console.log("📊 Fetching active polls...");
       const response = await fetch(`${API_BASE_URL}/polls/active`, {
         headers: getHeaders()
       });
@@ -152,11 +156,22 @@ export default function PassengerDashboard({ navigation }) {
       if (data.success && data.polls && data.polls.length > 0) {
         setActivePolls(data.polls);
         
-        // Show poll notification if there are new polls
-        const newPolls = data.polls.filter(p => !p.hasResponded);
-        if (newPolls.length > 0) {
+        // Find polls that need response
+        const pollsNeedingResponse = data.polls.filter(poll => {
+          const userResponse = poll.responses?.find(r => 
+            r.passengerId === userId || 
+            r.passengerId?._id === userId ||
+            r.passengerId?.toString() === userId
+          );
+          return !userResponse && poll.status === 'active';
+        });
+        
+        console.log("📊 Polls needing response:", pollsNeedingResponse.length);
+        
+        if (pollsNeedingResponse.length > 0 && !showPollModal) {
+          const firstPoll = pollsNeedingResponse[0];
+          setSelectedPoll(firstPoll);
           setShowPollModal(true);
-          setSelectedPoll(newPolls[0]);
           
           // Animate poll alert
           Animated.parallel([
@@ -181,23 +196,42 @@ export default function PassengerDashboard({ navigation }) {
             )
           ]).start();
         }
+      } else {
+        console.log("📊 No active polls found");
+        setActivePolls([]);
       }
     } catch (error) {
       console.error("❌ Error fetching active polls:", error);
+      setActivePolls([]);
     }
   };
 
   // Submit Poll Response
   const submitPollResponse = async () => {
-    if (!selectedPoll) return;
+    if (!selectedPoll) {
+      console.log("❌ No poll selected");
+      return;
+    }
     
     if (travelResponse === 'yes' && (!selectedTimeSlot || !pickupPoint)) {
       Alert.alert("Missing Information", "Please select a time slot and confirm your pickup point");
       return;
     }
     
+    if (!travelResponse) {
+      Alert.alert("Please Choose", "Please select whether you will travel or not");
+      return;
+    }
+    
     try {
       setLoading(true);
+      
+      console.log("📤 Submitting poll response:", {
+        pollId: selectedPoll._id,
+        response: travelResponse,
+        selectedTimeSlot: travelResponse === 'yes' ? selectedTimeSlot : null,
+        pickupPoint: travelResponse === 'yes' ? pickupPoint : null
+      });
       
       const response = await fetch(`${API_BASE_URL}/polls/${selectedPoll._id}/respond`, {
         method: 'POST',
@@ -211,7 +245,7 @@ export default function PassengerDashboard({ navigation }) {
       
       const data = await response.json();
       
-      console.log("✅ Poll Response Submitted:", data);
+      console.log("✅ Poll Response Result:", data);
       
       if (data.success) {
         Alert.alert(
@@ -219,14 +253,18 @@ export default function PassengerDashboard({ navigation }) {
           travelResponse === 'yes' 
             ? `Thank you! You've confirmed travel for tomorrow at ${selectedTimeSlot}.` 
             : "You've confirmed that you won't be traveling tomorrow.",
-          [{ text: "OK", onPress: () => {
-            setShowPollModal(false);
-            setSelectedPoll(null);
-            setTravelResponse('');
-            setSelectedTimeSlot('');
-            dismissPollAlert();
-            fetchActivePolls();
-          }}]
+          [{ 
+            text: "OK", 
+            onPress: () => {
+              setShowPollModal(false);
+              setSelectedPoll(null);
+              setTravelResponse('');
+              setSelectedTimeSlot('');
+              dismissPollAlert();
+              fetchActivePolls();
+              fetchNotifications();
+            }
+          }]
         );
       } else {
         Alert.alert("Error", data.message || "Failed to submit response");
@@ -242,44 +280,50 @@ export default function PassengerDashboard({ navigation }) {
   // Fetch Current Trip
   const fetchCurrentTrip = async () => {
     try {
+      console.log("🚐 Fetching current trip...");
       const response = await fetch(`${API_BASE_URL}/trips`, {
         headers: getHeaders()
       });
       const data = await response.json();
       
+      console.log("🚐 Trips Response:", data);
+      
       if (data.success && data.trips && data.trips.length > 0) {
-        // Find trips for current user
         const myTrips = data.trips.filter(trip => 
-          trip.passengers && trip.passengers.some(p => 
-            p._id?.toString() === userId || p._id?._id?.toString() === userId
-          )
+          trip.passengers && trip.passengers.some(p => {
+            const pId = p._id?._id || p._id;
+            return pId?.toString() === userId || pId === userId;
+          })
         );
         
-        // Find active trip (Scheduled or En Route)
+        console.log("🚐 My Trips:", myTrips.length);
+        
         const activeTrip = myTrips.find(t => 
           t.status === 'Scheduled' || t.status === 'En Route' || t.status === 'Ready'
         );
         
         if (activeTrip) {
+          console.log("🚐 Active Trip Found:", activeTrip.status);
           setCurrentTrip(activeTrip);
           setTripStatus(activeTrip.status);
           
-          // Get passenger status
-          const myPassenger = activeTrip.passengers.find(p => 
-            p._id?.toString() === userId || p._id?._id?.toString() === userId
-          );
+          const myPassenger = activeTrip.passengers.find(p => {
+            const pId = p._id?._id || p._id;
+            return pId?.toString() === userId || pId === userId;
+          });
           
           if (myPassenger) {
+            console.log("👤 My Passenger Status:", myPassenger.status);
+            
             if (myPassenger.status === 'picked') {
               setTripStatus('picked');
             }
             
-            // Check if morning confirmation is needed
             if (activeTrip.status === 'Ready' && !myPassenger.confirmedMorning) {
+              console.log("⏰ Morning confirmation needed");
               setShowMorningConfirmation(true);
               setMorningConfirmationTrip(activeTrip);
               
-              // Animate morning confirmation alert
               Animated.parallel([
                 Animated.timing(morningConfirmSlideAnim, {
                   toValue: 0,
@@ -304,7 +348,6 @@ export default function PassengerDashboard({ navigation }) {
             }
           }
           
-          // Update driver info
           if (activeTrip.driverId) {
             setDriverInfo({
               name: activeTrip.driverName || "Driver",
@@ -315,12 +358,17 @@ export default function PassengerDashboard({ navigation }) {
             });
           }
           
-          // Update location if available
           if (activeTrip.currentLocation) {
             setDriverLocation(activeTrip.currentLocation);
             calculateETA(activeTrip.currentLocation);
           }
+        } else {
+          console.log("🚐 No active trip found");
+          setCurrentTrip(null);
         }
+      } else {
+        console.log("🚐 No trips in response");
+        setCurrentTrip(null);
       }
     } catch (error) {
       console.error("❌ Error fetching current trip:", error);
@@ -329,10 +377,18 @@ export default function PassengerDashboard({ navigation }) {
 
   // Submit Morning Confirmation
   const submitMorningConfirmation = async (willTravel) => {
-    if (!morningConfirmationTrip) return;
+    if (!morningConfirmationTrip) {
+      console.log("❌ No morning confirmation trip");
+      return;
+    }
     
     try {
       setLoading(true);
+      
+      console.log("📤 Submitting morning confirmation:", {
+        tripId: morningConfirmationTrip._id,
+        traveling: willTravel
+      });
       
       const response = await fetch(
         `${API_BASE_URL}/trips/${morningConfirmationTrip._id}/confirm-passenger`, 
@@ -347,18 +403,24 @@ export default function PassengerDashboard({ navigation }) {
       
       const data = await response.json();
       
+      console.log("✅ Morning Confirmation Result:", data);
+      
       if (data.success) {
         Alert.alert(
           "Confirmation Submitted",
           willTravel 
             ? "Thank you! Your driver has been notified that you're traveling." 
             : "You've confirmed that you won't be traveling today.",
-          [{ text: "OK", onPress: () => {
-            setShowMorningConfirmation(false);
-            setMorningConfirmationTrip(null);
-            dismissMorningConfirmAlert();
-            fetchCurrentTrip();
-          }}]
+          [{ 
+            text: "OK", 
+            onPress: () => {
+              setShowMorningConfirmation(false);
+              setMorningConfirmationTrip(null);
+              dismissMorningConfirmAlert();
+              fetchCurrentTrip();
+              fetchNotifications();
+            }
+          }]
         );
       } else {
         Alert.alert("Error", data.message || "Failed to submit confirmation");
@@ -378,27 +440,60 @@ export default function PassengerDashboard({ navigation }) {
       return;
     }
     
-    // Simple calculation - in production, use Google Directions API
     const distance = Math.sqrt(
       Math.pow(driverLocation.latitude - userProfile.latitude, 2) +
       Math.pow(driverLocation.longitude - userProfile.longitude, 2)
     );
     
-    const estimatedMinutes = Math.max(1, Math.round(distance * 100 * 2)); // Rough estimate
+    const estimatedMinutes = Math.max(1, Math.round(distance * 100 * 2));
     setEstimatedArrival(`${estimatedMinutes} min`);
   };
 
-  // Fetch Notifications
+  // Fetch Notifications - FIXED VERSION
   const fetchNotifications = async () => {
     try {
+      console.log("🔔 Fetching notifications for user:", userId);
+      
       const response = await fetch(`${API_BASE_URL}/notifications`, {
         headers: getHeaders()
       });
+      
       const data = await response.json();
       
+      console.log("🔔 Notifications API Response:", data);
+      
       if (data.success) {
-        setNotifications(data.notifications || []);
-        setUnreadCount(data.counts?.unread || 0);
+        const notifs = data.notifications || data.data || [];
+        console.log("🔔 Total notifications received:", notifs.length);
+        
+        // Filter notifications for current user
+        const userNotifications = notifs.filter(n => {
+          const notifUserId = n.userId?._id || n.userId;
+          const matches = notifUserId?.toString() === userId;
+          console.log(`  Notification ${n._id}: userId=${notifUserId}, matches=${matches}`);
+          return matches;
+        });
+        
+        console.log("🔔 User notifications after filter:", userNotifications.length);
+        
+        setNotifications(userNotifications);
+        
+        const unread = userNotifications.filter(n => !n.read).length;
+        setUnreadCount(unread);
+        
+        console.log("🔔 Unread notifications:", unread);
+        
+        // Check for poll notifications that need immediate attention
+        const pollNotifications = userNotifications.filter(n => 
+          n.type === 'poll' && !n.read && n.actionRequired
+        );
+        
+        if (pollNotifications.length > 0 && !showPollModal) {
+          console.log("🔔 Found", pollNotifications.length, "poll notifications requiring action");
+          // Poll will be shown from fetchActivePolls
+        }
+      } else {
+        console.log("🔔 Notifications fetch failed:", data.message);
       }
     } catch (error) {
       console.error("❌ Error fetching notifications:", error);
@@ -408,13 +503,41 @@ export default function PassengerDashboard({ navigation }) {
   // Mark Notification as Read
   const markNotificationAsRead = async (notificationId) => {
     try {
+      console.log("✅ Marking notification as read:", notificationId);
+      
       await fetch(`${API_BASE_URL}/notifications/${notificationId}/read`, {
         method: 'PUT',
         headers: getHeaders()
       });
+      
+      // Update local state
+      setNotifications(prev => prev.map(n => 
+        n._id === notificationId ? { ...n, read: true } : n
+      ));
+      setUnreadCount(prev => Math.max(0, prev - 1));
+      
       fetchNotifications();
     } catch (error) {
       console.error("❌ Error marking notification as read:", error);
+    }
+  };
+
+  // Mark All Notifications as Read
+  const markAllNotificationsAsRead = async () => {
+    try {
+      console.log("✅ Marking all notifications as read");
+      
+      await fetch(`${API_BASE_URL}/notifications/mark-all-read`, {
+        method: 'PUT',
+        headers: getHeaders()
+      });
+      
+      setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+      setUnreadCount(0);
+      
+      fetchNotifications();
+    } catch (error) {
+      console.error("❌ Error marking all notifications as read:", error);
     }
   };
 
@@ -474,7 +597,8 @@ export default function PassengerDashboard({ navigation }) {
   const handleAlertNavigation = () => {
     navigation.navigate('AlertScreen', { 
       notifications,
-      onMarkAsRead: markNotificationAsRead
+      onMarkAsRead: markNotificationAsRead,
+      onMarkAllAsRead: markAllNotificationsAsRead
     });
   };
 
@@ -491,14 +615,12 @@ export default function PassengerDashboard({ navigation }) {
   // ==================== ANIMATIONS ====================
   
   useEffect(() => {
-    // Initial fade in
     Animated.timing(fadeAnim, {
       toValue: 1,
       duration: 800,
       useNativeDriver: true,
     }).start();
 
-    // Card slide up
     Animated.spring(cardAnim, {
       toValue: 1,
       tension: 50,
@@ -506,7 +628,6 @@ export default function PassengerDashboard({ navigation }) {
       useNativeDriver: true,
     }).start();
 
-    // Blink animation for notifications
     Animated.loop(
       Animated.sequence([
         Animated.timing(blinkAnim, { toValue: 1, duration: 800, useNativeDriver: false }),
@@ -514,7 +635,6 @@ export default function PassengerDashboard({ navigation }) {
       ])
     ).start();
 
-    // Pulse animation
     Animated.loop(
       Animated.sequence([
         Animated.timing(pulseAnim, { toValue: 1.3, duration: 1000, useNativeDriver: true }),
@@ -522,7 +642,6 @@ export default function PassengerDashboard({ navigation }) {
       ])
     ).start();
 
-    // Map marker bounce
     Animated.loop(
       Animated.sequence([
         Animated.timing(mapMarkerAnim, { toValue: -10, duration: 500, useNativeDriver: true }),
@@ -531,7 +650,6 @@ export default function PassengerDashboard({ navigation }) {
     ).start();
   }, []);
 
-  // Call ring animation
   useEffect(() => {
     if (callModalVisible) {
       Animated.loop(
@@ -636,7 +754,6 @@ export default function PassengerDashboard({ navigation }) {
                     style={styles.confirmBtn} 
                     onPress={() => {
                       setTravelResponse('yes');
-                      // Keep modal open to select time slot
                     }}
                   >
                     <Icon name="checkmark-circle" size={18} color="#fff" />
@@ -764,6 +881,52 @@ export default function PassengerDashboard({ navigation }) {
           </Animated.View>
         )}
 
+        {/* Notifications Alert on Dashboard - NEW */}
+        {notifications.filter(n => !n.read && n.type === 'route').slice(0, 1).map((notification) => (
+          <Animated.View 
+            key={notification._id}
+            style={{ 
+              opacity: fadeAnim,
+              transform: [{ translateY: cardTranslateY }],
+              marginTop: (showPollModal || showMorningConfirmation) ? 15 : 20
+            }}
+          >
+            <LinearGradient
+              colors={['#2196F3', '#1976D2']}
+              start={{ x: 0, y: 0 }}
+              end={{ x: 1, y: 1 }}
+              style={styles.alertBox}
+            >
+              <Animated.View style={{ transform: [{ scale: pulseAnim }] }}>
+                <Icon name={notification.icon || "information-circle"} size={26} color="#fff" />
+              </Animated.View>
+              <View style={styles.alertTextBox}>
+                <Text style={styles.alertTitle}>{notification.title}</Text>
+                <Text style={styles.alertText}>{notification.message}</Text>
+                <View style={styles.alertButtons}>
+                  <TouchableOpacity 
+                    style={styles.confirmBtn}
+                    onPress={() => {
+                      markNotificationAsRead(notification._id);
+                      handleAlertNavigation();
+                    }}
+                  >
+                    <Icon name="eye" size={18} color="#fff" />
+                    <Text style={styles.btnText}>View Details</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.smallCancelBtn}
+                    onPress={() => markNotificationAsRead(notification._id)}
+                  >
+                    <Icon name="close-circle" size={18} color="#fff" />
+                    <Text style={styles.btnText}>Dismiss</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </LinearGradient>
+          </Animated.View>
+        ))}
+
         {/* Today's Trip Details */}
         <Animated.View style={{ 
           transform: [{ translateY: cardTranslateY }],
@@ -848,7 +1011,6 @@ export default function PassengerDashboard({ navigation }) {
                     longitudeDelta: 0.05,
                   }}
                 >
-                  {/* Driver/Van Marker */}
                   <Marker
                     coordinate={driverLocation}
                     title="Your Van"
@@ -864,7 +1026,6 @@ export default function PassengerDashboard({ navigation }) {
                     </Animated.View>
                   </Marker>
                   
-                  {/* Your Location Marker */}
                   {userProfile && userProfile.latitude && userProfile.longitude && (
                     <Marker
                       coordinate={{

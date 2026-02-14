@@ -16,15 +16,19 @@ export default function DashboardRegisterScreen({ navigation }) {
     
     setErrorMsg(""); // Clear any existing error messages
 
-    // Navigate based on selected role
+    // ✅ FIXED: Navigate to LOGIN screens, not dashboards
     switch (role) {
       case "Driver":
+        console.log("📍 Navigating to DriverLogin");
         navigation.navigate("DriverLogin");
         break;
       case "Transporter":
+        console.log("📍 Navigating to TransporterLogin");
         navigation.navigate("TransporterLogin");
         break;
       case "Passenger":
+        console.log("📍 Navigating to PassengerLoginScreen");
+        // ✅ FIXED: Changed from PassengerLogin to PassengerLoginScreen
         navigation.navigate("PassengerLoginScreen");
         break;
       default:
@@ -48,18 +52,22 @@ export default function DashboardRegisterScreen({ navigation }) {
         />
 
         <Text style={styles.title}>Select Your Role</Text>
+        <Text style={styles.subtitle}>Choose your role to continue</Text>
 
         {/* Role Picker */}
         <View style={styles.pickerBox}>
           <Picker
             selectedValue={role}
-            onValueChange={(itemValue) => setRole(itemValue)}
+            onValueChange={(itemValue) => {
+              setRole(itemValue);
+              setErrorMsg(""); // Clear error when role is selected
+            }}
             testID="role-picker"
           >
             <Picker.Item label="Select Role" value="" />
-            <Picker.Item label="Passenger" value="Passenger" />
-            <Picker.Item label="Driver" value="Driver" />
-            <Picker.Item label="Transporter" value="Transporter" />
+            <Picker.Item label="🚶 Passenger" value="Passenger" />
+            <Picker.Item label="🚗 Driver" value="Driver" />
+            <Picker.Item label="🏢 Transporter" value="Transporter" />
           </Picker>
         </View>
 
@@ -74,14 +82,22 @@ export default function DashboardRegisterScreen({ navigation }) {
         <TouchableOpacity 
           style={[
             styles.submitBtn, 
-            !role && styles.submitBtnDisabled // Optional: Add disabled style
+            !role && styles.submitBtnDisabled
           ]} 
           onPress={handleNext}
-          disabled={!role} // Optional: Disable button when no role selected
+          disabled={!role}
           testID="next-button"
         >
-          <Text style={styles.submitText}>Next</Text>
+          <Text style={styles.submitText}>Continue to Login →</Text>
         </TouchableOpacity>
+
+        {/* Info Text */}
+        <Text style={styles.infoText}>
+          {role === "Driver" && "You'll be directed to Driver Login"}
+          {role === "Transporter" && "You'll be directed to Transporter Login"}
+          {role === "Passenger" && "You'll be directed to Passenger Login"}
+          {!role && "Select your role to proceed"}
+        </Text>
       </View>
     </View>
   );

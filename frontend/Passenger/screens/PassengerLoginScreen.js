@@ -1,311 +1,414 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
   TextInput,
   TouchableOpacity,
-  Image,
-  Alert,
-  ScrollView,
-  ActivityIndicator,
   StyleSheet,
-} from "react-native";
-import AsyncStorage from "@react-native-async-storage/async-storage";
+  Alert,
+  ActivityIndicator,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+} from 'react-native';
+import { LinearGradient } from 'expo-linear-gradient';
+import Icon from 'react-native-vector-icons/Ionicons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const API_BASE_URL = "http://192.168.10.8:3000/api";
+const API_BASE_URL = 'http://192.168.10.12:3000/api';
 
-export default function PassengerLoginScreen({ navigation }) {
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
+export default function PassengerLogin({ navigation }) {
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+  const [showPassword, setShowPassword] = useState(false);
+
+  // Check if already logged in
+  useEffect(() => {
+    checkExistingAuth();
+  }, []);
+
+  const checkExistingAuth = async () => {
+    try {
+      const token = await AsyncStorage.getItem('authToken');
+      const userId = await AsyncStorage.getItem('userId');
+      
+      console.log("🔍 Checking existing auth:");
+      console.log("  - Token:", token ? "Present" : "Missing");
+      console.log("  - User ID:", userId ? userId : "Missing");
+      
+      if (token && userId) {
+        console.log("✅ Already logged in, navigating to dashboard");
+        // ✅ FIXED: Changed from 'PassengerDashboard' to 'PassengerAppNavigation'
+        navigation.replace('PassengerAppNavigation');
+      }
+    } catch (error) {
+      console.error('Error checking auth:', error);
+    }
+  };
 
   const handleLogin = async () => {
-    if (!email || !password) {
-      return Alert.alert("Error", "Please enter both email and password");
+    // Validation
+    if (!email.trim() || !password.trim()) {
+      Alert.alert('Missing Information', 'Please enter both email and password');
+      return;
     }
 
-    setLoading(true);
-
     try {
-      console.log("🔐 Attempting passenger login...");
-      console.log("📧 Email:", email.toLowerCase().trim());
+      setLoading(true);
+      
+      const requestBody = {
+        email: email.toLowerCase().trim(),
+        password: password.trim(),
+        role: 'passenger'
+      };
+      
+      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+      console.log("🔐 PASSENGER LOGIN ATTEMPT");
+      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+      console.log("📤 Request:", {
+        email: requestBody.email,
+        role: requestBody.role,
+        password: "***HIDDEN***"
+      });
       
       const response = await fetch(`${API_BASE_URL}/auth/login`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          email: email.toLowerCase().trim(),
-          password: password.trim(),
-          role: "passenger", // Explicitly tell backend this is passenger login
-        }),
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
       });
 
       const data = await response.json();
-      console.log("📥 Full Login response:", JSON.stringify(data, null, 2));
-
-      // Check if login was successful
-      if (!response.ok || !data.success) {
-        Alert.alert("Login Failed", data.message || "Invalid credentials");
-        setLoading(false);
-        return;
-      }
-
-      // Extract token and user data from response
-      const token = data.token || data.accessToken || data.data?.token;
-      const userData = data.passenger || data.user || data.data?.user || data.data;
-
-      console.log("🎫 Token:", token ? "✓ Found" : "✗ Missing");
-      console.log("👤 User data extracted:", JSON.stringify(userData, null, 2));
-
-      if (!token) {
-        Alert.alert("Login Error", "Authentication token missing from server");
-        setLoading(false);
-        return;
-      }
-
-      if (!userData) {
-        Alert.alert("Login Error", "User data missing from server");
-        setLoading(false);
-        return;
-      }
-
-      // ✅ CRITICAL: Verify user role is PASSENGER
-      const userRole = (userData.role || userData.userRole || "").toLowerCase().trim();
-      console.log("🎭 User role:", userRole);
-
-      if (userRole !== "passenger") {
-        setLoading(false);
-        return Alert.alert(
-          "Access Denied",
-          `This account is registered as "${userRole}". Only Passenger accounts can login here. Please use the correct login screen.`
-        );
-      }
-
-      // ✅ Check if passenger account is approved - DETAILED LOGGING
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.log("📋 APPROVAL CHECK - Full user data:");
-      console.log(JSON.stringify(userData, null, 2));
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-      console.log("🔍 Checking approval fields:");
-      console.log("  - status:", userData.status);
-      console.log("  - isVerified:", userData.isVerified);
-      console.log("  - approved:", userData.approved);
-      console.log("  - isApproved:", userData.isApproved);
-      console.log("  - accountStatus:", userData.accountStatus);
-      console.log("  - approvalStatus:", userData.approvalStatus);
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
       
-      // Check multiple possible approval indicators
-      const isApproved = 
-        userData.status?.toLowerCase() === "approved" ||
-        userData.status?.toLowerCase() === "active" ||
-        userData.accountStatus?.toLowerCase() === "approved" ||
-        userData.accountStatus?.toLowerCase() === "active" ||
-        userData.approvalStatus?.toLowerCase() === "approved" ||
-        userData.isVerified === true ||
-        userData.approved === true ||
-        userData.isApproved === true;
-
-      console.log("✅ Final approval status:", isApproved);
-      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
-      if (!isApproved) {
-        setLoading(false);
-        
-        // Show detailed status in alert
-        const statusInfo = `
-Current Status: ${userData.status || userData.accountStatus || 'unknown'}
-Verified: ${userData.isVerified ? 'Yes' : 'No'}
-Approved: ${userData.approved || userData.isApproved ? 'Yes' : 'No'}
-        `.trim();
-        
-        return Alert.alert(
-          "Account Pending Approval ⏳",
-          `Your Passenger account is waiting for transporter approval.\n\n${statusInfo}\n\nYou will be notified once approved.`,
-          [
-            { text: "OK" },
-            { 
-              text: "Contact Support", 
-              onPress: () => {
-                console.log("User wants to contact support");
-                // You can add support contact logic here
-              }
-            }
-          ]
-        );
-      }
-
-      // ✅ Save credentials to AsyncStorage
-      await AsyncStorage.setItem("userToken", token);
-      await AsyncStorage.setItem("userData", JSON.stringify(userData));
-      await AsyncStorage.setItem("userRole", "passenger");
-
-      console.log("✅ Login successful! Navigating to dashboard...");
-
-      // ✅ Navigate to Passenger Dashboard
-      navigation.reset({
-        index: 0,
-        routes: [{ name: "PassengerAppNavigation" }],
+      console.log("📥 Response Status:", response.status);
+      console.log("📥 Response Data:", {
+        success: data.success,
+        hasToken: !!data.token,
+        hasUser: !!data.user,
+        message: data.message
       });
 
-    } catch (error) {
-      console.error("❌ Login error:", error);
-      console.error("Error details:", error.message);
-      if (error.response) {
-        console.error("Response data:", error.response.data);
+      if (data.success && data.token && data.user) {
+        console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        console.log("✅ LOGIN SUCCESSFUL");
+        console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        console.log("📦 User Data:");
+        console.log("  - ID:", data.user.id || data.user._id);
+        console.log("  - Name:", data.user.name);
+        console.log("  - Email:", data.user.email);
+        console.log("  - Role:", data.user.role);
+        console.log("  - Transporter ID:", data.user.transporterId);
+        
+        // ✅ CRITICAL: Save auth data to AsyncStorage
+        const userId = data.user.id || data.user._id;
+        const userDataStr = JSON.stringify(data.user);
+        
+        console.log("💾 Saving to AsyncStorage...");
+        
+        await AsyncStorage.setItem('authToken', data.token);
+        console.log("  ✅ Token saved");
+        
+        await AsyncStorage.setItem('userId', userId.toString());
+        console.log("  ✅ User ID saved:", userId);
+        
+        await AsyncStorage.setItem('userData', userDataStr);
+        console.log("  ✅ User data saved");
+        
+        // Verify data was saved
+        const savedToken = await AsyncStorage.getItem('authToken');
+        const savedUserId = await AsyncStorage.getItem('userId');
+        const savedUserData = await AsyncStorage.getItem('userData');
+        
+        console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        console.log("✅ VERIFICATION:");
+        console.log("  - Token:", savedToken ? "✅ Saved (" + savedToken.substring(0, 20) + "...)" : "❌ Not saved");
+        console.log("  - User ID:", savedUserId ? "✅ Saved (" + savedUserId + ")" : "❌ Not saved");
+        console.log("  - User Data:", savedUserData ? "✅ Saved" : "❌ Not saved");
+        console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        
+        if (!savedToken || !savedUserId) {
+          console.error("❌ CRITICAL: Data not saved to AsyncStorage!");
+          Alert.alert('Error', 'Failed to save login data. Please try again.');
+          return;
+        }
+        
+        console.log("🚀 Navigating to PassengerAppNavigation...");
+        
+        // Small delay to ensure AsyncStorage is fully written
+        setTimeout(() => {
+          // ✅ FIXED: Changed from 'PassengerDashboard' to 'PassengerAppNavigation'
+          navigation.replace('PassengerAppNavigation');
+        }, 100);
+        
+      } else {
+        console.log("❌ Login failed:", data.message);
+        console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+        
+        Alert.alert(
+          'Login Failed',
+          data.message || 'Invalid email or password. Please check your credentials and try again.'
+        );
       }
+    } catch (error) {
+      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+      console.error('❌ LOGIN ERROR:', error);
+      console.error('Error Name:', error.name);
+      console.error('Error Message:', error.message);
+      console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
       
       Alert.alert(
-        "Connection Error", 
-        "Unable to connect to server. Please check your internet connection and try again.\n\nError: " + error.message
+        'Connection Error',
+        'Failed to connect to server. Please check your internet connection and try again.'
       );
     } finally {
       setLoading(false);
     }
   };
 
-  const handleNavigateToRequest = () => {
-    navigation.navigate("PassengerRequestScreen");
+  const handleRegister = () => {
+    navigation.navigate('PassengerRegister');
   };
 
   return (
-    <View style={styles.container}>
-      <View style={styles.header}>
-        <View style={styles.logoContainer}>
-          <View style={styles.logo}>
-            <Image
-              source={{
-                uri: "https://cdn.prod.website-files.com/6846c2be8f3d7d1f31b5c7e3/6846e5d971c7bbaa7308cb70_img.webp",
-              }}
-              style={styles.logoImage}
-              resizeMode="contain"
+    <KeyboardAvoidingView
+      style={styles.container}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    >
+      <ScrollView
+        contentContainerStyle={styles.scrollContainer}
+        keyboardShouldPersistTaps="handled"
+      >
+        <LinearGradient
+          colors={['#A1D826', '#8BC220']}
+          style={styles.header}
+        >
+          <Icon name="bus" size={80} color="#fff" style={styles.icon} />
+          <Text style={styles.title}>Passenger Login</Text>
+          <Text style={styles.subtitle}>Sign in to continue</Text>
+        </LinearGradient>
+
+        <View style={styles.formContainer}>
+          <View style={styles.inputContainer}>
+            <Icon name="mail-outline" size={20} color="#A1D826" style={styles.inputIcon} />
+            <TextInput
+              style={styles.input}
+              placeholder="Email"
+              placeholderTextColor="#999"
+              value={email}
+              onChangeText={setEmail}
+              keyboardType="email-address"
+              autoCapitalize="none"
+              autoCorrect={false}
             />
           </View>
-          <Text style={styles.appSubtitle}>Welcome Back</Text>
-        </View>
-      </View>
 
-      <ScrollView style={styles.formContainer} keyboardShouldPersistTaps="handled">
-        <Text style={styles.label}>Email Address</Text>
-        <View style={styles.inputContainer}>
-          <TextInput
-            placeholder="Enter your email"
-            placeholderTextColor="#9ca3af"
-            value={email}
-            onChangeText={setEmail}
-            keyboardType="email-address"
-            autoCapitalize="none"
-            style={styles.input}
-            editable={!loading}
-          />
-        </View>
+          <View style={styles.inputContainer}>
+            <Icon name="lock-closed-outline" size={20} color="#A1D826" style={styles.inputIcon} />
+            <TextInput
+              style={styles.input}
+              placeholder="Password"
+              placeholderTextColor="#999"
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry={!showPassword}
+              autoCapitalize="none"
+            />
+            <TouchableOpacity
+              onPress={() => setShowPassword(!showPassword)}
+              style={styles.eyeIcon}
+            >
+              <Icon
+                name={showPassword ? 'eye-outline' : 'eye-off-outline'}
+                size={20}
+                color="#999"
+              />
+            </TouchableOpacity>
+          </View>
 
-        <Text style={styles.label}>Password</Text>
-        <View style={styles.inputContainer}>
-          <TextInput
-            placeholder="Enter your password"
-            placeholderTextColor="#9ca3af"
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-            style={styles.input}
-            editable={!loading}
-          />
-        </View>
-
-        <TouchableOpacity
-          style={[styles.loginButton, loading && { opacity: 0.7 }]}
-          onPress={handleLogin}
-          disabled={loading}
-        >
-          {loading ? (
-            <ActivityIndicator color="#fff" />
-          ) : (
-            <Text style={styles.loginButtonText}>Login →</Text>
-          )}
-        </TouchableOpacity>
-
-        <View style={styles.registerContainer}>
-          <Text style={styles.registerText}>Don't have an account?</Text>
-          <TouchableOpacity onPress={handleNavigateToRequest} disabled={loading}>
-            <Text style={styles.registerLink}>Send Request</Text>
+          <TouchableOpacity
+            style={[styles.loginButton, loading && styles.loginButtonDisabled]}
+            onPress={handleLogin}
+            disabled={loading}
+          >
+            <LinearGradient
+              colors={['#A1D826', '#8BC220']}
+              style={styles.loginButtonGradient}
+            >
+              {loading ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <>
+                  <Icon name="log-in-outline" size={20} color="#fff" style={{ marginRight: 8 }} />
+                  <Text style={styles.loginButtonText}>Login</Text>
+                </>
+              )}
+            </LinearGradient>
           </TouchableOpacity>
+
+          <View style={styles.divider}>
+            <View style={styles.dividerLine} />
+            <Text style={styles.dividerText}>OR</Text>
+            <View style={styles.dividerLine} />
+          </View>
+
+          <TouchableOpacity
+            style={styles.registerButton}
+            onPress={handleRegister}
+            disabled={loading}
+          >
+            <Text style={styles.registerButtonText}>Don't have an account? Register</Text>
+          </TouchableOpacity>
+
+          {/* Debug Button (Remove in production) */}
+          {__DEV__ && (
+            <TouchableOpacity
+              style={styles.debugButton}
+              onPress={async () => {
+                const token = await AsyncStorage.getItem('authToken');
+                const userId = await AsyncStorage.getItem('userId');
+                const userData = await AsyncStorage.getItem('userData');
+                
+                Alert.alert(
+                  'Debug: Auth Data',
+                  `Token: ${token ? 'Present' : 'Missing'}\nUser ID: ${userId || 'Missing'}\nUser Data: ${userData ? 'Present' : 'Missing'}`,
+                  [
+                    { text: 'Clear All', onPress: async () => {
+                      await AsyncStorage.multiRemove(['authToken', 'userId', 'userData']);
+                      Alert.alert('Cleared', 'All auth data cleared');
+                    }},
+                    { text: 'OK' }
+                  ]
+                );
+              }}
+            >
+              <Text style={styles.debugButtonText}>🔧 Debug Auth Data</Text>
+            </TouchableOpacity>
+          )}
         </View>
       </ScrollView>
-    </View>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "#f8f9fa" },
+  container: {
+    flex: 1,
+    backgroundColor: '#f5f5f5',
+  },
+  scrollContainer: {
+    flexGrow: 1,
+  },
   header: {
-    paddingTop: 80,
-    paddingBottom: 60,
-    paddingHorizontal: 24,
-    backgroundColor: "#afd826",
+    paddingTop: 60,
+    paddingBottom: 40,
+    alignItems: 'center',
     borderBottomLeftRadius: 30,
     borderBottomRightRadius: 30,
-    marginBottom: 40,
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.15,
-    shadowRadius: 12,
-    elevation: 8,
   },
-  logoContainer: { alignItems: "center", marginBottom: 10 },
-  logo: {
-    width: 100,
-    height: 100,
-    backgroundColor: "#fff",
-    borderRadius: 50,
-    justifyContent: "center",
-    alignItems: "center",
-    borderWidth: 3,
-    borderColor: "#afd826",
-    shadowColor: "#000",
-    shadowOpacity: 0.2,
-    shadowRadius: 4,
-    elevation: 5,
+  icon: {
+    marginBottom: 20,
   },
-  logoImage: { width: 60, height: 60 },
-  appSubtitle: {
-    color: "#f0f9d8",
+  title: {
+    fontSize: 32,
+    fontWeight: 'bold',
+    color: '#fff',
+    marginBottom: 8,
+  },
+  subtitle: {
     fontSize: 16,
-    marginTop: 8,
-    fontWeight: "500",
-    textAlign: "center",
+    color: '#fff',
+    opacity: 0.9,
   },
-  formContainer: { paddingHorizontal: 24 },
-  label: { fontWeight: "600", color: "#374151", marginBottom: 8, fontSize: 14 },
+  formContainer: {
+    flex: 1,
+    padding: 24,
+    paddingTop: 40,
+  },
   inputContainer: {
-    backgroundColor: "#fff",
-    borderRadius: 16,
-    paddingHorizontal: 18,
-    paddingVertical: 16,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 12,
     marginBottom: 16,
-    shadowColor: "#000",
+    paddingHorizontal: 16,
+    elevation: 2,
+    shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.06,
-    shadowRadius: 8,
-    elevation: 3,
-    borderWidth: 1,
-    borderColor: "#f3f4f6",
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
   },
-  input: { fontSize: 16, color: "#111827" },
+  inputIcon: {
+    marginRight: 12,
+  },
+  input: {
+    flex: 1,
+    paddingVertical: 16,
+    fontSize: 16,
+    color: '#333',
+  },
+  eyeIcon: {
+    padding: 8,
+  },
   loginButton: {
-    backgroundColor: "#afd826",
-    paddingVertical: 18,
-    borderRadius: 16,
-    alignItems: "center",
-    marginBottom: 24,
-    shadowColor: "#afd826",
+    marginTop: 24,
+    borderRadius: 12,
+    overflow: 'hidden',
+    elevation: 4,
+    shadowColor: '#A1D826',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
-    shadowRadius: 12,
-    elevation: 6,
+    shadowRadius: 8,
   },
-  loginButtonText: { color: "#fff", fontWeight: "800", fontSize: 18, letterSpacing: 0.5 },
-  registerContainer: { flexDirection: "row", justifyContent: "center", alignItems: "center", marginTop: 8, marginBottom: 40 },
-  registerText: { color: "#6b7280", fontSize: 15, fontWeight: "500" },
-  registerLink: { color: "#afd826", fontWeight: "700", fontSize: 15, marginLeft: 4 },
+  loginButtonDisabled: {
+    opacity: 0.6,
+  },
+  loginButtonGradient: {
+    paddingVertical: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexDirection: 'row',
+  },
+  loginButtonText: {
+    color: '#fff',
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
+  divider: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 24,
+  },
+  dividerLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#ddd',
+  },
+  dividerText: {
+    marginHorizontal: 16,
+    color: '#999',
+    fontSize: 14,
+  },
+  registerButton: {
+    paddingVertical: 16,
+    alignItems: 'center',
+  },
+  registerButtonText: {
+    color: '#A1D826',
+    fontSize: 16,
+    fontWeight: '600',
+  },
+  debugButton: {
+    marginTop: 20,
+    padding: 12,
+    backgroundColor: '#FFE5E5',
+    borderRadius: 8,
+    alignItems: 'center',
+  },
+  debugButtonText: {
+    color: '#F44336',
+    fontSize: 14,
+    fontWeight: '600',
+  },
 });

@@ -147,6 +147,211 @@ refreshButton: {
   borderRadius: 20,
   backgroundColor: '#f8f9fa'
 },
+  unreadNotificationCard: {
+    borderLeftWidth: 4,
+    borderLeftColor: '#2196F3',
+    backgroundColor: '#F0F8FF',
+  },
+  
+  unreadTitle: {
+    fontWeight: '700',
+    color: '#000',
+  },
+
+  // Action button
+  actionButton: {
+    marginTop: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: '#E3F2FD',
+    borderRadius: 6,
+    alignSelf: 'flex-start',
+  },
+
+  actionButtonText: {
+    fontSize: 13,
+    color: '#2196F3',
+    fontWeight: '600',
+  },
+
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+
+  modalContent: {
+    width: '90%',
+    maxHeight: '80%',
+    backgroundColor: '#fff',
+    borderRadius: 16,
+    overflow: 'hidden',
+    elevation: 10,
+  },
+
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    padding: 20,
+  },
+
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: '#fff',
+    flex: 1,
+  },
+
+  closeButton: {
+    padding: 4,
+  },
+
+  modalBody: {
+    padding: 20,
+  },
+
+  pollQuestion: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 8,
+  },
+
+  pollClosingTime: {
+    fontSize: 14,
+    color: '#666',
+    marginBottom: 20,
+  },
+
+  // Response buttons
+  responseButtons: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 20,
+  },
+
+  responseButton: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 16,
+    borderRadius: 12,
+    borderWidth: 2,
+    gap: 8,
+  },
+
+  yesButton: {
+    borderColor: '#4CAF50',
+    backgroundColor: '#fff',
+  },
+
+  noButton: {
+    borderColor: '#F44336',
+    backgroundColor: '#fff',
+  },
+
+  selectedButton: {
+    borderWidth: 2,
+  },
+
+  responseButtonText: {
+    fontSize: 15,
+    fontWeight: '600',
+  },
+
+  selectedButtonText: {
+    color: '#fff',
+  },
+
+  // Details section
+  detailsSection: {
+    marginTop: 8,
+  },
+
+  sectionLabel: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: '#333',
+    marginBottom: 12,
+    marginTop: 8,
+  },
+
+  // Time slot buttons
+  timeSlotButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#ddd',
+    backgroundColor: '#fff',
+    marginBottom: 10,
+    gap: 12,
+  },
+
+  selectedTimeSlot: {
+    backgroundColor: '#E3F2FD',
+    borderColor: '#2196F3',
+    borderWidth: 2,
+  },
+
+  timeSlotText: {
+    fontSize: 15,
+    color: '#333',
+  },
+
+  selectedTimeSlotText: {
+    fontWeight: '600',
+    color: '#2196F3',
+  },
+
+  // Pickup input
+  pickupInput: {
+    borderWidth: 1,
+    borderColor: '#ddd',
+    borderRadius: 10,
+    padding: 14,
+    fontSize: 15,
+    color: '#333',
+    backgroundColor: '#fff',
+    marginBottom: 16,
+  },
+
+  // Submit button
+  submitButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#2196F3',
+    padding: 16,
+    borderRadius: 12,
+    gap: 8,
+    marginTop: 8,
+  },
+
+  disabledButton: {
+    backgroundColor: '#ccc',
+    opacity: 0.6,
+  },
+
+  submitButtonText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#fff',
+  },
+
+  // Empty state
+  emptyStateText: {
+    fontSize: 14,
+    color: '#999',
+    marginTop: 8,
+    textAlign: 'center',
+  },
+
 createSampleButton: {
   marginTop: 16,
   paddingHorizontal: 20,

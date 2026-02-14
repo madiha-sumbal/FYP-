@@ -41,7 +41,7 @@ const COLORS = {
 };
 
 // API Base URL - Update this to your server IP
-const API_BASE_URL = 'http://192.168.10.8:3000/api';
+const API_BASE_URL = 'http://192.168.10.12:3000/api';
 
 // ==================== API SERVICE ====================
 const apiService = {
@@ -1148,284 +1148,503 @@ const TransporterDashboard = () => {
     );
   };
     
-  const AssignSection = () => {
-    const [availableDrivers, setAvailableDrivers] = useState([]);
-    const [selectedDriver, setSelectedDriver] = useState(null);
-    const [routeName, setRouteName] = useState('');
-    const [selectedTimeSlot, setSelectedTimeSlot] = useState('');
-    const [startPoint, setStartPoint] = useState('Office');
-    const [destination, setDestination] = useState('Destination');
-    const [isAssigning, setIsAssigning] = useState(false);
+// Updated AssignSection with Google Maps Integration for Start Point & Destination
 
-    useEffect(() => {
-      if (selectedPollForAssignment) {
-        loadAvailableDriversForTomorrow();
-        setRouteName(selectedPollForAssignment.title);
+const AssignSection = () => {
+  const [availableDrivers, setAvailableDrivers] = useState([]);
+  const [selectedDriver, setSelectedDriver] = useState(null);
+  const [routeName, setRouteName] = useState('');
+  const [selectedTimeSlot, setSelectedTimeSlot] = useState('');
+  const [startPoint, setStartPoint] = useState('Office');
+  const [destination, setDestination] = useState('Destination');
+  const [isAssigning, setIsAssigning] = useState(false);
+
+  // Map states
+  const [showStartPointMap, setShowStartPointMap] = useState(false);
+  const [showDestinationMap, setShowDestinationMap] = useState(false);
+  const [startPointCoords, setStartPointCoords] = useState({
+    latitude: 33.6844,
+    longitude: 73.0479,
+  });
+  const [destinationCoords, setDestinationCoords] = useState({
+    latitude: 33.6844,
+    longitude: 73.0479,
+  });
+  const [tempMarker, setTempMarker] = useState(null);
+  const [isLoadingAddress, setIsLoadingAddress] = useState(false);
+
+  useEffect(() => {
+    if (selectedPollForAssignment) {
+      loadAvailableDriversForTomorrow();
+      setRouteName(selectedPollForAssignment.title);
+    }
+  }, [selectedPollForAssignment]);
+
+  const loadAvailableDriversForTomorrow = async () => {
+    try {
+      const tomorrow = new Date();
+      tomorrow.setDate(tomorrow.getDate() + 1);
+      const dateStr = tomorrow.toISOString().split('T')[0];
+      
+      const drivers = await apiService.getAvailableDrivers(dateStr);
+      setAvailableDrivers(drivers);
+    } catch (error) {
+      console.error('Error loading available drivers:', error);
+      setAvailableDrivers([]);
+    }
+  };
+
+  const getAddressFromCoordinates = async (latitude, longitude) => {
+    try {
+      setIsLoadingAddress(true);
+      const response = await fetch(
+        `https://maps.googleapis.com/maps/api/geocode/json?latlng=${latitude},${longitude}&key=${GOOGLE_MAPS_API_KEY}`
+      );
+      const data = await response.json();
+      
+      if (data.results && data.results.length > 0) {
+        return data.results[0].formatted_address;
       }
-    }, [selectedPollForAssignment]);
+      return `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
+    } catch (error) {
+      console.error('Error getting address:', error);
+      return `${latitude.toFixed(4)}, ${longitude.toFixed(4)}`;
+    } finally {
+      setIsLoadingAddress(false);
+    }
+  };
 
-    const loadAvailableDriversForTomorrow = async () => {
-      try {
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        const dateStr = tomorrow.toISOString().split('T')[0];
-        
-        const drivers = await apiService.getAvailableDrivers(dateStr);
-        setAvailableDrivers(drivers);
-      } catch (error) {
-        console.error('Error loading available drivers:', error);
-        setAvailableDrivers([]);
-      }
-    };
+  const handleMapPress = (event) => {
+    const { latitude, longitude } = event.nativeEvent.coordinate;
+    setTempMarker({ latitude, longitude });
+  };
 
-    const handleAssignRoute = async () => {
-      if (!selectedPollForAssignment || !selectedDriver || !routeName || !selectedTimeSlot) {
-        Alert.alert('Error', 'Please fill all required fields');
-        return;
-      }
+  const confirmStartPoint = async () => {
+    if (tempMarker) {
+      setStartPointCoords(tempMarker);
+      const address = await getAddressFromCoordinates(tempMarker.latitude, tempMarker.longitude);
+      setStartPoint(address);
+      setShowStartPointMap(false);
+      setTempMarker(null);
+    }
+  };
 
-      try {
-        setIsAssigning(true);
-        
-        const assignmentData = {
-          driverId: selectedDriver,
-          routeName,
-          timeSlot: selectedTimeSlot,
-          startPoint,
-          destination,
-          pickupTime: selectedTimeSlot
-        };
+  const confirmDestination = async () => {
+    if (tempMarker) {
+      setDestinationCoords(tempMarker);
+      const address = await getAddressFromCoordinates(tempMarker.latitude, tempMarker.longitude);
+      setDestination(address);
+      setShowDestinationMap(false);
+      setTempMarker(null);
+    }
+  };
 
-        await apiService.assignRouteFromPoll(
-          selectedPollForAssignment._id,
-          assignmentData
-        );
+  const handleAssignRoute = async () => {
+    if (!selectedPollForAssignment || !selectedDriver || !routeName || !selectedTimeSlot) {
+      Alert.alert('Error', 'Please fill all required fields');
+      return;
+    }
 
-        Alert.alert(
-          'Success',
-          `Route "${routeName}" has been created and assigned! All passengers and driver have been notified.`,
-          [
-            {
-              text: 'OK',
-              onPress: () => {
-                setRouteName('');
-                setSelectedDriver(null);
-                setSelectedTimeSlot('');
-                setSelectedPollForAssignment(null);
-                loadRoutes();
-                loadTrips();
-              }
+    try {
+      setIsAssigning(true);
+      
+      const assignmentData = {
+        driverId: selectedDriver,
+        routeName,
+        timeSlot: selectedTimeSlot,
+        startPoint,
+        destination,
+        pickupTime: selectedTimeSlot
+      };
+
+      await apiService.assignRouteFromPoll(
+        selectedPollForAssignment._id,
+        assignmentData
+      );
+
+      Alert.alert(
+        'Success',
+        `Route "${routeName}" has been created and assigned! All passengers and driver have been notified.`,
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              setRouteName('');
+              setSelectedDriver(null);
+              setSelectedTimeSlot('');
+              setSelectedPollForAssignment(null);
+              loadRoutes();
+              loadTrips();
             }
-          ]
-        );
-      } catch (error) {
-        console.error('Error assigning route:', error);
-        Alert.alert('Error', 'Failed to assign route. Please try again.');
-      } finally {
-        setIsAssigning(false);
-      }
-    };
+          }
+        ]
+      );
+    } catch (error) {
+      console.error('Error assigning route:', error);
+      Alert.alert('Error', 'Failed to assign route. Please try again.');
+    } finally {
+      setIsAssigning(false);
+    }
+  };
 
-    return (
-      <ScrollView style={styles.section}>
-        <Text style={styles.sectionTitle}>Assign Routes from Polls</Text>
+  return (
+    <ScrollView style={styles.section}>
+      <Text style={styles.sectionTitle}>Assign Routes from Polls</Text>
 
-        {/* Poll Selection */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>Step 1: Select Poll</Text>
-          {polls.filter(p => p.status === 'active').length > 0 ? (
-            polls.filter(p => p.status === 'active').map(poll => {
-              const yesCount = poll.responses?.filter(r => r.response === 'yes').length || 0;
-              return (
-                <TouchableOpacity
-                  key={poll._id}
-                  style={[
-                    styles.pollSelectOption,
-                    selectedPollForAssignment?._id === poll._id && styles.pollSelectOptionActive
-                  ]}
-                  onPress={() => {
-                    setSelectedPollForAssignment(poll);
-                    setRouteName(poll.title);
-                  }}
-                >
-                  <View style={styles.pollSelectContent}>
-                    <Text style={styles.pollSelectTitle}>{poll.title}</Text>
-                    <Text style={styles.pollSelectInfo}>
-                      {yesCount} passengers will travel
-                    </Text>
-                    <Text style={styles.pollSelectInfo}>
-                      Time slots: {poll.timeSlots?.join(', ')}
-                    </Text>
-                  </View>
-                  {selectedPollForAssignment?._id === poll._id && (
-                    <Icon name="check-circle" size={24} color={COLORS.success} />
-                  )}
-                </TouchableOpacity>
-              );
-            })
-          ) : (
-            <View style={styles.emptyState}>
-              <Icon name="poll" size={32} color={COLORS.gray} />
-              <Text style={styles.emptyText}>No active polls available</Text>
+      {/* Poll Selection */}
+      <View style={styles.card}>
+        <Text style={styles.cardTitle}>Step 1: Select Poll</Text>
+        {polls.filter(p => p.status === 'active').length > 0 ? (
+          polls.filter(p => p.status === 'active').map(poll => {
+            const yesCount = poll.responses?.filter(r => r.response === 'yes').length || 0;
+            return (
               <TouchableOpacity
-                style={[styles.primaryBtn, { marginTop: 12 }]}
-                onPress={() => setActiveSection('poll')}
+                key={poll._id}
+                style={[
+                  styles.pollSelectOption,
+                  selectedPollForAssignment?._id === poll._id && styles.pollSelectOptionActive
+                ]}
+                onPress={() => {
+                  setSelectedPollForAssignment(poll);
+                  setRouteName(poll.title);
+                }}
               >
-                <Text style={styles.primaryBtnText}>Create Poll</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-        </View>
-
-        {/* Route Details */}
-        {selectedPollForAssignment && (
-          <>
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>Step 2: Route Details</Text>
-              
-              <Text style={styles.inputLabel}>Route Name</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Enter route name"
-                value={routeName}
-                onChangeText={setRouteName}
-              />
-
-              <Text style={styles.inputLabel}>Start Point</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Enter start point"
-                value={startPoint}
-                onChangeText={setStartPoint}
-              />
-
-              <Text style={styles.inputLabel}>Destination</Text>
-              <TextInput
-                style={styles.input}
-                placeholder="Enter destination"
-                value={destination}
-                onChangeText={setDestination}
-              />
-
-              <Text style={styles.inputLabel}>Select Time Slot</Text>
-              {selectedPollForAssignment.timeSlots?.map((slot, index) => (
-                <TouchableOpacity
-                  key={index}
-                  style={[
-                    styles.timeSlotOption,
-                    selectedTimeSlot === slot && styles.timeSlotSelected
-                  ]}
-                  onPress={() => setSelectedTimeSlot(slot)}
-                >
-                  <View style={[
-                    styles.checkbox,
-                    selectedTimeSlot === slot && styles.checkboxSelected
-                  ]}>
-                    {selectedTimeSlot === slot && (
-                      <Icon name="check" size={16} color={COLORS.white} />
-                    )}
-                  </View>
-                  <Text style={styles.timeSlotLabel}>{slot}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-
-            {/* Driver Selection */}
-            <View style={styles.card}>
-              <Text style={styles.cardTitle}>Step 3: Select Available Driver</Text>
-              
-              {availableDrivers.length > 0 ? (
-                availableDrivers.map((avail, index) => {
-                  const driver = avail.driverId || avail;
-                  return (
-                    <TouchableOpacity
-                      key={index}
-                      style={[
-                        styles.driverOption,
-                        selectedDriver === driver._id && styles.driverOptionSelected
-                      ]}
-                      onPress={() => setSelectedDriver(driver._id)}
-                    >
-                      <View style={[
-                        styles.checkbox,
-                        selectedDriver === driver._id && styles.checkboxSelected
-                      ]}>
-                        {selectedDriver === driver._id && (
-                          <Icon name="check" size={16} color={COLORS.white} />
-                        )}
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.driverName}>
-                          {driver.name || avail.driverName}
-                        </Text>
-                        <Text style={styles.driverDetail}>
-                          📞 {driver.phone || 'N/A'}
-                        </Text>
-                        <Text style={styles.driverDetail}>
-                          🚐 {driver.vehicle || 'Van'} - Capacity: {driver.capacity || 8}
-                        </Text>
-                        {avail.startTime && (
-                          <Text style={styles.driverDetail}>
-                            🕐 Available: {avail.startTime} - {avail.endTime}
-                          </Text>
-                        )}
-                      </View>
-                    </TouchableOpacity>
-                  );
-                })
-              ) : (
-                <View style={styles.emptyState}>
-                  <Icon name="directions-car" size={32} color={COLORS.gray} />
-                  <Text style={styles.emptyText}>No drivers available for tomorrow</Text>
-                  <Text style={styles.emptySubtext}>
-                    Ask drivers to confirm their availability
+                <View style={styles.pollSelectContent}>
+                  <Text style={styles.pollSelectTitle}>{poll.title}</Text>
+                  <Text style={styles.pollSelectInfo}>
+                    {yesCount} passengers will travel
+                  </Text>
+                  <Text style={styles.pollSelectInfo}>
+                    Time slots: {poll.timeSlots?.join(', ')}
                   </Text>
                 </View>
-              )}
+                {selectedPollForAssignment?._id === poll._id && (
+                  <Icon name="check-circle" size={24} color={COLORS.success} />
+                )}
+              </TouchableOpacity>
+            );
+          })
+        ) : (
+          <View style={styles.emptyState}>
+            <Icon name="poll" size={32} color={COLORS.gray} />
+            <Text style={styles.emptyText}>No active polls available</Text>
+            <TouchableOpacity
+              style={[styles.primaryBtn, { marginTop: 12 }]}
+              onPress={() => setActiveSection('poll')}
+            >
+              <Text style={styles.primaryBtnText}>Create Poll</Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
+
+      {/* Route Details */}
+      {selectedPollForAssignment && (
+        <>
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Step 2: Route Details</Text>
+            
+            <Text style={styles.inputLabel}>Route Name</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="Enter route name"
+              value={routeName}
+              onChangeText={setRouteName}
+            />
+
+            {/* Start Point Selection */}
+            <Text style={styles.inputLabel}>Start Point</Text>
+            <View style={styles.locationInputContainer}>
+              <TextInput
+                style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                placeholder="Select start point from map"
+                value={startPoint}
+                editable={false}
+              />
+              <TouchableOpacity
+                style={styles.mapIconButton}
+                onPress={() => {
+                  setTempMarker(startPointCoords);
+                  setShowStartPointMap(true);
+                }}
+              >
+                <Icon name="map" size={24} color={COLORS.primary} />
+              </TouchableOpacity>
             </View>
 
-            {/* Assign Button */}
+            {/* Destination Selection */}
+            <Text style={styles.inputLabel}>Destination</Text>
+            <View style={styles.locationInputContainer}>
+              <TextInput
+                style={[styles.input, { flex: 1, marginBottom: 0 }]}
+                placeholder="Select destination from map"
+                value={destination}
+                editable={false}
+              />
+              <TouchableOpacity
+                style={styles.mapIconButton}
+                onPress={() => {
+                  setTempMarker(destinationCoords);
+                  setShowDestinationMap(true);
+                }}
+              >
+                <Icon name="map" size={24} color={COLORS.primary} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.inputLabel}>Select Time Slot</Text>
+            {selectedPollForAssignment.timeSlots?.map((slot, index) => (
+              <TouchableOpacity
+                key={index}
+                style={[
+                  styles.timeSlotOption,
+                  selectedTimeSlot === slot && styles.timeSlotSelected
+                ]}
+                onPress={() => setSelectedTimeSlot(slot)}
+              >
+                <View style={[
+                  styles.checkbox,
+                  selectedTimeSlot === slot && styles.checkboxSelected
+                ]}>
+                  {selectedTimeSlot === slot && (
+                    <Icon name="check" size={16} color={COLORS.white} />
+                  )}
+                </View>
+                <Text style={styles.timeSlotLabel}>{slot}</Text>
+              </TouchableOpacity>
+            ))}
+          </View>
+
+          {/* Driver Selection */}
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>Step 3: Select Available Driver</Text>
+            
+            {availableDrivers.length > 0 ? (
+              availableDrivers.map((avail, index) => {
+                const driver = avail.driverId || avail;
+                return (
+                  <TouchableOpacity
+                    key={index}
+                    style={[
+                      styles.driverOption,
+                      selectedDriver === driver._id && styles.driverOptionSelected
+                    ]}
+                    onPress={() => setSelectedDriver(driver._id)}
+                  >
+                    <View style={[
+                      styles.checkbox,
+                      selectedDriver === driver._id && styles.checkboxSelected
+                    ]}>
+                      {selectedDriver === driver._id && (
+                        <Icon name="check" size={16} color={COLORS.white} />
+                      )}
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.driverName}>
+                        {driver.name || avail.driverName}
+                      </Text>
+                      <Text style={styles.driverDetail}>
+                        📞 {driver.phone || 'N/A'}
+                      </Text>
+                      <Text style={styles.driverDetail}>
+                        🚐 {driver.vehicle || 'Van'} - Capacity: {driver.capacity || 8}
+                      </Text>
+                      {avail.startTime && (
+                        <Text style={styles.driverDetail}>
+                          🕐 Available: {avail.startTime} - {avail.endTime}
+                        </Text>
+                      )}
+                    </View>
+                  </TouchableOpacity>
+                );
+              })
+            ) : (
+              <View style={styles.emptyState}>
+                <Icon name="directions-car" size={32} color={COLORS.gray} />
+                <Text style={styles.emptyText}>No drivers available for tomorrow</Text>
+                <Text style={styles.emptySubtext}>
+                  Ask drivers to confirm their availability
+                </Text>
+              </View>
+            )}
+          </View>
+
+          {/* Assign Button */}
+          <TouchableOpacity
+            style={[
+              styles.primaryBtn,
+              (!selectedDriver || !selectedTimeSlot || isAssigning) && styles.primaryBtnDisabled
+            ]}
+            onPress={handleAssignRoute}
+            disabled={!selectedDriver || !selectedTimeSlot || isAssigning}
+          >
+            {isAssigning ? (
+              <ActivityIndicator size="small" color={COLORS.white} />
+            ) : (
+              <Text style={styles.primaryBtnText}>
+                Assign Route & Notify All
+              </Text>
+            )}
+          </TouchableOpacity>
+
+          {/* Summary */}
+          <View style={[styles.card, { backgroundColor: '#F0F9D9' }]}>
+            <Text style={styles.summaryTitle}>📋 Assignment Summary</Text>
+            <Text style={styles.summaryText}>
+              • Route: {routeName || 'Not set'}
+            </Text>
+            <Text style={styles.summaryText}>
+              • Start Point: {startPoint}
+            </Text>
+            <Text style={styles.summaryText}>
+              • Destination: {destination}
+            </Text>
+            <Text style={styles.summaryText}>
+              • Driver: {selectedDriver ? 
+                availableDrivers.find(d => (d.driverId?._id || d._id) === selectedDriver)?.driverName || 
+                availableDrivers.find(d => (d.driverId?._id || d._id) === selectedDriver)?.driverId?.name || 
+                'Selected' : 'Not selected'}
+            </Text>
+            <Text style={styles.summaryText}>
+              • Time Slot: {selectedTimeSlot || 'Not selected'}
+            </Text>
+            <Text style={styles.summaryText}>
+              • Passengers: {selectedPollForAssignment.responses?.filter(r => r.response === 'yes').length || 0}
+            </Text>
+          </View>
+        </>
+      )}
+
+      {/* Start Point Map Modal */}
+      <Modal
+        visible={showStartPointMap}
+        animationType="slide"
+        onRequestClose={() => {
+          setShowStartPointMap(false);
+          setTempMarker(null);
+        }}
+      >
+        <SafeAreaView style={styles.mapModalContainer}>
+          <View style={styles.mapModalHeader}>
+            <TouchableOpacity onPress={() => {
+              setShowStartPointMap(false);
+              setTempMarker(null);
+            }}>
+              <Icon name="close" size={28} color={COLORS.black} />
+            </TouchableOpacity>
+            <Text style={styles.mapModalTitle}>Select Start Point</Text>
+            <View style={{ width: 28 }} />
+          </View>
+
+          <MapView
+            provider={PROVIDER_GOOGLE}
+            style={styles.fullMap}
+            initialRegion={{
+              latitude: startPointCoords.latitude,
+              longitude: startPointCoords.longitude,
+              latitudeDelta: 0.05,
+              longitudeDelta: 0.05,
+            }}
+            onPress={handleMapPress}
+          >
+            {tempMarker && (
+              <Marker
+                coordinate={tempMarker}
+                title="Start Point"
+                pinColor={COLORS.success}
+              />
+            )}
+          </MapView>
+
+          <View style={styles.mapModalFooter}>
+            <Text style={styles.mapInstruction}>
+              📍 Tap on the map to select start point
+            </Text>
+            {isLoadingAddress && (
+              <ActivityIndicator size="small" color={COLORS.primary} style={{ marginVertical: 8 }} />
+            )}
             <TouchableOpacity
               style={[
                 styles.primaryBtn,
-                (!selectedDriver || !selectedTimeSlot || isAssigning) && styles.primaryBtnDisabled
+                !tempMarker && styles.primaryBtnDisabled
               ]}
-              onPress={handleAssignRoute}
-              disabled={!selectedDriver || !selectedTimeSlot || isAssigning}
+              onPress={confirmStartPoint}
+              disabled={!tempMarker || isLoadingAddress}
             >
-              {isAssigning ? (
-                <ActivityIndicator size="small" color={COLORS.white} />
-              ) : (
-                <Text style={styles.primaryBtnText}>
-                  Assign Route & Notify All
-                </Text>
-              )}
+              <Text style={styles.primaryBtnText}>
+                {isLoadingAddress ? 'Getting Address...' : 'Confirm Start Point'}
+              </Text>
             </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      </Modal>
 
-            {/* Summary */}
-            <View style={[styles.card, { backgroundColor: '#F0F9D9' }]}>
-              <Text style={styles.summaryTitle}>📋 Assignment Summary</Text>
-              <Text style={styles.summaryText}>
-                • Route: {routeName || 'Not set'}
+      {/* Destination Map Modal */}
+      <Modal
+        visible={showDestinationMap}
+        animationType="slide"
+        onRequestClose={() => {
+          setShowDestinationMap(false);
+          setTempMarker(null);
+        }}
+      >
+        <SafeAreaView style={styles.mapModalContainer}>
+          <View style={styles.mapModalHeader}>
+            <TouchableOpacity onPress={() => {
+              setShowDestinationMap(false);
+              setTempMarker(null);
+            }}>
+              <Icon name="close" size={28} color={COLORS.black} />
+            </TouchableOpacity>
+            <Text style={styles.mapModalTitle}>Select Destination</Text>
+            <View style={{ width: 28 }} />
+          </View>
+
+          <MapView
+            provider={PROVIDER_GOOGLE}
+            style={styles.fullMap}
+            initialRegion={{
+              latitude: destinationCoords.latitude,
+              longitude: destinationCoords.longitude,
+              latitudeDelta: 0.05,
+              longitudeDelta: 0.05,
+            }}
+            onPress={handleMapPress}
+          >
+            {tempMarker && (
+              <Marker
+                coordinate={tempMarker}
+                title="Destination"
+                pinColor={COLORS.danger}
+              />
+            )}
+          </MapView>
+
+          <View style={styles.mapModalFooter}>
+            <Text style={styles.mapInstruction}>
+              📍 Tap on the map to select destination
+            </Text>
+            {isLoadingAddress && (
+              <ActivityIndicator size="small" color={COLORS.primary} style={{ marginVertical: 8 }} />
+            )}
+            <TouchableOpacity
+              style={[
+                styles.primaryBtn,
+                !tempMarker && styles.primaryBtnDisabled
+              ]}
+              onPress={confirmDestination}
+              disabled={!tempMarker || isLoadingAddress}
+            >
+              <Text style={styles.primaryBtnText}>
+                {isLoadingAddress ? 'Getting Address...' : 'Confirm Destination'}
               </Text>
-              <Text style={styles.summaryText}>
-                • Driver: {selectedDriver ? 
-                  availableDrivers.find(d => (d.driverId?._id || d._id) === selectedDriver)?.driverName || 
-                  availableDrivers.find(d => (d.driverId?._id || d._id) === selectedDriver)?.driverId?.name || 
-                  'Selected' : 'Not selected'}
-              </Text>
-              <Text style={styles.summaryText}>
-                • Time Slot: {selectedTimeSlot || 'Not selected'}
-              </Text>
-              <Text style={styles.summaryText}>
-                • Passengers: {selectedPollForAssignment.responses?.filter(r => r.response === 'yes').length || 0}
-              </Text>
-            </View>
-          </>
-        )}
-      </ScrollView>
-    );
-  };
+            </TouchableOpacity>
+          </View>
+        </SafeAreaView>
+      </Modal>
+    </ScrollView>
+  );
+};
 
   const RoutesSection = () => {
     const [routeFilter, setRouteFilter] = useState('all');
@@ -2532,6 +2751,59 @@ const styles = StyleSheet.create({
     marginTop: 12,
     fontWeight: '600',
   },
+  
+  locationInputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    gap: 8,
+  },
+  mapIconButton: {
+    width: 48,
+    height: 48,
+    borderRadius: 12,
+    backgroundColor: '#F0F9D9',
+    justifyContent: 'center',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: COLORS.primary,
+  },
+  mapModalContainer: {
+    flex: 1,
+    backgroundColor: COLORS.white,
+  },
+  mapModalHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: 16,
+    backgroundColor: COLORS.white,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
+    elevation: 3,
+  },
+  mapModalTitle: {
+    fontSize: 20,
+    fontWeight: '700',
+    color: COLORS.black,
+  },
+  fullMap: {
+    flex: 1,
+  },
+  mapModalFooter: {
+    padding: 20,
+    backgroundColor: COLORS.white,
+    borderTopWidth: 1,
+    borderTopColor: '#e0e0e0',
+    elevation: 5,
+  },
+  mapInstruction: {
+    fontSize: 14,
+    color: COLORS.gray,
+    textAlign: 'center',
+    marginBottom: 12,
+  },
+
 });
 
 export default TransporterDashboard;

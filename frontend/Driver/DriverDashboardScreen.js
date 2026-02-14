@@ -20,7 +20,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 const { width, height } = Dimensions.get("window");
 
 // ==================== API CONFIGURATION ====================
-const API_BASE_URL = "http://192.168.10.8:3000/api";
+const API_BASE_URL = "http://192.168.10.12:3000/api";
 const GOOGLE_MAPS_API_KEY = "AIzaSyDiZhjAhYniDLe4Ndr1u87NdDfIdZS6SME";
 
 const UnifiedDriverDashboard = ({ navigation, route }) => {

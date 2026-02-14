@@ -85,6 +85,7 @@ const userSchema = new mongoose.Schema({
   availableTimeSlots: [String],
   experience: String,
   vehicle: String,
+  vehicleNo: String,
   pickupPoint: String,
   destination: String,
   selectedTimeSlot: String,
@@ -280,6 +281,7 @@ const notificationSchema = new mongoose.Schema({
   actionType: String,
   read: { type: Boolean, default: false },
   transporterId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  pollId: { type: mongoose.Schema.Types.ObjectId, ref: 'Poll' },
   createdAt: { type: Date, default: Date.now }
 });
 
@@ -287,22 +289,30 @@ const Notification = mongoose.model('Notification', notificationSchema);
 
 const joinRequestSchema = new mongoose.Schema({
   name: String,
+  fullName: String,
   email: String,
   phone: String,
   password: String,
   type: String,
   vehicle: String,
+  vehicleNo: String,
   capacity: Number,
   experience: String,
   license: String,
   availableTimeSlots: [String],
-  location: String,
+  location: {
+    type: { type: String, default: 'Point' },
+    coordinates: [Number],
+    address: String
+  },
+  address: String,
   pickupPoint: String,
   destination: String,
   preferredTimeSlot: String,
   latitude: Number,
   longitude: Number,
   transporterId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  transporterName: String,
   status: { type: String, default: 'pending' },
   createdAt: { type: Date, default: Date.now }
 });
@@ -323,6 +333,7 @@ const authenticateToken = (req, res, next) => {
     const decoded = jwt.verify(token, JWT_SECRET);
     req.userId = decoded.userId;
     req.userRole = decoded.role;
+    req.user = decoded; // Add full user object for convenience
     next();
   } catch (error) {
     return res.status(403).json({ success: false, message: 'Invalid or expired token' });
@@ -348,7 +359,8 @@ async function sendNotification(userId, userRole, title, message, type, relatedI
       relatedType,
       actionRequired,
       actionType,
-      transporterId: user.transporterId || userId
+      transporterId: user.transporterId || userId,
+      pollId: relatedType === 'poll' ? relatedId : null
     });
 
     await notification.save();
@@ -368,7 +380,8 @@ function getIconForType(type) {
     'alert': 'warning',
     'complaint': 'alert-circle',
     'feedback': 'star',
-    'general': 'notifications'
+    'general': 'notifications',
+    'request': 'person-add'
   };
   return icons[type] || 'notifications';
 }
@@ -381,7 +394,8 @@ function getColorForType(type) {
     'alert': '#FF9800',
     'complaint': '#F44336',
     'feedback': '#FFD700',
-    'general': '#9E9E9E'
+    'general': '#9E9E9E',
+    'request': '#9C27B0'
   };
   return colors[type] || '#9E9E9E';
 }
@@ -442,6 +456,7 @@ app.post('/api/auth/login', async (req, res) => {
       transporterId: user.transporterId,
       license: user.license,
       van: user.van,
+      vehicleNo: user.vehicleNo,
       capacity: user.capacity,
       vehicle: user.vehicle,
       experience: user.experience,
@@ -461,6 +476,186 @@ app.post('/api/auth/login', async (req, res) => {
   } catch (error) {
     console.error("❌ Login error:", error);
     res.status(500).json({ success: false, message: 'Server error' });
+  }
+});
+
+// ==================== DRIVER REGISTRATION ENDPOINT ====================
+
+app.post('/api/driver-requests', async (req, res) => {
+  try {
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    console.log("📥 DRIVER REQUEST RECEIVED");
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    console.log("📦 Request Body:", JSON.stringify(req.body, null, 2));
+    
+    const { 
+      fullName, 
+      email, 
+      phone, 
+      password, 
+      license, 
+      vehicleNo,
+      address,
+      location,
+      transporterId,
+      transporterName
+    } = req.body;
+
+    // Validation
+    if (!fullName || !email || !phone || !password || !license || !vehicleNo || !transporterId) {
+      console.log("❌ VALIDATION FAILED - Missing required fields");
+      const missing = [];
+      if (!fullName) missing.push('fullName');
+      if (!email) missing.push('email');
+      if (!phone) missing.push('phone');
+      if (!password) missing.push('password');
+      if (!license) missing.push('license');
+      if (!vehicleNo) missing.push('vehicleNo');
+      if (!transporterId) missing.push('transporterId');
+      
+      return res.status(400).json({ 
+        success: false, 
+        message: `Missing required fields: ${missing.join(', ')}` 
+      });
+    }
+
+    console.log("✅ All required fields present");
+
+    // Check if email already exists
+    console.log("🔍 Checking if email exists:", email);
+    const existingUser = await User.findOne({ email: email.toLowerCase() });
+    const existingRequest = await JoinRequest.findOne({ email: email.toLowerCase(), status: 'pending' });
+    
+    if (existingUser) {
+      console.log("❌ Email already registered as user");
+      return res.status(400).json({ 
+        success: false, 
+        message: 'Email already registered. Please use a different email or login.' 
+      });
+    }
+
+    if (existingRequest) {
+      console.log("⚠️ Pending request already exists");
+      return res.status(400).json({ 
+        success: false, 
+        message: 'A pending request already exists for this email. Please wait for approval.' 
+      });
+    }
+
+    console.log("✅ Email is available");
+
+    // Verify transporter exists
+    console.log("🔍 Verifying transporter:", transporterId);
+    const transporter = await User.findById(transporterId);
+    
+    if (!transporter) {
+      console.log("❌ Transporter not found");
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Selected transporter not found' 
+      });
+    }
+
+    console.log("✅ Transporter verified:", transporter.name || transporter.company);
+
+    // Extract coordinates
+    let latitude = null;
+    let longitude = null;
+    
+    if (location && location.coordinates && location.coordinates.length === 2) {
+      longitude = location.coordinates[0];
+      latitude = location.coordinates[1];
+    }
+
+    // Create driver request
+    console.log("📝 Creating driver request...");
+    const newRequest = new JoinRequest({
+      name: fullName.trim(),
+      fullName: fullName.trim(),
+      email: email.trim().toLowerCase(),
+      phone: phone.trim(),
+      password: password.trim(),
+      type: 'driver',
+      license: license.trim().toUpperCase(),
+      vehicleNo: vehicleNo.trim().toUpperCase(),
+      vehicle: vehicleNo.trim().toUpperCase(),
+      address: address || location?.address || 'Not provided',
+      location: location || {},
+      latitude: latitude,
+      longitude: longitude,
+      pickupPoint: address || location?.address || 'Not provided',
+      transporterId: transporterId,
+      transporterName: transporterName || transporter.name || transporter.company || 'Transporter',
+      status: 'pending',
+      createdAt: new Date()
+    });
+
+    console.log("💾 Saving request to database...");
+    await newRequest.save();
+    
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    console.log("✅✅✅ DRIVER REQUEST CREATED SUCCESSFULLY ✅✅✅");
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    console.log("📊 Request Details:");
+    console.log("  - Request ID:", newRequest._id);
+    console.log("  - Driver Name:", fullName);
+    console.log("  - Email:", email);
+    console.log("  - License:", license);
+    console.log("  - Vehicle:", vehicleNo);
+    console.log("  - Transporter:", transporterName || transporter.name);
+    console.log("  - Status:", newRequest.status);
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+
+    // Send notification to transporter
+    try {
+      await sendNotification(
+        transporterId,
+        'transporter',
+        'New Driver Request',
+        `${fullName} has requested to join as a driver. License: ${license}, Vehicle: ${vehicleNo}`,
+        'request',
+        newRequest._id,
+        'driver_request',
+        true,
+        'review_driver_request'
+      );
+      console.log("✅ Notification sent to transporter");
+    } catch (notifError) {
+      console.error("⚠️ Failed to send notification:", notifError.message);
+      // Don't fail the request if notification fails
+    }
+    
+    res.status(201).json({ 
+      success: true, 
+      message: 'Driver request submitted successfully! You will be notified once approved.',
+      requestId: newRequest._id,
+      request: {
+        id: newRequest._id,
+        name: newRequest.name,
+        email: newRequest.email,
+        phone: newRequest.phone,
+        license: newRequest.license,
+        vehicleNo: newRequest.vehicleNo,
+        status: newRequest.status,
+        transporterName: newRequest.transporterName,
+        createdAt: newRequest.createdAt
+      }
+    });
+    
+  } catch (error) {
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    console.log("❌❌❌ DRIVER REQUEST ERROR ❌❌❌");
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    console.error("Error Name:", error.name);
+    console.error("Error Message:", error.message);
+    console.error("Error Stack:", error.stack);
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to submit driver request. Please try again.',
+      error: error.message 
+    });
   }
 });
 
@@ -639,7 +834,11 @@ app.post('/api/polls', authenticateToken, async (req, res) => {
     
     const targetTransporterId = transporterId || req.userId;
     
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     console.log("📊 Creating poll for transporter:", targetTransporterId);
+    console.log("  - Title:", title);
+    console.log("  - Time Slots:", timeSlots);
+    console.log("  - Closes At:", closesAt);
     
     const newPoll = new Poll({
       title: title || 'Tomorrow Travel Confirmation',
@@ -653,38 +852,71 @@ app.post('/api/polls', authenticateToken, async (req, res) => {
     });
     
     await newPoll.save();
+    console.log("✅ Poll created:", newPoll._id);
     
+    // Get all active passengers for this transporter
     const passengers = await User.find({ 
       $or: [{ role: 'passenger' }, { type: 'passenger' }],
       transporterId: targetTransporterId,
       status: 'active'
     });
     
-    console.log(`📨 Sending poll notifications to ${passengers.length} passengers`);
+    console.log(`📨 Found ${passengers.length} active passengers`);
     
+    if (passengers.length === 0) {
+      console.log("⚠️ No active passengers found");
+      return res.json({ 
+        success: true, 
+        poll: newPoll, 
+        notificationsSent: 0,
+        message: 'Poll created but no active passengers found' 
+      });
+    }
+    
+    // Send notifications to all passengers
+    let notificationsSent = 0;
     for (const passenger of passengers) {
-      await sendNotification(
-        passenger._id,
-        'passenger',
-        'Travel Confirmation Required',
-        `${title || 'Will you travel tomorrow?'} Please respond by ${closesAt}`,
-        'poll',
-        newPoll._id,
-        'poll',
-        true,
-        'respond_poll'
-      );
+      try {
+        await sendNotification(
+          passenger._id,
+          'passenger',
+          '📋 Travel Confirmation Required',
+          `${title || 'Will you travel tomorrow?'} Please respond by ${closesAt}. Time slots: ${timeSlots.join(', ')}`,
+          'poll',
+          newPoll._id,
+          'poll',
+          true,
+          'respond_poll'
+        );
+        notificationsSent++;
+        console.log(`✅ Notification sent to: ${passenger.name} (${passenger.email})`);
+      } catch (notifErr) {
+        console.error(`⚠️ Failed to send notification to ${passenger.name}:`, notifErr);
+      }
     }
     
     newPoll.notificationsSent = true;
     await newPoll.save();
     
-    console.log("✅ Poll created and notifications sent");
+    console.log(`✅ Poll created successfully! Notifications sent: ${notificationsSent}/${passengers.length}`);
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     
-    res.json({ success: true, poll: newPoll, notificationsSent: passengers.length });
+    res.json({ 
+      success: true, 
+      poll: newPoll, 
+      notificationsSent: notificationsSent,
+      totalPassengers: passengers.length,
+      message: `Poll created and ${notificationsSent} passengers notified!`
+    });
+    
   } catch (error) {
     console.error('❌ Error creating poll:', error);
-    res.status(500).json({ success: false, message: 'Error creating poll' });
+    console.error('Stack:', error.stack);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error creating poll',
+      error: error.message 
+    });
   }
 });
 
@@ -776,6 +1008,66 @@ app.get('/api/polls/active', authenticateToken, async (req, res) => {
       success: false, 
       message: 'Error fetching polls',
       error: error.message 
+    });
+  }
+});
+
+// FIXED: Get single poll by ID (changed from router to app)
+app.get('/api/polls/:pollId', authenticateToken, async (req, res) => {
+  try {
+    const { pollId } = req.params;
+    const passengerId = req.userId;
+
+    console.log('📊 Fetching poll:', pollId, 'for passenger:', passengerId);
+
+    // Find the poll
+    const poll = await Poll.findById(pollId);
+
+    if (!poll) {
+      return res.status(404).json({
+        success: false,
+        message: 'Poll not found'
+      });
+    }
+
+    // Check if poll is still active
+    const now = new Date();
+    const closingDate = new Date(poll.closingDate);
+
+    if (now > closingDate || poll.status !== 'active') {
+      return res.status(400).json({
+        success: false,
+        message: 'This poll has been closed'
+      });
+    }
+
+    // Return poll with responses (needed to check if user already responded)
+    const pollData = {
+      _id: poll._id,
+      title: poll.title,
+      question: poll.question || 'Will you travel tomorrow?',
+      timeSlots: poll.timeSlots || [],
+      closesAt: poll.closesAt,
+      closingDate: poll.closingDate,
+      status: poll.status,
+      transporterId: poll.transporterId,
+      responses: poll.responses || [], // CRITICAL: Include all responses
+      createdAt: poll.createdAt
+    };
+
+    console.log('✅ Poll found with', poll.responses?.length || 0, 'responses');
+
+    res.json({
+      success: true,
+      poll: pollData
+    });
+
+  } catch (error) {
+    console.error('❌ Error fetching poll:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch poll',
+      error: error.message
     });
   }
 });
@@ -955,8 +1247,6 @@ app.get('/api/polls/:pollId/responses', authenticateToken, async (req, res) => {
   }
 });
 
-// ==================== PART 2 STARTS HERE ====================
-
 // ==================== DRIVER AVAILABILITY APIs ====================
 
 app.post('/api/availability', authenticateToken, async (req, res) => {
@@ -1115,33 +1405,57 @@ app.post('/api/routes/assign', authenticateToken, async (req, res) => {
   try {
     const { pollId, driverId, routeName, startPoint, destination, timeSlot, pickupTime, date } = req.body;
     
-    console.log("📍 Assigning route to driver:", driverId);
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    console.log("📍 ROUTE ASSIGNMENT REQUEST");
+    console.log("  - Poll ID:", pollId);
+    console.log("  - Driver ID:", driverId);
+    console.log("  - Route Name:", routeName);
+    console.log("  - Time Slot:", timeSlot);
+    console.log("  - Date:", date);
     
     const poll = await Poll.findById(pollId);
     
     if (!poll) {
+      console.log("❌ Poll not found");
       return res.status(404).json({ success: false, message: 'Poll not found' });
     }
     
     const yesResponses = poll.responses.filter(r => r.response === 'yes');
     
+    console.log(`✓ Found ${yesResponses.length} passengers who confirmed travel`);
+    
     if (yesResponses.length === 0) {
+      console.log("❌ No passengers confirmed travel");
       return res.status(400).json({ success: false, message: 'No passengers confirmed travel' });
     }
     
+    // Make driver availability check optional
+    const requestedDate = new Date(date);
+    console.log("🔍 Checking driver availability for:", requestedDate.toISOString());
+    
     const driverAvailability = await DriverAvailability.findOne({
       driverId,
-      date: new Date(date),
+      date: requestedDate,
       status: 'available',
       confirmed: true
     });
     
     if (!driverAvailability) {
-      return res.status(400).json({ success: false, message: 'Driver not available for this date' });
+      console.log("⚠️ No confirmed availability found for driver, proceeding anyway...");
+    } else {
+      console.log("✅ Driver availability confirmed");
     }
     
     const driver = await User.findById(driverId);
     
+    if (!driver) {
+      console.log("❌ Driver not found");
+      return res.status(404).json({ success: false, message: 'Driver not found' });
+    }
+    
+    console.log("✓ Driver found:", driver.name);
+    
+    // Map passengers properly
     const passengers = yesResponses.map(r => ({
       passengerId: r.passengerId,
       passengerName: r.passengerName,
@@ -1149,8 +1463,13 @@ app.post('/api/routes/assign', authenticateToken, async (req, res) => {
       status: 'pending'
     }));
     
+    console.log(`✓ Mapped ${passengers.length} passengers`);
+    
     const stops = [...new Set(passengers.map(p => p.pickupPoint))];
     
+    console.log(`✓ Created ${stops.length} unique stops`);
+    
+    // Create route
     const newRoute = new Route({
       name: routeName,
       routeName,
@@ -1164,11 +1483,13 @@ app.post('/api/routes/assign', authenticateToken, async (req, res) => {
       passengers,
       status: 'assigned',
       transporterId: driver.transporterId,
-      date: new Date(date)
+      date: requestedDate
     });
     
     await newRoute.save();
+    console.log("✅ Route created:", newRoute._id);
     
+    // Create trip
     const newTrip = new Trip({
       driverId,
       driverName: driver.name,
@@ -1192,43 +1513,71 @@ app.post('/api/routes/assign', authenticateToken, async (req, res) => {
       timeSlot,
       capacity: driver.capacity || 8,
       vehicleType: driver.vehicle || 'Van',
-      vehicleNumber: driver.van || 'N/A',
+      vehicleNumber: driver.van || driver.vehicleNo || 'N/A',
       transporterId: driver.transporterId
     });
     
     await newTrip.save();
+    console.log("✅ Trip created:", newTrip._id);
     
-    await sendNotification(
-      driverId,
-      'driver',
-      'Route Assigned',
-      `You have been assigned to ${routeName} with ${passengers.length} passengers for ${new Date(date).toLocaleDateString()}`,
-      'route',
-      newRoute._id,
-      'route',
-      true,
-      'confirm_route'
-    );
-    
-    for (const passenger of passengers) {
+    // Send notification to driver
+    try {
       await sendNotification(
-        passenger.passengerId,
-        'passenger',
-        'Route Confirmed',
-        `Your route has been confirmed! Driver: ${driver.name}, Pickup: ${pickupTime}`,
+        driverId,
+        'driver',
+        'Route Assigned! 🚐',
+        `You have been assigned to ${routeName} with ${passengers.length} passengers for ${requestedDate.toLocaleDateString()}`,
         'route',
         newRoute._id,
         'route',
-        false
+        true,
+        'confirm_route'
       );
+      console.log("✅ Notification sent to driver");
+    } catch (notifErr) {
+      console.error("⚠️ Failed to send driver notification:", notifErr);
     }
     
-    console.log(`✅ Route assigned: ${routeName} to ${driver.name} with ${passengers.length} passengers`);
+    // Send notifications to all passengers
+    let notificationsSent = 0;
+    for (const passenger of passengers) {
+      try {
+        await sendNotification(
+          passenger.passengerId,
+          'passenger',
+          'Route Confirmed! ✓',
+          `Your route has been confirmed! Driver: ${driver.name}, Pickup: ${pickupTime}. Time slot: ${timeSlot}`,
+          'route',
+          newRoute._id,
+          'route',
+          false
+        );
+        notificationsSent++;
+        console.log(`✅ Notification sent to passenger: ${passenger.passengerName}`);
+      } catch (notifErr) {
+        console.error(`⚠️ Failed to send notification to ${passenger.passengerName}:`, notifErr);
+      }
+    }
     
-    res.json({ success: true, route: newRoute, trip: newTrip, message: 'Route assigned successfully' });
+    console.log(`✅ Route assigned successfully! Notifications sent: ${notificationsSent}/${passengers.length}`);
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    
+    res.json({ 
+      success: true, 
+      route: newRoute, 
+      trip: newTrip, 
+      message: `Route assigned successfully! ${notificationsSent} passengers notified.`,
+      notificationsSent: notificationsSent
+    });
+    
   } catch (error) {
     console.error('❌ Error assigning route:', error);
-    res.status(500).json({ success: false, message: 'Error assigning route' });
+    console.error('Stack:', error.stack);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Error assigning route',
+      error: error.message 
+    });
   }
 });
 
@@ -2075,69 +2424,80 @@ app.put('/api/join-requests/:requestId/accept', authenticateToken, async (req, r
       return res.status(400).json({ success: false, message: 'Invalid request' });
     }
 
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    console.log("✅ Approving request:", request.email);
+
     request.status = 'accepted';
     await request.save();
 
+    // Create user with all fields properly mapped
     const newUser = new User({
-      name: request.name,
+      name: request.name || request.fullName,
       email: request.email,
       phone: request.phone,
       password: request.password,
       role: request.type,
       type: request.type,
-      vehicle: request.vehicle,
-      capacity: request.capacity,
-      experience: request.experience,
+      // Driver-specific fields
+      vehicle: request.vehicle || request.vehicleNo,
+      vehicleNo: request.vehicleNo,
+      van: request.vehicleNo, // Set van field for backward compatibility
+      capacity: request.capacity || 8,
+      experience: request.experience || 'New',
       license: request.license,
-      availableTimeSlots: request.availableTimeSlots,
-      pickupPoint: request.pickupPoint,
+      availableTimeSlots: request.availableTimeSlots || [],
+      // Location fields
+      pickupPoint: request.pickupPoint || request.address,
       destination: request.destination,
       preferredTimeSlot: request.preferredTimeSlot,
       latitude: request.latitude,
       longitude: request.longitude,
+      address: request.address || request.pickupPoint,
+      // Transporter link
       transporterId: request.transporterId,
-      status: 'active'
+      status: 'active',
+      registrationDate: new Date()
     });
 
     await newUser.save();
     
+    console.log("✅ User created successfully:");
+    console.log("  - ID:", newUser._id);
+    console.log("  - Email:", newUser.email);
+    console.log("  - Role:", newUser.role);
+    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
+    
     await sendNotification(
       newUser._id,
       newUser.role,
-      'Request Approved',
-      'Your registration request has been approved!',
+      'Request Approved! 🎉',
+      'Your registration has been approved! You can now login to your account.',
       'confirmation',
       null,
       null,
       false
     );
     
-    console.log("✅ Request approved:", newUser.email);
+    console.log("✅ Notification sent to user");
     
-    res.json({ success: true, message: 'Request accepted', user: newUser });
+    res.json({ 
+      success: true, 
+      message: 'Request accepted successfully', 
+      user: {
+        id: newUser._id,
+        _id: newUser._id,
+        name: newUser.name,
+        email: newUser.email,
+        phone: newUser.phone,
+        role: newUser.role,
+        type: newUser.type,
+        status: newUser.status,
+        transporterId: newUser.transporterId
+      }
+    });
   } catch (error) {
-    console.error('Error accepting request:', error);
+    console.error('❌ Error accepting request:', error);
     res.status(500).json({ success: false, message: 'Error accepting request' });
-  }
-});
-
-app.put('/api/join-requests/:requestId/reject', authenticateToken, async (req, res) => {
-  try {
-    const request = await JoinRequest.findById(req.params.requestId);
-    
-    if (!request) {
-      return res.status(404).json({ success: false, message: 'Request not found' });
-    }
-
-    request.status = 'rejected';
-    await request.save();
-    
-    console.log("✅ Request rejected");
-    
-    res.json({ success: true, message: 'Request rejected' });
-  } catch (error) {
-    console.error('Error rejecting request:', error);
-    res.status(500).json({ success: false, message: 'Error rejecting request' });
   }
 });
 
@@ -2177,7 +2537,7 @@ app.post('/api/payments', authenticateToken, async (req, res) => {
   }
 });
 
-// ==================== 🔥 FIXED TRANSPORTER REGISTRATION (WITH IMAGE UPLOAD) ====================
+// ==================== TRANSPORTER REGISTRATION (WITH IMAGE UPLOAD) ====================
 
 app.post('/api/transporter/register', upload.single('profileImage'), async (req, res) => {
   try {
@@ -2388,15 +2748,17 @@ app.get('/api/health', (req, res) => {
     message: 'Server Working ✅',
     timestamp: new Date().toISOString(),
     features: [
-      'Poll System',
+      'Poll System with Notifications ✅',
       'Driver Availability',
       'Route Assignment',
       'Morning Confirmation',
       'Real-time Tracking',
       'Complaints',
       'Feedback',
-      'Notifications',
-      'Image Upload Support ✅'
+      'Notifications System Active',
+      'Image Upload Support ✅',
+      'Driver Registration Fixed ✅',
+      'Router Issues Fixed ✅'
     ]
   });
 });
@@ -2411,9 +2773,9 @@ app.listen(PORT, '0.0.0.0', () => {
 ║  🔌 PORT: ${PORT}                              ║
 ║  ✅ All APIs Working                           ║
 ║  ✅ JWT Authentication Enabled                 ║
-║  ✅ Poll System Active                         ║
+║  ✅ Poll System + Notifications Active ✅      ║
 ║  ✅ Real-time Tracking Active                  ║
-║  ✅ Notifications System Active                ║
+║  ✅ Router Issues Fixed ✅                     ║
 ║  ✅ Image Upload Support Active 📷            ║
 ╚════════════════════════════════════════════════╝
   `);

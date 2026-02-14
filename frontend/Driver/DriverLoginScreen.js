@@ -1,9 +1,10 @@
-// DriverLoginScreen.js
+// DriverLoginScreen.js - FIXED VERSION
 import React, { useState, useEffect } from "react";
 import { 
   View, Text, TextInput, TouchableOpacity, ScrollView, Alert, ActivityIndicator 
 } from "react-native";
 import { authAPI, setAuthToken, getAuthToken } from './apiService';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const DriverLoginScreen = ({ navigation }) => {
   const [email, setEmail] = useState("");
@@ -11,82 +12,105 @@ const DriverLoginScreen = ({ navigation }) => {
   const [loading, setLoading] = useState(false);
   const [checkingLogin, setCheckingLogin] = useState(true);
 
-  // Check if user is already logged in
   useEffect(() => {
+    let isMounted = true;
+    
+    const checkExistingLogin = async () => {
+      try {
+        const token = await getAuthToken();
+        const userId = await AsyncStorage.getItem('userId');
+        
+        if (token && userId && isMounted) {
+          console.log('✅ Found existing session, navigating to dashboard...');
+          navigation.replace('DriverDashboard');
+        }
+      } catch (error) {
+        console.error('Error checking existing login:', error);
+      } finally {
+        if (isMounted) {
+          setCheckingLogin(false);
+        }
+      }
+    };
+
     checkExistingLogin();
+    
+    return () => {
+      isMounted = false;
+    };
   }, []);
 
-  const checkExistingLogin = async () => {
+  const handleLogin = async () => {
+    if (!email || !password) {
+      Alert.alert("Error", "Please enter both email and password.");
+      return;
+    }
+
+    if (!email.includes('@')) {
+      Alert.alert("Error", "Please enter a valid email address.");
+      return;
+    }
+
+    setLoading(true);
     try {
-      const token = await getAuthToken();
-      if (token) {
-        navigation.replace("DriverDashboard");
+      console.log('🔄 Attempting login with:', { email: email.toLowerCase().trim() });
+      
+      const response = await authAPI.login(email, password);
+      
+      console.log('✅ Login response:', response.data);
+      
+      if (response.data.success) {
+        // ✅ FIXED: Get driver data (mapped from user in apiService)
+        const driverData = response.data.driver || response.data.user;
+        
+        if (!driverData || !driverData.id) {
+          throw new Error('Invalid user data received');
+        }
+
+        // Store auth data
+        await setAuthToken(response.data.token);
+        await AsyncStorage.setItem('userId', driverData.id);
+        await AsyncStorage.setItem('userData', JSON.stringify(driverData));
+        
+        console.log('✅ Auth data stored successfully');
+        console.log('  - User ID:', driverData.id);
+        console.log('  - Role:', driverData.role);
+
+        // Navigate to dashboard
+        navigation.replace('DriverDashboard', {
+          driver: driverData
+        });
+        
+        Alert.alert("Success", "Logged in successfully!");
+      } else {
+        Alert.alert("Login Failed", response.data.message || "Unknown error occurred");
       }
     } catch (error) {
-      console.error('Error checking existing login:', error);
+      console.error('❌ Login error details:', error);
+      
+      let errorMessage = "Login failed. Please try again.";
+      
+      if (error.code === 'NETWORK_ERROR' || error.message?.includes('Network Error')) {
+        errorMessage = "Cannot connect to server. Please check:\n• Your internet connection\n• Server is running\n• Correct server IP address";
+      } else if (error.response?.status === 400) {
+        errorMessage = error.response.data?.message || "Invalid email or password format";
+      } else if (error.response?.status === 401) {
+        errorMessage = "Invalid email or password";
+      } else if (error.response?.status === 403) {
+        errorMessage = error.response.data?.message || "This account is not registered as a driver";
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      Alert.alert("Login Error", errorMessage);
     } finally {
-      setCheckingLogin(false);
+      setLoading(false);
     }
   };
 
- const handleLogin = async () => {
-  if (!email || !password) {
-    Alert.alert("Error", "Please enter both email and password.");
-    return;
-  }
-
-  if (!email.includes('@')) {
-    Alert.alert("Error", "Please enter a valid email address.");
-    return;
-  }
-
-  setLoading(true);
-  try {
-    console.log('🔄 Attempting login with:', { email: email.toLowerCase().trim() });
-    
-    const response = await authAPI.login(email, password);
-    
-    console.log('✅ Login response:', response.data);
-    
-    if (response.data.success) {
-      await setAuthToken(response.data.token);
-
-      // Navigate to dashboard
-      navigation.navigate('Driver', {
-        screen: 'DriverDashboard',
-        params: { driver: response.data.driver },
-      });
-      
-      Alert.alert("Success", "Logged in successfully!");
-    } else {
-      Alert.alert("Login Failed", response.data.message || "Unknown error occurred");
-    }
-  } catch (error) {
-    console.error('❌ Login error details:', {
-      code: error.code,
-      message: error.message,
-      response: error.response?.data,
-      status: error.response?.status,
-      url: error.config?.url
-    });
-    
-    let errorMessage = "Login failed. Please try again.";
-    
-    if (error.code === 'NETWORK_ERROR' || error.message?.includes('Network Error')) {
-      errorMessage = "Cannot connect to server. Please check:\n• Your internet connection\n• Server is running\n• Correct server IP address";
-    } else if (error.response?.status === 400) {
-      errorMessage = error.response.data?.message || "Invalid email or password format";
-    } else if (error.response?.status === 401) {
-      errorMessage = "Invalid email or password";
-    } else if (error.response?.data?.message) {
-      errorMessage = error.response.data.message;
-    }
-    
-    Alert.alert("Login Error", errorMessage);
-  } finally {
-    setLoading(false);
-  }
-};
+  const handleRegisterPress = () => {
+    navigation.navigate('DriverRegistration');
+  };
 
   const styles = {
     container: { 
@@ -195,22 +219,6 @@ const DriverLoginScreen = ({ navigation }) => {
       fontSize: 15,
       marginLeft: 4
     },
-    divider: {
-      flexDirection: "row",
-      alignItems: "center",
-      marginVertical: 32
-    },
-    dividerLine: {
-      flex: 1,
-      height: 1,
-      backgroundColor: "#e5e7eb"
-    },
-    dividerText: {
-      marginHorizontal: 16,
-      color: "#9ca3af",
-      fontSize: 14,
-      fontWeight: "500"
-    },
     loadingContainer: {
       flex: 1,
       justifyContent: 'center',
@@ -230,7 +238,6 @@ const DriverLoginScreen = ({ navigation }) => {
 
   return (
     <View style={styles.container}>
-      {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>Welcome Back</Text>
         <Text style={styles.headerSubtitle}>Login to your driver account</Text>
@@ -241,7 +248,6 @@ const DriverLoginScreen = ({ navigation }) => {
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        {/* Email */}
         <Text style={styles.label}>Email Address</Text>
         <View style={styles.inputContainer}>
           <TextInput
@@ -256,7 +262,6 @@ const DriverLoginScreen = ({ navigation }) => {
           />
         </View>
 
-        {/* Password */}
         <Text style={styles.label}>Password</Text>
         <View style={styles.inputContainer}>
           <TextInput
@@ -270,7 +275,6 @@ const DriverLoginScreen = ({ navigation }) => {
           />
         </View>
 
-        {/* Forgot Password */}
         <TouchableOpacity 
           style={styles.forgotPassword}
           onPress={() => Alert.alert("Forgot Password", "Password recovery feature will be implemented soon.")}
@@ -279,7 +283,6 @@ const DriverLoginScreen = ({ navigation }) => {
           <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
         </TouchableOpacity>
 
-        {/* Login Button */}
         <TouchableOpacity
           onPress={handleLogin}
           style={[styles.loginButton, loading && { opacity: 0.7 }]}
@@ -292,11 +295,10 @@ const DriverLoginScreen = ({ navigation }) => {
           )}
         </TouchableOpacity>
 
-        {/* Sign Up */}
         <View style={styles.signupContainer}>
           <Text style={styles.signupText}>Don't have an account?</Text>
           <TouchableOpacity 
-            onPress={() => navigation.navigate("DriverRegistration")}
+            onPress={handleRegisterPress}
             disabled={loading}
           >
             <Text style={styles.signupLink}>Register</Text>

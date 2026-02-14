@@ -3,13 +3,12 @@ import { NavigationContainer } from "@react-navigation/native";
 import { createStackNavigator } from "@react-navigation/stack";
 import { createDrawerNavigator } from "@react-navigation/drawer";
 import React from 'react';
-
+import { Ionicons } from '@expo/vector-icons';
 // Screens
 import Onboarding from "./frontend/screens/Onboarding";
 import WelcomeScreen from "./frontend/screens/WelcomeScreen";
 import LoginScreen from "./frontend/screens/LoginScreen";
 import DashboardRegisterScreen from "./frontend/screens/DashboardRegisterScreen";
-import DriverRegisterScreen from "./frontend/screens/DriverRegisterScreen";
 import TransporterRegisterScreen from "./frontend/screens/TransporterRegisterScreen";
 import TransporterLoginScreen from "./frontend/screens/TransporterLoginScreen";
 
@@ -18,7 +17,6 @@ import PassengerAppNavigation from "./frontend/Passenger/screens/PassengerAppNav
 import PassengerLoginScreen from "./frontend/Passenger/screens/PassengerLoginScreen";
 import PassengerRequestScreen from "./frontend/Passenger/screens/PassengerRequestScreen";
 import AlertScreen from './frontend/Passenger/screens/AlertScreen';
-
 
 // Transporter Screens
 import TransporterDashboardScreen from "./frontend/Transporter/TransporterDashboard";
@@ -64,11 +62,31 @@ function TransporterDrawer() {
         drawerStyle: { backgroundColor: "#fff", width: 240 },
       }}
     >
-      <Drawer.Screen name="Dashboard" component={TransporterDashboardScreen} />
-      <Drawer.Screen name="Passenger List" component={PassengerList} />
-      <Drawer.Screen name="Driver List" component={DriverList} />
-      <Drawer.Screen name="Payments" component={PaymentsScreen} />
-      <Drawer.Screen name="Alerts" component={AlertsScreen} />
+      <Drawer.Screen 
+        name="TransporterDashboard" 
+        component={TransporterDashboardScreen} 
+        options={{ title: "Dashboard" }}
+      />
+      <Drawer.Screen 
+        name="TransporterPassengerList" 
+        component={PassengerList} 
+        options={{ title: "Passenger List" }}
+      />
+      <Drawer.Screen 
+        name="TransporterDriverList" 
+        component={DriverList} 
+        options={{ title: "Driver List" }}
+      />
+      <Drawer.Screen 
+        name="TransporterPayments" 
+        component={PaymentsScreen} 
+        options={{ title: "Payments" }}
+      />
+      <Drawer.Screen 
+        name="TransporterAlerts" 
+        component={AlertsScreen} 
+        options={{ title: "Alerts" }}
+      />
     </Drawer.Navigator>
   );
 }
@@ -81,34 +99,49 @@ function DriverDrawer() {
         headerShown: false,
         drawerType: "slide",
         drawerStyle: { backgroundColor: "#fff", width: 240 },
-        drawerActiveTintColor: "#FF6F00",
+        drawerActiveTintColor: "#A1D826",
         drawerLabelStyle: { fontSize: 15, fontWeight: "600" },
       }}
     >
       <Drawer.Screen
         name="DriverDashboard"
         component={DriverDashboardScreen}
-        options={{ title: "Dashboard" }}
+        options={{ 
+          title: "Dashboard",
+          drawerIcon: ({ color }) => (
+            <Ionicons name="home-outline" size={22} color={color} />
+          )
+        }}
       />
       <Drawer.Screen
         name="DriverAssignedRoutes"
         component={DriverAssignedRoutesScreen}
-        options={{ title: "Assigned Routes" }}
+        options={{ 
+          title: "Assigned Routes",
+          drawerIcon: ({ color }) => (
+            <Ionicons name="map-outline" size={22} color={color} />
+          )
+        }}
       />
       <Drawer.Screen
         name="DriverPayments"
         component={DriverPaymentsScreen}
-        options={{ title: "Payments" }}
+        options={{ 
+          title: "Payments",
+          drawerIcon: ({ color }) => (
+            <Ionicons name="card-outline" size={22} color={color} />
+          )
+        }}
       />
       <Drawer.Screen
         name="DriverTripHistory"
         component={DriverTripHistoryScreen}
-        options={{ title: "Trip History" }}
-      />
-      <Drawer.Screen
-        name="DriverRegistration"
-        component={DriverRegistrationScreen}
-        options={{ title: "Registration" }}
+        options={{ 
+          title: "Trip History",
+          drawerIcon: ({ color }) => (
+            <Ionicons name="time-outline" size={22} color={color} />
+          )
+        }}
       />
     </Drawer.Navigator>
   );
@@ -120,14 +153,17 @@ export default function App() {
       <NavigationContainer>
         <Stack.Navigator 
           initialRouteName="Onboarding"
-          screenOptions={{ headerShown: false }}
+          screenOptions={{ 
+            headerShown: false,
+            gestureEnabled: true 
+          }}
         >
           {/* 🌟 Onboarding + Role Selection */}
           <Stack.Screen name="Onboarding" component={Onboarding} />
           <Stack.Screen name="Welcome" component={WelcomeScreen} />
           <Stack.Screen name="Login" component={LoginScreen} />
           <Stack.Screen name="DashboardRegister" component={DashboardRegisterScreen} />
-          <Stack.Screen name="DriverRegister" component={DriverRegisterScreen} />
+          <Stack.Screen name="DriverRegister" component={DriverRegistrationScreen} />
           <Stack.Screen name="TransporterRegister" component={TransporterRegisterScreen} />
           <Stack.Screen name="TransporterLogin" component={TransporterLoginScreen} />
 
@@ -136,6 +172,7 @@ export default function App() {
           <Stack.Screen name="PassengerLoginScreen" component={PassengerLoginScreen} />
           <Stack.Screen name="PassengerAppNavigation" component={PassengerAppNavigation} />
           <Stack.Screen name="AlertScreen" component={AlertScreen} />
+          
           {/* 🌟 Transporter Flow */}
           <Stack.Screen name="Transporter" component={TransporterDrawer} />
           <Stack.Screen name="TransporterDashboard" component={TransporterDashboardScreen} />
@@ -158,10 +195,15 @@ export default function App() {
           <Stack.Screen name="ViewResponse" component={ViewResponces} />
           <Stack.Screen name="PassengerDataList" component={PassengerDataList} />
 
-          {/* 🌟 Driver Flow */}
+          {/* 🌟 Driver Flow - FIXED: Removed duplicate Registration from drawer */}
           <Stack.Screen name="DriverLogin" component={DriverLoginScreen} />
-          <Stack.Screen name="Driver" component={DriverDrawer} />
           <Stack.Screen name="DriverRegistration" component={DriverRegistrationScreen} />
+          {/* ✅ FIXED: Use the correct component name for the unified dashboard */}
+<Stack.Screen name="DriverDashboard" component={DriverDashboardScreen}  options={{ headerShown: false }}/>
+       {/* Keep other driver screens accessible */}
+<Stack.Screen name="DriverAssignedRoutes" component={DriverAssignedRoutesScreen} />
+<Stack.Screen name="DriverPayments" component={DriverPaymentsScreen} />
+<Stack.Screen name="DriverTripHistory" component={DriverTripHistoryScreen} />
         </Stack.Navigator>
       </NavigationContainer>
     </AuthProvider>
