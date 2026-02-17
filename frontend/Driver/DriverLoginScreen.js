@@ -15,25 +15,9 @@ const DriverLoginScreen = ({ navigation }) => {
   useEffect(() => {
     let isMounted = true;
     
-    const checkExistingLogin = async () => {
-      try {
-        const token = await getAuthToken();
-        const userId = await AsyncStorage.getItem('userId');
-        
-        if (token && userId && isMounted) {
-          console.log('✅ Found existing session, navigating to dashboard...');
-          navigation.replace('DriverDashboard');
-        }
-      } catch (error) {
-        console.error('Error checking existing login:', error);
-      } finally {
-        if (isMounted) {
-          setCheckingLogin(false);
-        }
-      }
-    };
+   
 
-    checkExistingLogin();
+  
     
     return () => {
       isMounted = false;
@@ -227,14 +211,6 @@ const DriverLoginScreen = ({ navigation }) => {
     }
   };
 
-  if (checkingLogin) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#afd826" />
-        <Text style={{ marginTop: 16, color: '#6b7280' }}>Checking login status...</Text>
-      </View>
-    );
-  }
 
   return (
     <View style={styles.container}>

@@ -8,8 +8,8 @@ import { Platform } from 'react-native';
 // ══════════════════════════════════════════════════════
 const API_BASE_URL = Platform.select({
   ios: 'http://localhost:3000',
-  android: 'http://192.168.10.12:3000',
-  default: 'http://192.168.10.12:3000'
+  android: 'http://172.21.243.83:3000',
+  default: 'http://172.21.243.83:3000'
 });
 
 console.log('🌐 API Base URL:', API_BASE_URL);
@@ -65,9 +65,7 @@ api.interceptors.response.use(
   }
 );
 
-// ══════════════════════════════════════════════════════
-// Auth Token Management
-// ══════════════════════════════════════════════════════
+
 export const setAuthToken = async (token) => {
   try {
     await AsyncStorage.setItem('authToken', token);

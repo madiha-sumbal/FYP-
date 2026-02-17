@@ -9,22 +9,25 @@ import {
   Alert as RNAlert,
   ActivityIndicator,
   ScrollView,
+  StatusBar,
+  StyleSheet,
+  Dimensions
 } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import Icon from 'react-native-vector-icons/Ionicons';
 import { LinearGradient } from 'expo-linear-gradient';
-import styles from '../../styles/NotificationScreenStyle';
 
-const API_BASE_URL = 'http://192.168.10.12:3000/api';
+const { width } = Dimensions.get('window');
+const API_BASE_URL = 'http://172.21.243.83:3000/api';
 
 const categories = [
-  { id: 'all', label: 'All', icon: 'apps' },
-  { id: 'payment', label: 'Payments', icon: 'card' },
-  { id: 'trip', label: 'Trips', icon: 'car' },
-  { id: 'driver', label: 'Drivers', icon: 'person' },
-  { id: 'route', label: 'Routes', icon: 'map' },
-  { id: 'poll', label: 'Polls', icon: 'help-circle' },
-  { id: 'system', label: 'System', icon: 'settings' },
+  { id: 'all', label: 'All', icon: 'apps-outline' },
+  { id: 'payment', label: 'Payments', icon: 'card-outline' },
+  { id: 'trip', label: 'Trips', icon: 'car-outline' },
+  { id: 'driver', label: 'Drivers', icon: 'person-outline' },
+  { id: 'route', label: 'Routes', icon: 'map-outline' },
+  { id: 'poll', label: 'Polls', icon: 'help-circle-outline' },
+  { id: 'system', label: 'System', icon: 'settings-outline' },
 ];
 
 export default function NotificationsScreen({ navigation, route }) {
@@ -37,526 +40,195 @@ export default function NotificationsScreen({ navigation, route }) {
   const [userId, setUserId] = useState(null);
 
   const fadeAnim = useRef(new Animated.Value(0)).current;
-  const slideAnim = useRef(new Animated.Value(30)).current;
 
-  /* 🔐 Load auth data */
+  // 🔐 Load Auth Data
   useEffect(() => {
     const loadAuthData = async () => {
       try {
         const storedToken = await AsyncStorage.getItem('authToken');
         const storedUserId = await AsyncStorage.getItem('userId');
-        
-        console.log('📌 NotificationsScreen - Token loaded:', storedToken ? 'Yes' : 'No');
-        console.log('📌 NotificationsScreen - UserId:', storedUserId);
-        
         if (!storedToken || !storedUserId) {
-          RNAlert.alert(
-            'Authentication Required',
-            'Please login again to view notifications',
-            [{ text: 'OK', onPress: () => navigation.navigate('PassengerLoginScreen') }]
-          );
-          setLoading(false);
+          RNAlert.alert('Session Expired', 'Please login again.');
+          navigation.navigate('PassengerLoginScreen');
           return;
         }
-        
         setToken(storedToken);
         setUserId(storedUserId);
-      } catch (error) {
-        console.error('❌ Error loading auth data:', error);
-        setLoading(false);
-      }
+      } catch (e) { setLoading(false); }
     };
-    
     loadAuthData();
   }, []);
 
-  /* 🎞️ Animations */
-  useEffect(() => {
-    Animated.parallel([
-      Animated.timing(fadeAnim, {
-        toValue: 1,
-        duration: 700,
-        useNativeDriver: true,
-      }),
-      Animated.timing(slideAnim, {
-        toValue: 0,
-        duration: 700,
-        useNativeDriver: true,
-      }),
-    ]).start();
-  }, []);
-
-  /* 📡 Fetch notifications */
+  // 📡 Fetch Notifications
   const fetchNotifications = async (category = selectedCategory) => {
     try {
-      if (!token || !userId) {
-        console.log('⚠️ No token or userId available for fetching notifications');
-        return;
-      }
-
-      console.log(`📡 Fetching notifications for category: ${category}`);
-      console.log(`📡 Using token: ${token.substring(0, 20)}...`);
-      console.log(`📡 Using userId: ${userId}`);
+      if (!token || !userId) return;
+      let url = `${API_BASE_URL}/notifications${category !== 'all' ? `?category=${category}` : ''}`;
       
-      let url = `${API_BASE_URL}/notifications`;
-      if (category !== 'all') {
-        url += `?category=${category}`;
-      }
-
-      console.log('🔗 API URL:', url);
-
       const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Authorization': `Bearer ${token}` }
       });
-
-      console.log('📊 Response status:', response.status);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error('❌ API Error Response:', errorText);
-        
-        if (response.status === 401) {
-          RNAlert.alert(
-            'Session Expired',
-            'Please login again',
-            [{ 
-              text: 'OK', 
-              onPress: async () => {
-                await AsyncStorage.multiRemove(['authToken', 'userId', 'userData']);
-                navigation.reset({
-                  index: 0,
-                  routes: [{ name: 'PassengerLoginScreen' }],
-                });
-              }
-            }]
-          );
-          return;
-        }
-        
-        throw new Error(`HTTP ${response.status}: ${errorText}`);
-      }
-
       const data = await response.json();
-      console.log('✅ Notifications API Response:', JSON.stringify(data, null, 2));
-
-      if (data.success) {
-        // Handle both array and object responses
-        let notificationsList = [];
-        
-        if (Array.isArray(data.notifications)) {
-          notificationsList = data.notifications;
-        } else if (Array.isArray(data.data)) {
-          notificationsList = data.data;
-        } else if (data.notifications && typeof data.notifications === 'object') {
-          notificationsList = [data.notifications];
-        }
-        
-        console.log(`📝 Total notifications received: ${notificationsList.length}`);
-        
-        // Filter notifications for current user
-        const userNotifications = notificationsList.filter(n => {
-          const notifUserId = n.userId?._id || n.userId;
-          const matches = notifUserId?.toString() === userId.toString();
-          console.log(`  📧 Notification ${n._id}: userId=${notifUserId}, matches=${matches}, type=${n.type || n.category}`);
-          return matches;
-        });
-        
-        console.log(`📝 User notifications after filter: ${userNotifications.length}`);
-        
-        // Filter by category if needed
-        let filteredNotifications = userNotifications;
-        if (category !== 'all') {
-          filteredNotifications = userNotifications.filter(n => 
-            (n.type || n.category) === category
-          );
-          console.log(`📝 Notifications after category filter (${category}): ${filteredNotifications.length}`);
-        }
-        
-        setNotifications(filteredNotifications);
-        
-        const totalCount = userNotifications.length;
-        const unreadCount = userNotifications.filter(n => !n.read).length;
-        
-        setCounts({ 
-          total: totalCount, 
-          unread: unreadCount 
-        });
-        
-        console.log(`📊 Stats - Total: ${totalCount}, Unread: ${unreadCount}`);
-      } else {
-        console.log('⚠️ API returned success: false -', data.message);
-        setNotifications([]);
-        setCounts({ total: 0, unread: 0 });
-      }
-    } catch (error) {
-      console.error('❌ Fetch notifications error:', error.message);
-      RNAlert.alert(
-        'Error',
-        'Failed to load notifications. Please check your internet connection.',
-        [{ text: 'Retry', onPress: () => fetchNotifications(category) }]
-      );
-      setNotifications([]);
-      setCounts({ total: 0, unread: 0 });
-    } finally {
-      setLoading(false);
-      setRefreshing(false);
-    }
-  };
-
-  /* 🔄 Initial fetch when token is available */
-  useEffect(() => {
-    if (token && userId) {
-      console.log('🚀 Token and userId available, fetching notifications...');
-      fetchNotifications();
-    }
-  }, [token, userId]);
-
-  /* 🔄 Fetch when category changes */
-  useEffect(() => {
-    if (token && userId && !loading) {
-      console.log('🔄 Category changed to:', selectedCategory);
-      fetchNotifications(selectedCategory);
-    }
-  }, [selectedCategory]);
-
-  /* 🔄 Handle navigation params (when coming from dashboard) */
-  useEffect(() => {
-    if (route.params?.notifications) {
-      console.log('📬 Received notifications from navigation params:', route.params.notifications.length);
-      setNotifications(route.params.notifications);
       
-      const unread = route.params.notifications.filter(n => !n.read).length;
-      setCounts({ 
-        total: route.params.notifications.length, 
-        unread: unread 
-      });
-      setLoading(false);
-    }
-  }, [route.params?.notifications]);
-
-  /* 🔄 Refresh on focus */
-  useEffect(() => {
-    const unsubscribe = navigation.addListener('focus', () => {
-      console.log('🔄 Screen focused, refreshing notifications...');
-      if (token && userId) {
-        fetchNotifications();
+      if (data.success) {
+        let list = data.notifications || data.data || [];
+        const userNotifs = list.filter(n => (n.userId?._id || n.userId)?.toString() === userId.toString());
+        setNotifications(userNotifs);
+        setCounts({ total: userNotifs.length, unread: userNotifs.filter(n => !n.read).length });
+        
+        Animated.timing(fadeAnim, { toValue: 1, duration: 500, useNativeDriver: true }).start();
       }
-    });
-
-    return unsubscribe;
-  }, [navigation, token, userId]);
-
-  const onRefresh = () => {
-    console.log('🔄 Pull to refresh triggered');
-    setRefreshing(true);
-    fetchNotifications();
+    } catch (e) { console.error(e); }
+    finally { setLoading(false); setRefreshing(false); }
   };
 
-  /* ✅ Mark single notification */
+  useEffect(() => { if (token) fetchNotifications(); }, [token, selectedCategory]);
+
   const markAsRead = async (id) => {
     try {
-      console.log(`✅ Marking notification ${id} as read`);
-      
-      const response = await fetch(`${API_BASE_URL}/notifications/${id}/read`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+      await fetch(`${API_BASE_URL}/notifications/${id}/read`, {
+        method: 'PUT', headers: { 'Authorization': `Bearer ${token}` }
       });
-
-      if (response.ok) {
-        console.log('✅ Notification marked as read successfully');
-        
-        // Update local state immediately
-        setNotifications(prev => prev.map(n => 
-          n._id === id ? { ...n, read: true } : n
-        ));
-        setCounts(prev => ({
-          ...prev,
-          unread: Math.max(0, prev.unread - 1)
-        }));
-        
-        // Call the callback if provided from navigation params
-        if (route.params?.onMarkAsRead) {
-          route.params.onMarkAsRead(id);
-        }
-        
-        // Refresh to sync with backend
-        setTimeout(() => fetchNotifications(), 500);
-      } else {
-        console.error('❌ Failed to mark as read:', response.status);
-      }
-    } catch (error) {
-      console.error('❌ Mark as read error:', error);
-    }
+      setNotifications(prev => prev.map(n => n._id === id ? { ...n, read: true } : n));
+      setCounts(c => ({ ...c, unread: Math.max(0, c.unread - 1) }));
+    } catch (e) { console.error(e); }
   };
 
-  /* ✅ Mark all as read */
   const markAllAsRead = async () => {
     try {
-      console.log('✅ Marking all notifications as read');
-      
-      const response = await fetch(`${API_BASE_URL}/notifications/mark-all-read`, {
-        method: 'PUT',
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
+      await fetch(`${API_BASE_URL}/notifications/mark-all-read`, {
+        method: 'PUT', headers: { 'Authorization': `Bearer ${token}` }
       });
-
-      if (response.ok) {
-        console.log('✅ All notifications marked as read successfully');
-        
-        // Update local state
-        setNotifications(prev => prev.map(n => ({ ...n, read: true })));
-        setCounts(prev => ({ ...prev, unread: 0 }));
-        
-        // Call the callback if provided
-        if (route.params?.onMarkAllAsRead) {
-          route.params.onMarkAllAsRead();
-        }
-        
-        RNAlert.alert('Success', 'All notifications marked as read');
-        
-        // Refresh
-        setTimeout(() => fetchNotifications(), 500);
-      } else {
-        console.error('❌ Failed to mark all as read:', response.status);
-        RNAlert.alert('Error', 'Failed to mark all as read');
-      }
-    } catch (error) {
-      console.error('❌ Mark all as read error:', error);
-      RNAlert.alert('Error', 'Failed to mark all as read');
-    }
+      setNotifications(prev => prev.map(n => ({ ...n, read: true })));
+      setCounts(c => ({ ...c, unread: 0 }));
+    } catch (e) { console.error(e); }
   };
 
-  const getNotificationColor = (type) => {
-    switch (type) {
-      case 'payment': return ['#FFA726', '#FF9800'];
-      case 'trip': return ['#A1D826', '#8BC220'];
-      case 'driver': return ['#5AC8FA', '#4AB9F1'];
-      case 'route': return ['#2196F3', '#1976D2'];
-      case 'poll': return ['#9C27B0', '#7B1FA2'];
-      case 'system': return ['#FF6B6B', '#EE5A52'];
-      default: return ['#A1D826', '#8BC220'];
-    }
+  const getTheme = (type) => {
+    const themes = {
+      payment: { colors: ['#FF9800', '#F57C00'], icon: 'card' },
+      trip: { colors: ['#A1D826', '#8BC220'], icon: 'car' },
+      driver: { colors: ['#00BCD4', '#0097A7'], icon: 'person' },
+      route: { colors: ['#2196F3', '#1976D2'], icon: 'map' },
+      poll: { colors: ['#9C27B0', '#7B1FA2'], icon: 'help-circle' },
+      system: { colors: ['#FF5252', '#D32F2F'], icon: 'settings' },
+    };
+    return themes[type] || themes.trip;
   };
 
-  const getNotificationIcon = (type) => {
-    switch (type) {
-      case 'payment': return 'card';
-      case 'trip': return 'car';
-      case 'driver': return 'person';
-      case 'route': return 'map';
-      case 'poll': return 'help-circle';
-      case 'system': return 'settings';
-      default: return 'notifications';
-    }
+  const formatTime = (ts) => {
+    const diff = new Date() - new Date(ts);
+    const mins = Math.floor(diff / 60000);
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    return new Date(ts).toLocaleDateString();
   };
 
-  const formatTime = (timestamp) => {
-    try {
-      const date = new Date(timestamp);
-      const now = new Date();
-      const diff = now - date;
-      
-      const minutes = Math.floor(diff / 60000);
-      const hours = Math.floor(diff / 3600000);
-      const days = Math.floor(diff / 86400000);
-      
-      if (minutes < 1) return 'Just now';
-      if (minutes < 60) return `${minutes}m ago`;
-      if (hours < 24) return `${hours}h ago`;
-      if (days < 7) return `${days}d ago`;
-      
-      return date.toLocaleDateString();
-    } catch (error) {
-      return 'Recently';
-    }
-  };
-
-  const renderNotification = ({ item, index }) => (
-    <Animated.View
-      style={[
-        styles.notificationCard,
-        { 
-          opacity: fadeAnim, 
-          transform: [{ translateY: slideAnim }],
-          backgroundColor: item.read ? '#fff' : '#f8fff0'
-        }
-      ]}
-    >
-      <View style={styles.notificationHeader}>
-        <LinearGradient
-          colors={getNotificationColor(item.type || item.category)}
-          style={styles.notificationIcon}
-        >
-          <Icon 
-            name={item.icon || getNotificationIcon(item.type || item.category)} 
-            size={18} 
-            color="#fff" 
-          />
-        </LinearGradient>
-
-        <View style={styles.notificationTitleContainer}>
-          <Text style={styles.notificationTitle}>
-            {item.title || 'Notification'}
-          </Text>
-          <Text style={styles.notificationTime}>
-            {formatTime(item.createdAt || item.timestamp || item.time)}
-          </Text>
-        </View>
-
-        {!item.read && (
-          <TouchableOpacity onPress={() => markAsRead(item._id)}>
-            <Icon name="checkmark-circle" size={22} color="#A1D826" />
-          </TouchableOpacity>
-        )}
-      </View>
-
-      <Text style={styles.notificationMessage}>
-        {item.message || item.body || item.text || 'No message'}
-      </Text>
-      
-      {!item.read && <View style={styles.unreadIndicator} />}
-    </Animated.View>
-  );
-
-  const renderCategoryFilter = () => (
-    <ScrollView 
-      horizontal 
-      showsHorizontalScrollIndicator={false}
-      style={styles.categoryContainer}
-      contentContainerStyle={styles.categoryContent}
-    >
-      {categories.map((category) => {
-        const isSelected = selectedCategory === category.id;
-        const categoryCount = category.id === 'all' 
-          ? counts.total 
-          : notifications.filter(n => (n.type || n.category) === category.id).length;
-        
-        return (
-          <TouchableOpacity
-            key={category.id}
-            onPress={() => setSelectedCategory(category.id)}
-            style={[
-              styles.categoryButton,
-              isSelected && styles.categoryButtonActive
-            ]}
-          >
-            <Icon
-              name={category.icon}
-              size={18}
-              color={isSelected ? '#fff' : '#666'}
-            />
-            <Text
-              style={[
-                styles.categoryLabel,
-                isSelected && styles.categoryLabelActive
-              ]}
-            >
-              {category.label}
-              {categoryCount > 0 && ` (${categoryCount})`}
-            </Text>
-          </TouchableOpacity>
-        );
-      })}
-    </ScrollView>
-  );
-
-  if (loading) {
-    return (
-      <View style={styles.loadingContainer}>
-        <ActivityIndicator size="large" color="#A1D826" />
-        <Text style={styles.loadingText}>Loading notifications...</Text>
-      </View>
-    );
-  }
+  if (loading) return <View style={styles.centered}><ActivityIndicator size="large" color="#A1D826" /></View>;
 
   return (
     <View style={styles.container}>
-      {/* Header */}
-      <View style={styles.header}>
-        <View style={styles.headerLeft}>
-          <TouchableOpacity onPress={() => navigation.goBack()}>
-            <Icon name="arrow-back" size={26} color="#333" />
+      <StatusBar barStyle="dark-content" />
+      
+      {/* --- HEADER --- */}
+      <LinearGradient colors={['#ffffff', '#f3f4f6']} style={styles.header}>
+        <View style={styles.headerTop}>
+          <TouchableOpacity onPress={() => navigation.goBack()} style={styles.backBtn}>
+            <Icon name="chevron-back" size={24} color="#1F2937" />
           </TouchableOpacity>
-          <View style={{ marginLeft: 15 }}>
+          <View style={{ flex: 1, marginLeft: 15 }}>
             <Text style={styles.headerTitle}>Notifications</Text>
-            <Text style={styles.headerSubtitle}>
-              {counts.unread > 0 
-                ? `${counts.unread} unread notification${counts.unread > 1 ? 's' : ''}`
-                : 'All caught up!'}
-            </Text>
+            <Text style={styles.headerStatus}>{counts.unread} New Messages</Text>
           </View>
+          {counts.unread > 0 && (
+            <TouchableOpacity onPress={markAllAsRead} style={styles.markAllBtn}>
+              <Text style={styles.markAllText}>Mark all read</Text>
+            </TouchableOpacity>
+          )}
         </View>
-        
-        {counts.unread > 0 && (
-          <TouchableOpacity onPress={markAllAsRead}>
-            <Text style={styles.markAllBtn}>Mark all read</Text>
-          </TouchableOpacity>
-        )}
-      </View>
 
-      {/* Category Filter */}
-      {renderCategoryFilter()}
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterBar}>
+          {categories.map(cat => (
+            <TouchableOpacity 
+              key={cat.id} 
+              onPress={() => setSelectedCategory(cat.id)}
+              style={[styles.chip, selectedCategory === cat.id && styles.activeChip]}
+            >
+              <Icon name={cat.icon} size={16} color={selectedCategory === cat.id ? '#fff' : '#6B7280'} />
+              <Text style={[styles.chipText, selectedCategory === cat.id && styles.activeChipText]}>{cat.label}</Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+      </LinearGradient>
 
-      {/* Notifications List */}
+      {/* --- LIST --- */}
       <FlatList
         data={notifications}
-        renderItem={renderNotification}
-        keyExtractor={(item, index) => item._id || index.toString()}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            colors={['#A1D826']}
-            tintColor="#A1D826"
-          />
-        }
-        contentContainerStyle={
-          notifications.length === 0 ? styles.emptyContainer : styles.listContent
-        }
+        keyExtractor={item => item._id}
+        contentContainerStyle={styles.listContainer}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => fetchNotifications()} tintColor="#A1D826" />}
+        renderItem={({ item }) => {
+          const theme = getTheme(item.type || item.category);
+          return (
+            <Animated.View style={[styles.card, { opacity: fadeAnim }, !item.read && styles.unreadCard]}>
+              <View style={styles.cardHeader}>
+                <LinearGradient colors={theme.colors} style={styles.iconBox}>
+                  <Icon name={theme.icon} size={18} color="#fff" />
+                </LinearGradient>
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  <Text style={styles.notifTitle}>{item.title}</Text>
+                  <Text style={styles.notifTime}>{formatTime(item.createdAt)}</Text>
+                </View>
+                {!item.read && (
+                  <TouchableOpacity onPress={() => markAsRead(item._id)}>
+                    <Icon name="checkmark-done-circle" size={24} color="#A1D826" />
+                  </TouchableOpacity>
+                )}
+              </View>
+              <Text style={styles.notifBody}>{item.message}</Text>
+            </Animated.View>
+          );
+        }}
         ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <Icon name="notifications-off" size={80} color="#ddd" />
-            <Text style={styles.emptyTitle}>No notifications</Text>
-            <Text style={styles.emptySubtitle}>
-              {selectedCategory === 'all' 
-                ? "You're all caught up!"
-                : `No ${selectedCategory} notifications`}
-            </Text>
-            <TouchableOpacity 
-              style={styles.refreshButton}
-              onPress={onRefresh}
-            >
-              <Text style={styles.refreshButtonText}>Refresh</Text>
-            </TouchableOpacity>
+          <View style={styles.empty}>
+            <Icon name="notifications-off-outline" size={70} color="#E5E7EB" />
+            <Text style={styles.emptyText}>No notifications yet!</Text>
           </View>
         }
       />
-
-      {/* Mark All Read FAB - only show if unread > 0 and not already showing in header */}
-      {counts.unread > 0 && notifications.length > 5 && (
-        <TouchableOpacity 
-          style={styles.fab} 
-          onPress={markAllAsRead}
-          activeOpacity={0.8}
-        >
-          <LinearGradient 
-            colors={['#A1D826', '#8BC220']} 
-            style={styles.fabGradient}
-          >
-            <Icon name="checkmark-done" size={20} color="#fff" />
-            <Text style={styles.fabText}>Mark All Read</Text>
-          </LinearGradient>
-        </TouchableOpacity>
-      )}
     </View>
   );
 }
+
+// --- STYLES ---
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#F9FAFB' },
+  centered: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  header: {
+    paddingTop: 50, paddingBottom: 20, paddingHorizontal: 20,
+    borderBottomLeftRadius: 30, borderBottomRightRadius: 30,
+    elevation: 5, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 10,
+  },
+  headerTop: { flexDirection: 'row', alignItems: 'center', marginBottom: 20 },
+  backBtn: { width: 40, height: 40, backgroundColor: '#fff', borderRadius: 12, justifyContent: 'center', alignItems: 'center', elevation: 2 },
+  headerTitle: { fontSize: 24, fontWeight: '800', color: '#1F2937' },
+  headerStatus: { fontSize: 13, color: '#9CA3AF', fontWeight: '500' },
+  markAllBtn: { backgroundColor: '#f0fdf4', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 },
+  markAllText: { color: '#A1D826', fontWeight: '700', fontSize: 12 },
+  filterBar: { marginTop: 5 },
+  chip: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', paddingHorizontal: 15, paddingVertical: 8, borderRadius: 20, marginRight: 10, borderWidth: 1, borderColor: '#E5E7EB' },
+  activeChip: { backgroundColor: '#A1D826', borderColor: '#A1D826' },
+  chipText: { marginLeft: 6, fontSize: 12, fontWeight: '600', color: '#6B7280' },
+  activeChipText: { color: '#fff' },
+  listContainer: { padding: 20 },
+  card: { backgroundColor: '#fff', borderRadius: 20, padding: 16, marginBottom: 15, elevation: 2, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10 },
+  unreadCard: { borderLeftWidth: 5, borderLeftColor: '#A1D826' },
+  cardHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 10 },
+  iconBox: { width: 36, height: 36, borderRadius: 10, justifyContent: 'center', alignItems: 'center' },
+  notifTitle: { fontSize: 15, fontWeight: '700', color: '#1F2937' },
+  notifTime: { fontSize: 11, color: '#9CA3AF' },
+  notifBody: { fontSize: 14, color: '#4B5563', lineHeight: 20 },
+  empty: { alignItems: 'center', marginTop: 100 },
+  emptyText: { color: '#9CA3AF', marginTop: 10, fontSize: 16, fontWeight: '600' }
+});

@@ -2666,7 +2666,43 @@ app.post('/api/transporter/register', upload.single('profileImage'), async (req,
         zone: newTransporter.zone
       }
     });
-    
+    let vans = [
+  {
+    id: '1',
+    name: 'Van-A (Islamabad)',
+    driver: 'Ahmed Ali',
+    currentLocation: { latitude: 33.6844, longitude: 73.0479 },
+    status: 'En Route',
+    passengers: 12,
+    capacity: 20,
+    eta: '5 mins',
+    color: '#FF5733'
+  },
+  {
+    id: '2',
+    name: 'Van-B (Rawalpindi)',
+    driver: 'Sajid Khan',
+    currentLocation: { latitude: 33.6484, longitude: 73.0234 },
+    status: 'Delayed',
+    passengers: 8,
+    capacity: 15,
+    eta: '12 mins',
+    color: '#33FF57'
+  }
+];
+
+// API to get van locations
+app.get('/api/vans/locations', (req, res) => {
+  // Simulate small movements for "Live" feel
+  vans = vans.map(van => ({
+    ...van,
+    currentLocation: {
+      latitude: van.currentLocation.latitude + (Math.random() - 0.5) * 0.001,
+      longitude: van.currentLocation.longitude + (Math.random() - 0.5) * 0.001,
+    }
+  }));
+  res.json(vans);
+});
   } catch (error) {
     console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     console.log("❌❌❌ REGISTRATION ERROR ❌❌❌");

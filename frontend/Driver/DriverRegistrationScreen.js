@@ -1,5 +1,4 @@
-// screens/DriverRegisterScreen.js
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useCallback, useMemo } from "react";
 import {
   View,
   Text,
@@ -15,74 +14,87 @@ import {
   SafeAreaView,
   KeyboardAvoidingView,
   Platform,
+  Keyboard,
 } from "react-native";
 import * as Location from "expo-location";
 import axios from "axios";
 
 // ══════════════════════════════════════════════════════
-// ✅ FIXED: Correct API URL format (no /api suffix)
+// CONSTANTS
 // ══════════════════════════════════════════════════════
 const API_BASE_URL = Platform.select({
   ios: "http://localhost:3000",
-  android: "http://192.168.10.12:3000", // Use your computer's actual IP
-  default: "http://192.168.10.12:3000"
+  android: "http://172.21.243.83:3000",
+  default: "http://172.21.243.83:3000"
 });
 
 const GOOGLE_MAPS_API_KEY = "AIzaSyDiZhjAhYniDLe4Ndr1u87NdDfIdZS6SME";
 
-const BRAND = "#afd826";
-const BRAND_DARK = "#8ab81e";
+const COLORS = {
+  brand: "#afd826",
+  brandDark: "#8ab81e",
+  brandLight: "#f0fce4",
+  error: "#ef4444",
+  text: "#333",
+  textLight: "#666",
+  textLighter: "#999",
+  border: "#ddd",
+  background: "#F4F6F0",
+  white: "#fff",
+  inputBg: "#fafafa",
+};
 
+// ══════════════════════════════════════════════════════
+// MAIN COMPONENT
+// ══════════════════════════════════════════════════════
 export default function DriverRegisterScreen({ navigation }) {
-  // ── Step: "form" | "transporter" ──────────────────
+  // ── State Management ──────────────────────────────────
   const [step, setStep] = useState("form");
+  const [serverConnected, setServerConnected] = useState(true);
 
-  // ── Form Fields ───────────────────────────────────
-  const [fullName, setFullName] = useState("");
-  const [email, setEmail] = useState("");
-  const [phone, setPhone] = useState("");
-  const [password, setPassword] = useState("");
-  const [license, setLicense] = useState("");
-  const [vehicleNo, setVehicleNo] = useState("");
+  // Form Fields
+  const [formData, setFormData] = useState({
+    fullName: "",
+    email: "",
+    phone: "",
+    password: "",
+    license: "",
+    vehicleNo: "",
+  });
   const [errors, setErrors] = useState({});
 
-  // ── Location ──────────────────────────────────────
+  // Location
   const [homeAddress, setHomeAddress] = useState("");
   const [homeLocation, setHomeLocation] = useState(null);
 
-  // ── Location Search Modal ─────────────────────────
+  // Location Search Modal
   const [searchModalVisible, setSearchModalVisible] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState([]);
   const [searchingLocation, setSearchingLocation] = useState(false);
 
-  // ── Transporter State ─────────────────────────────
+  // Transporter
   const [transporters, setTransporters] = useState([]);
   const [selectedTransporter, setSelectedTransporter] = useState(null);
   const [fetchingTransporters, setFetchingTransporters] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  // ── Connection State ──────────────────────────────
-  const [serverConnected, setServerConnected] = useState(true);
+  // ── Computed Values ───────────────────────────────────
+  const homeMapUrl = useMemo(() => {
+    if (!homeLocation) return null;
+    return `https://maps.googleapis.com/maps/api/staticmap?center=${homeLocation.latitude},${homeLocation.longitude}&zoom=15&size=600x200&markers=color:green%7Clabel:H%7C${homeLocation.latitude},${homeLocation.longitude}&key=${GOOGLE_MAPS_API_KEY}`;
+  }, [homeLocation]);
 
-  // ── Map preview URL ───────────────────────────────
-  const homeMapUrl = homeLocation
-    ? `https://maps.googleapis.com/maps/api/staticmap?center=${homeLocation.latitude},${homeLocation.longitude}&zoom=15&size=600x200&markers=color:green%7Clabel:H%7C${homeLocation.latitude},${homeLocation.longitude}&key=${GOOGLE_MAPS_API_KEY}`
-    : null;
-
-  // ══════════════════════════════════════════════════════
-  // ✅ FIXED: Server connection check with correct endpoint
-  // ══════════════════════════════════════════════════════
+  // ── Effects ───────────────────────────────────────────
   useEffect(() => {
     checkServerConnection();
   }, []);
 
-  const checkServerConnection = async () => {
+  // ── API Functions ─────────────────────────────────────
+  const checkServerConnection = useCallback(async () => {
     try {
       console.log("🌐 Checking server connection at:", API_BASE_URL);
-      const response = await axios.get(`${API_BASE_URL}/api/health`, { 
-        timeout: 5000 
-      });
+      const response = await axios.get(`${API_BASE_URL}/api/health`, { timeout: 5000 });
       console.log("✅ Server connected:", response.status);
       setServerConnected(true);
     } catch (err) {
@@ -97,12 +109,9 @@ export default function DriverRegisterScreen({ navigation }) {
         ]
       );
     }
-  };
+  }, []);
 
-  // ══════════════════════════════════════════════════════
-  // ✅ FIXED: Fetch transporters with correct endpoint
-  // ══════════════════════════════════════════════════════
-  const fetchTransporters = async () => {
+  const fetchTransporters = useCallback(async () => {
     setFetchingTransporters(true);
     try {
       console.log('🔍 Fetching transporters from:', `${API_BASE_URL}/api/users`);
@@ -127,10 +136,10 @@ export default function DriverRegisterScreen({ navigation }) {
     } catch (err) {
       console.error("❌ Fetch transporters error:", err);
       Alert.alert(
-        "Connection Error", 
+        "Connection Error",
         "Failed to load transporters. Please check your connection and try again.",
         [
-          { text: "Retry", onPress: () => fetchTransporters() },
+          { text: "Retry", onPress: fetchTransporters },
           { text: "Cancel", style: "cancel" }
         ]
       );
@@ -138,25 +147,26 @@ export default function DriverRegisterScreen({ navigation }) {
     } finally {
       setFetchingTransporters(false);
     }
-  };
+  }, []);
 
-  // ── Get current GPS location ──────────────────────
-  const getCurrentLocation = async () => {
+  // ── Location Functions ────────────────────────────────
+  const getCurrentLocation = useCallback(async () => {
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== "granted") {
         Alert.alert("Permission Denied", "Please allow location access to continue.");
         return;
       }
+      
       const loc = await Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.Highest,
       });
+      
       const coords = {
         latitude: loc.coords.latitude,
         longitude: loc.coords.longitude,
       };
       
-      // Reverse geocode
       try {
         const res = await axios.get(
           `https://maps.googleapis.com/maps/api/geocode/json?latlng=${coords.latitude},${coords.longitude}&key=${GOOGLE_MAPS_API_KEY}`
@@ -169,19 +179,29 @@ export default function DriverRegisterScreen({ navigation }) {
       } catch {
         setHomeAddress(`${coords.latitude.toFixed(5)}, ${coords.longitude.toFixed(5)}`);
       }
+      
       setHomeLocation(coords);
+      
+      // Clear location error if exists
+      if (errors.location) {
+        setErrors(prev => {
+          const newErrors = { ...prev };
+          delete newErrors.location;
+          return newErrors;
+        });
+      }
     } catch (err) {
       console.error("Location error:", err);
       Alert.alert("Error", "Failed to get current location.");
     }
-  };
+  }, [errors.location]);
 
-  // ── Search location via Google Places ─────────────
-  const searchLocation = async (query) => {
+  const searchLocation = useCallback(async (query) => {
     if (!query || query.trim().length < 3) {
       setSearchResults([]);
       return;
     }
+    
     setSearchingLocation(true);
     try {
       const res = await axios.get(
@@ -200,10 +220,9 @@ export default function DriverRegisterScreen({ navigation }) {
     } finally {
       setSearchingLocation(false);
     }
-  };
+  }, []);
 
-  // ── Select a search result → get coordinates ──────
-  const selectSearchResult = async (placeId, description) => {
+  const selectSearchResult = useCallback(async (placeId, description) => {
     try {
       const res = await axios.get(
         `https://maps.googleapis.com/maps/api/place/details/json?place_id=${placeId}&key=${GOOGLE_MAPS_API_KEY}`
@@ -215,50 +234,70 @@ export default function DriverRegisterScreen({ navigation }) {
         setSearchModalVisible(false);
         setSearchQuery("");
         setSearchResults([]);
+        
+        // Clear location error if exists
+        if (errors.location) {
+          setErrors(prev => {
+            const newErrors = { ...prev };
+            delete newErrors.location;
+            return newErrors;
+          });
+        }
       }
     } catch (err) {
       console.error("Place details error:", err);
       Alert.alert("Error", "Failed to get location details.");
     }
-  };
+  }, [errors.location]);
 
-  // ── Form Validation ───────────────────────────────
-  const validateForm = () => {
+  // ── Form Validation ───────────────────────────────────
+  const validateForm = useCallback(() => {
     const e = {};
     const emailReg = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
     const phoneReg = /^[\+]?[(]?[0-9]{3}[)]?[-\s\.]?[0-9]{3}[-\s\.]?[0-9]{4,6}$/;
     
-    if (!fullName.trim() || fullName.trim().length < 3)
+    if (!formData.fullName.trim() || formData.fullName.trim().length < 3)
       e.fullName = "Full name must be at least 3 characters.";
-    if (!email.trim() || !emailReg.test(email.trim()))
+    if (!formData.email.trim() || !emailReg.test(formData.email.trim()))
       e.email = "Please enter a valid email address.";
-    if (!phone.trim() || !phoneReg.test(phone.trim()))
+    if (!formData.phone.trim() || !phoneReg.test(formData.phone.trim()))
       e.phone = "Please enter a valid phone number (e.g., +92 3XX XXXXXXX).";
-    if (!password.trim() || password.trim().length < 6)
+    if (!formData.password.trim() || formData.password.trim().length < 6)
       e.password = "Password must be at least 6 characters.";
-    if (!license.trim() || license.trim().length < 4)
+    if (!formData.license.trim() || formData.license.trim().length < 4)
       e.license = "Please enter a valid license number.";
-    if (!vehicleNo.trim() || vehicleNo.trim().length < 3)
+    if (!formData.vehicleNo.trim() || formData.vehicleNo.trim().length < 3)
       e.vehicleNo = "Please enter a valid vehicle number.";
     if (!homeLocation)
       e.location = "Please select your home / pickup location.";
     
     setErrors(e);
     return Object.keys(e).length === 0;
-  };
+  }, [formData, homeLocation]);
 
-  // ── Step 1 → Step 2 ───────────────────────────────
-  const handleNextStep = () => {
+  // ── Form Handlers ─────────────────────────────────────
+  const updateFormField = useCallback((field, value) => {
+    setFormData(prev => ({ ...prev, [field]: value }));
+    
+    // Clear error for this field
+    if (errors[field]) {
+      setErrors(prev => {
+        const newErrors = { ...prev };
+        delete newErrors[field];
+        return newErrors;
+      });
+    }
+  }, [errors]);
+
+  const handleNextStep = useCallback(() => {
+    Keyboard.dismiss();
     if (!validateForm()) return;
     fetchTransporters();
     setSelectedTransporter(null);
     setStep("transporter");
-  };
+  }, [validateForm, fetchTransporters]);
 
-  // ══════════════════════════════════════════════════════
-  // ✅ FIXED: Submit with correct endpoint
-  // ══════════════════════════════════════════════════════
-  const handleSendRequest = async () => {
+  const handleSendRequest = useCallback(async () => {
     if (!selectedTransporter) {
       Alert.alert("Select a Transporter", "Please choose a transporter to continue.");
       return;
@@ -267,12 +306,12 @@ export default function DriverRegisterScreen({ navigation }) {
     setSubmitting(true);
     try {
       const requestData = {
-        fullName: fullName.trim(),
-        email: email.trim().toLowerCase(),
-        phone: phone.trim(),
-        password: password.trim(),
-        license: license.trim().toUpperCase(),
-        vehicleNo: vehicleNo.trim().toUpperCase(),
+        fullName: formData.fullName.trim(),
+        email: formData.email.trim().toLowerCase(),
+        phone: formData.phone.trim(),
+        password: formData.password.trim(),
+        license: formData.license.trim().toUpperCase(),
+        vehicleNo: formData.vehicleNo.trim().toUpperCase(),
         address: homeAddress,
         location: {
           type: "Point",
@@ -290,13 +329,11 @@ export default function DriverRegisterScreen({ navigation }) {
       console.log("📦 Request data:", JSON.stringify(requestData, null, 2));
 
       const response = await axios.post(
-        `${API_BASE_URL}/api/driver-requests`, 
+        `${API_BASE_URL}/api/driver-requests`,
         requestData,
         {
           timeout: 10000,
-          headers: {
-            'Content-Type': 'application/json',
-          }
+          headers: { 'Content-Type': 'application/json' }
         }
       );
 
@@ -308,23 +345,24 @@ export default function DriverRegisterScreen({ navigation }) {
           "Request Sent Successfully! ✓",
           `Your driver request has been sent to ${
             selectedTransporter.name || selectedTransporter.company || 'Transporter'
-          }.\n\nYou'll be notified at ${email.trim().toLowerCase()} once approved.`,
+          }.\n\nYou'll be notified at ${formData.email.trim().toLowerCase()} once approved.`,
           [
             {
               text: "Go to Login",
               onPress: () => {
                 // Reset form
-                setFullName("");
-                setEmail("");
-                setPhone("");
-                setPassword("");
-                setLicense("");
-                setVehicleNo("");
+                setFormData({
+                  fullName: "",
+                  email: "",
+                  phone: "",
+                  password: "",
+                  license: "",
+                  vehicleNo: "",
+                });
                 setHomeAddress("");
                 setHomeLocation(null);
                 setSelectedTransporter(null);
                 setStep("form");
-                
                 navigation.navigate("DriverLogin");
               },
             },
@@ -360,12 +398,12 @@ export default function DriverRegisterScreen({ navigation }) {
     } finally {
       setSubmitting(false);
     }
-  };
+  }, [selectedTransporter, formData, homeAddress, homeLocation, navigation]);
 
   // ══════════════════════════════════════════════════════
-  // ✅ FIXED: Input field component with proper keyboard handling
+  // UI COMPONENTS
   // ══════════════════════════════════════════════════════
-  const Field = ({ 
+  const InputField = useCallback(({ 
     label, 
     value, 
     onChange, 
@@ -374,25 +412,19 @@ export default function DriverRegisterScreen({ navigation }) {
     autoCapitalize, 
     errorKey, 
     secureTextEntry,
-    returnKeyType = "next"
+    returnKeyType = "next",
+    onSubmitEditing
   }) => (
     <View style={styles.fieldWrapper}>
       <Text style={styles.label}>
-        {label} <Text style={{ color: "#ef4444" }}>*</Text>
+        {label} <Text style={{ color: COLORS.error }}>*</Text>
       </Text>
       <TextInput
         style={[styles.input, errors[errorKey] ? styles.inputError : null]}
         placeholder={placeholder}
-        placeholderTextColor="#bbb"
+        placeholderTextColor={COLORS.textLighter}
         value={value}
-        onChangeText={(v) => {
-          onChange(v);
-          if (errors[errorKey]) {
-            const newErrors = { ...errors };
-            delete newErrors[errorKey];
-            setErrors(newErrors);
-          }
-        }}
+        onChangeText={onChange}
         keyboardType={keyboardType || "default"}
         autoCapitalize={autoCapitalize || "words"}
         autoCorrect={false}
@@ -400,13 +432,13 @@ export default function DriverRegisterScreen({ navigation }) {
         returnKeyType={returnKeyType}
         blurOnSubmit={returnKeyType === "done"}
         enablesReturnKeyAutomatically={true}
+        onSubmitEditing={onSubmitEditing}
       />
       {errors[errorKey] ? <Text style={styles.errorText}>{errors[errorKey]}</Text> : null}
     </View>
-  );
+  ), [errors]);
 
-  // ── Step Indicator ────────────────────────────────
-  const StepBar = () => (
+  const StepBar = useCallback(() => (
     <View style={styles.stepWrap}>
       <View style={styles.stepRow}>
         {step === "form" ? (
@@ -416,19 +448,37 @@ export default function DriverRegisterScreen({ navigation }) {
             <Text style={styles.stepDoneText}>✓</Text>
           </View>
         )}
-        <View style={[styles.stepLine, step === "transporter" && { backgroundColor: BRAND }]} />
+        <View style={[styles.stepLine, step === "transporter" && { backgroundColor: COLORS.brand }]} />
         <View style={[styles.stepDot, step === "transporter" && styles.stepActive]} />
       </View>
       <View style={styles.stepLabelRow}>
-        <Text style={[styles.stepLabel, { color: BRAND_DARK }]}>Your Info</Text>
-        <Text style={[styles.stepLabel, { color: step === "transporter" ? BRAND_DARK : "#bbb" }]}>
+        <Text style={[styles.stepLabel, { color: COLORS.brandDark }]}>Your Info</Text>
+        <Text style={[styles.stepLabel, { color: step === "transporter" ? COLORS.brandDark : COLORS.textLighter }]}>
           Select Transporter
         </Text>
       </View>
     </View>
-  );
+  ), [step]);
 
-  // ── Server Connection Warning ─────────────────────
+  const Logo = useCallback(() => (
+    <View style={styles.logoWrap}>
+      <View style={styles.logoCircle}>
+        <Image
+          source={{ uri: "https://cdn.prod.website-files.com/6846c2be8f3d7d1f31b5c7e3/6846e5d971c7bbaa7308cb70_img.webp" }}
+          style={styles.logoImg}
+          resizeMode="contain"
+        />
+      </View>
+      <Text style={styles.brand}>RAAHI</Text>
+      <Text style={styles.brandSub}>Driver Registration</Text>
+    </View>
+  ), []);
+
+  // ══════════════════════════════════════════════════════
+  // RENDER SCREENS
+  // ══════════════════════════════════════════════════════
+  
+  // Server Connection Error Screen
   if (!serverConnected) {
     return (
       <SafeAreaView style={styles.errorContainer}>
@@ -452,12 +502,11 @@ export default function DriverRegisterScreen({ navigation }) {
   }
 
   // ════════════════════════════════════════════════════
-  //  STEP 1 — Registration Form
+  // STEP 1 — Registration Form
   // ════════════════════════════════════════════════════
   if (step === "form") {
     return (
-      <SafeAreaView style={{ flex: 1, backgroundColor: "#F4F6F0" }}>
-        {/* ✅ FIXED: Proper KeyboardAvoidingView setup */}
+      <SafeAreaView style={styles.container}>
         <KeyboardAvoidingView
           behavior={Platform.OS === "ios" ? "padding" : undefined}
           style={{ flex: 1 }}
@@ -468,20 +517,8 @@ export default function DriverRegisterScreen({ navigation }) {
             keyboardShouldPersistTaps="handled"
             showsVerticalScrollIndicator={false}
           >
-            {/* Logo */}
-            <View style={styles.logoWrap}>
-              <View style={styles.logoCircle}>
-                <Image
-                  source={{ uri: "https://cdn.prod.website-files.com/6846c2be8f3d7d1f31b5c7e3/6846e5d971c7bbaa7308cb70_img.webp" }}
-                  style={styles.logoImg}
-                  resizeMode="contain"
-                />
-              </View>
-              <Text style={styles.brand}>RAAHI</Text>
-              <Text style={styles.brandSub}>Driver Registration</Text>
-            </View>
+            <Logo />
 
-            {/* Card */}
             <View style={styles.card}>
               <Text style={styles.cardTitle}>Create Driver Profile</Text>
               <Text style={styles.cardDesc}>
@@ -490,40 +527,40 @@ export default function DriverRegisterScreen({ navigation }) {
 
               <StepBar />
 
-              {/* ── Personal Info ── */}
+              {/* Personal Info */}
               <Text style={styles.sectionTitle}>Personal Details</Text>
-              <Field 
+              <InputField 
                 label="Full Name" 
-                value={fullName} 
-                onChange={setFullName} 
+                value={formData.fullName} 
+                onChange={(v) => updateFormField('fullName', v)}
                 placeholder="e.g. Ahmed Raza" 
                 errorKey="fullName" 
                 returnKeyType="next"
               />
-              <Field 
+              <InputField 
                 label="Email Address" 
-                value={email} 
-                onChange={setEmail} 
+                value={formData.email} 
+                onChange={(v) => updateFormField('email', v)}
                 placeholder="driver@example.com" 
                 keyboardType="email-address" 
                 autoCapitalize="none" 
                 errorKey="email" 
                 returnKeyType="next"
               />
-              <Field 
+              <InputField 
                 label="Phone Number" 
-                value={phone} 
-                onChange={setPhone} 
+                value={formData.phone} 
+                onChange={(v) => updateFormField('phone', v)}
                 placeholder="+92 3XX XXXXXXX" 
                 keyboardType="phone-pad" 
                 autoCapitalize="none" 
                 errorKey="phone" 
                 returnKeyType="next"
               />
-              <Field 
+              <InputField 
                 label="Password" 
-                value={password} 
-                onChange={setPassword} 
+                value={formData.password} 
+                onChange={(v) => updateFormField('password', v)}
                 placeholder="Minimum 6 characters" 
                 autoCapitalize="none" 
                 errorKey="password"
@@ -531,28 +568,29 @@ export default function DriverRegisterScreen({ navigation }) {
                 returnKeyType="next"
               />
 
-              {/* ── Vehicle Info ── */}
+              {/* Vehicle Info */}
               <Text style={styles.sectionTitle}>Vehicle Details</Text>
-              <Field 
+              <InputField 
                 label="License Number" 
-                value={license} 
-                onChange={setLicense} 
+                value={formData.license} 
+                onChange={(v) => updateFormField('license', v)}
                 placeholder="e.g. LHR-12345" 
                 autoCapitalize="characters" 
                 errorKey="license" 
                 returnKeyType="next"
               />
-              <Field 
+              <InputField 
                 label="Vehicle Number" 
-                value={vehicleNo} 
-                onChange={setVehicleNo} 
+                value={formData.vehicleNo} 
+                onChange={(v) => updateFormField('vehicleNo', v)}
                 placeholder="e.g. LEA-1234" 
                 autoCapitalize="characters" 
                 errorKey="vehicleNo" 
                 returnKeyType="done"
+                onSubmitEditing={() => Keyboard.dismiss()}
               />
 
-              {/* ── Location ── */}
+              {/* Location */}
               <Text style={styles.sectionTitle}>Home / Pickup Location</Text>
 
               <View style={styles.locationCard}>
@@ -561,7 +599,6 @@ export default function DriverRegisterScreen({ navigation }) {
                   <Text style={styles.locationLabel}>Select Your Location</Text>
                 </View>
 
-                {/* Selected address + map preview */}
                 {homeAddress ? (
                   <View style={styles.selectedLocation}>
                     <Text style={styles.selectedLocationText}>{homeAddress}</Text>
@@ -579,18 +616,10 @@ export default function DriverRegisterScreen({ navigation }) {
                   <Text style={[styles.errorText, { marginBottom: 6 }]}>{errors.location}</Text>
                 ) : null}
 
-                {/* Location buttons */}
                 <View style={styles.locationButtons}>
                   <TouchableOpacity
                     style={styles.locationBtn}
-                    onPress={() => {
-                      getCurrentLocation();
-                      if (errors.location) {
-                        const newErrors = { ...errors };
-                        delete newErrors.location;
-                        setErrors(newErrors);
-                      }
-                    }}
+                    onPress={getCurrentLocation}
                   >
                     <Text style={styles.locationBtnIcon}>🧭</Text>
                     <Text style={styles.locationBtnText}>Current Location</Text>
@@ -598,14 +627,7 @@ export default function DriverRegisterScreen({ navigation }) {
 
                   <TouchableOpacity
                     style={styles.locationBtn}
-                    onPress={() => {
-                      setSearchModalVisible(true);
-                      if (errors.location) {
-                        const newErrors = { ...errors };
-                        delete newErrors.location;
-                        setErrors(newErrors);
-                      }
-                    }}
+                    onPress={() => setSearchModalVisible(true)}
                   >
                     <Text style={styles.locationBtnIcon}>🔍</Text>
                     <Text style={styles.locationBtnText}>Search Area</Text>
@@ -613,14 +635,14 @@ export default function DriverRegisterScreen({ navigation }) {
                 </View>
               </View>
 
-              {/* ── Approval Note ── */}
+              {/* Approval Note */}
               <View style={styles.approvalNote}>
                 <Text style={styles.approvalNoteText}>
                   📝 Your registration will be reviewed by the transporter. You'll be notified via email once approved.
                 </Text>
               </View>
 
-              {/* ── Next Button ── */}
+              {/* Next Button */}
               <TouchableOpacity style={styles.primaryBtn} onPress={handleNextStep}>
                 <Text style={styles.primaryBtnTxt}>Next → Select Transporter</Text>
               </TouchableOpacity>
@@ -640,7 +662,7 @@ export default function DriverRegisterScreen({ navigation }) {
           </ScrollView>
         </KeyboardAvoidingView>
 
-        {/* ── Location Search Modal ── */}
+        {/* Location Search Modal */}
         <Modal visible={searchModalVisible} transparent animationType="slide">
           <View style={styles.modalOverlay}>
             <KeyboardAvoidingView
@@ -666,7 +688,7 @@ export default function DriverRegisterScreen({ navigation }) {
                   <TextInput
                     style={styles.searchInput}
                     placeholder="Search for location..."
-                    placeholderTextColor="#999"
+                    placeholderTextColor={COLORS.textLighter}
                     value={searchQuery}
                     onChangeText={(text) => {
                       setSearchQuery(text);
@@ -674,11 +696,12 @@ export default function DriverRegisterScreen({ navigation }) {
                     }}
                     autoFocus
                     returnKeyType="search"
+                    onSubmitEditing={() => Keyboard.dismiss()}
                   />
                 </View>
 
                 {searchingLocation ? (
-                  <ActivityIndicator size="large" color={BRAND} style={{ marginTop: 20 }} />
+                  <ActivityIndicator size="large" color={COLORS.brand} style={{ marginTop: 20 }} />
                 ) : null}
 
                 <FlatList
@@ -710,25 +733,16 @@ export default function DriverRegisterScreen({ navigation }) {
   }
 
   // ════════════════════════════════════════════════════
-  //  STEP 2 — Select Transporter
+  // STEP 2 — Select Transporter
   // ════════════════════════════════════════════════════
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: "#F4F6F0" }}>
-      <ScrollView contentContainerStyle={styles.formScroll}>
-        {/* Logo */}
-        <View style={styles.logoWrap}>
-          <View style={styles.logoCircle}>
-            <Image
-              source={{ uri: "https://cdn.prod.website-files.com/6846c2be8f3d7d1f31b5c7e3/6846e5d971c7bbaa7308cb70_img.webp" }}
-              style={styles.logoImg}
-              resizeMode="contain"
-            />
-          </View>
-          <Text style={styles.brand}>RAAHI</Text>
-          <Text style={styles.brandSub}>Driver Registration</Text>
-        </View>
+    <SafeAreaView style={styles.container}>
+      <ScrollView 
+        contentContainerStyle={styles.formScroll}
+        showsVerticalScrollIndicator={false}
+      >
+        <Logo />
 
-        {/* Card */}
         <View style={styles.card}>
           <Text style={styles.cardTitle}>Select Your Transporter</Text>
           <Text style={styles.cardDesc}>
@@ -740,8 +754,8 @@ export default function DriverRegisterScreen({ navigation }) {
           {/* Transporter List */}
           {fetchingTransporters ? (
             <View style={{ paddingVertical: 40, alignItems: "center" }}>
-              <ActivityIndicator size="large" color={BRAND} />
-              <Text style={{ marginTop: 12, color: "#666" }}>Loading transporters...</Text>
+              <ActivityIndicator size="large" color={COLORS.brand} />
+              <Text style={{ marginTop: 12, color: COLORS.textLight }}>Loading transporters...</Text>
             </View>
           ) : transporters.length === 0 ? (
             <View style={styles.emptyState}>
@@ -805,7 +819,7 @@ export default function DriverRegisterScreen({ navigation }) {
               disabled={!selectedTransporter || submitting}
             >
               {submitting ? (
-                <ActivityIndicator color="#fff" />
+                <ActivityIndicator color={COLORS.white} />
               ) : (
                 <Text style={styles.primaryBtnTxt}>
                   Send Request to {selectedTransporter?.name || selectedTransporter?.company || "Transporter"}
@@ -829,9 +843,13 @@ export default function DriverRegisterScreen({ navigation }) {
 }
 
 // ════════════════════════════════════════════════════
-//  STYLES
+// STYLES
 // ════════════════════════════════════════════════════
 const styles = StyleSheet.create({
+  container: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+  },
   formScroll: {
     paddingHorizontal: 20,
     paddingVertical: 20,
@@ -844,7 +862,7 @@ const styles = StyleSheet.create({
     width: 80,
     height: 80,
     borderRadius: 40,
-    backgroundColor: "#fff",
+    backgroundColor: COLORS.white,
     justifyContent: "center",
     alignItems: "center",
     shadowColor: "#000",
@@ -860,17 +878,16 @@ const styles = StyleSheet.create({
   brand: {
     fontSize: 28,
     fontWeight: "bold",
-    color: BRAND_DARK,
+    color: COLORS.brandDark,
     marginTop: 8,
   },
   brandSub: {
     fontSize: 14,
-    color: "#666",
+    color: COLORS.textLight,
     marginTop: 4,
   },
-
   card: {
-    backgroundColor: "#fff",
+    backgroundColor: COLORS.white,
     borderRadius: 16,
     padding: 20,
     shadowColor: "#000",
@@ -882,16 +899,15 @@ const styles = StyleSheet.create({
   cardTitle: {
     fontSize: 22,
     fontWeight: "bold",
-    color: "#333",
+    color: COLORS.text,
     marginBottom: 8,
   },
   cardDesc: {
     fontSize: 14,
-    color: "#666",
+    color: COLORS.textLight,
     lineHeight: 20,
     marginBottom: 20,
   },
-
   stepWrap: {
     marginBottom: 24,
   },
@@ -905,30 +921,30 @@ const styles = StyleSheet.create({
     height: 24,
     borderRadius: 12,
     borderWidth: 2,
-    borderColor: "#ddd",
-    backgroundColor: "#fff",
+    borderColor: COLORS.border,
+    backgroundColor: COLORS.white,
   },
   stepActive: {
-    borderColor: BRAND,
-    backgroundColor: BRAND,
+    borderColor: COLORS.brand,
+    backgroundColor: COLORS.brand,
   },
   stepDone: {
     width: 24,
     height: 24,
     borderRadius: 12,
-    backgroundColor: BRAND,
+    backgroundColor: COLORS.brand,
     justifyContent: "center",
     alignItems: "center",
   },
   stepDoneText: {
-    color: "#fff",
+    color: COLORS.white,
     fontSize: 14,
     fontWeight: "bold",
   },
   stepLine: {
     flex: 1,
     height: 2,
-    backgroundColor: "#ddd",
+    backgroundColor: COLORS.border,
     marginHorizontal: 8,
   },
   stepLabelRow: {
@@ -939,49 +955,46 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: "600",
   },
-
   sectionTitle: {
     fontSize: 16,
     fontWeight: "bold",
-    color: "#333",
+    color: COLORS.text,
     marginTop: 16,
     marginBottom: 12,
   },
-
   fieldWrapper: {
     marginBottom: 16,
   },
   label: {
     fontSize: 14,
     fontWeight: "600",
-    color: "#333",
+    color: COLORS.text,
     marginBottom: 6,
   },
   input: {
     borderWidth: 1,
-    borderColor: "#ddd",
+    borderColor: COLORS.border,
     borderRadius: 8,
     paddingHorizontal: 14,
     paddingVertical: 12,
     fontSize: 15,
-    color: "#333",
-    backgroundColor: "#fafafa",
+    color: COLORS.text,
+    backgroundColor: COLORS.inputBg,
   },
   inputError: {
-    borderColor: "#ef4444",
+    borderColor: COLORS.error,
   },
   errorText: {
     fontSize: 12,
-    color: "#ef4444",
+    color: COLORS.error,
     marginTop: 4,
   },
-
   locationCard: {
     borderWidth: 1,
-    borderColor: "#ddd",
+    borderColor: COLORS.border,
     borderRadius: 12,
     padding: 16,
-    backgroundColor: "#fafafa",
+    backgroundColor: COLORS.inputBg,
   },
   locationHeader: {
     flexDirection: "row",
@@ -995,14 +1008,14 @@ const styles = StyleSheet.create({
   locationLabel: {
     fontSize: 15,
     fontWeight: "600",
-    color: "#333",
+    color: COLORS.text,
   },
   selectedLocation: {
     marginBottom: 12,
   },
   selectedLocationText: {
     fontSize: 13,
-    color: "#666",
+    color: COLORS.textLight,
     marginBottom: 10,
   },
   miniMap: {
@@ -1019,9 +1032,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "#fff",
+    backgroundColor: COLORS.white,
     borderWidth: 1,
-    borderColor: BRAND,
+    borderColor: COLORS.brand,
     borderRadius: 8,
     paddingVertical: 12,
     paddingHorizontal: 10,
@@ -1032,10 +1045,9 @@ const styles = StyleSheet.create({
   },
   locationBtnText: {
     fontSize: 13,
-    color: BRAND_DARK,
+    color: COLORS.brandDark,
     fontWeight: "600",
   },
-
   approvalNote: {
     backgroundColor: "#fef3c7",
     borderLeftWidth: 4,
@@ -1050,14 +1062,13 @@ const styles = StyleSheet.create({
     color: "#92400e",
     lineHeight: 18,
   },
-
   primaryBtn: {
-    backgroundColor: BRAND,
+    backgroundColor: COLORS.brand,
     borderRadius: 10,
     paddingVertical: 14,
     alignItems: "center",
     justifyContent: "center",
-    shadowColor: BRAND,
+    shadowColor: COLORS.brand,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
     shadowRadius: 6,
@@ -1069,52 +1080,48 @@ const styles = StyleSheet.create({
     elevation: 0,
   },
   primaryBtnTxt: {
-    color: "#fff",
+    color: COLORS.white,
     fontSize: 16,
     fontWeight: "bold",
   },
   secondaryBtn: {
-    backgroundColor: "#fff",
+    backgroundColor: COLORS.white,
     borderWidth: 2,
-    borderColor: BRAND,
+    borderColor: COLORS.brand,
     shadowOpacity: 0,
     elevation: 0,
   },
   secondaryBtnTxt: {
-    color: BRAND_DARK,
+    color: COLORS.brandDark,
     fontSize: 16,
     fontWeight: "bold",
   },
-
   linkRow: {
     marginTop: 16,
     alignItems: "center",
   },
   linkTxt: {
     fontSize: 14,
-    color: "#666",
+    color: COLORS.textLight,
   },
   linkHL: {
-    color: BRAND_DARK,
+    color: COLORS.brandDark,
     fontWeight: "bold",
   },
-
   footer: {
     textAlign: "center",
     fontSize: 12,
-    color: "#999",
+    color: COLORS.textLighter,
     marginTop: 24,
     marginBottom: 12,
   },
-
-  // Modal
   modalOverlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.5)",
     justifyContent: "flex-end",
   },
   searchModalBox: {
-    backgroundColor: "#fff",
+    backgroundColor: COLORS.white,
     borderTopLeftRadius: 20,
     borderTopRightRadius: 20,
     padding: 20,
@@ -1129,21 +1136,21 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: 18,
     fontWeight: "bold",
-    color: "#333",
+    color: COLORS.text,
   },
   modalClose: {
     fontSize: 28,
-    color: "#999",
+    color: COLORS.textLighter,
     fontWeight: "300",
   },
   searchInputWrap: {
     flexDirection: "row",
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "#ddd",
+    borderColor: COLORS.border,
     borderRadius: 10,
     paddingHorizontal: 12,
-    backgroundColor: "#fafafa",
+    backgroundColor: COLORS.inputBg,
     marginBottom: 16,
   },
   searchInputIcon: {
@@ -1154,7 +1161,7 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingVertical: 12,
     fontSize: 15,
-    color: "#333",
+    color: COLORS.text,
   },
   searchResultItem: {
     flexDirection: "row",
@@ -1170,27 +1177,25 @@ const styles = StyleSheet.create({
   searchResultText: {
     flex: 1,
     fontSize: 14,
-    color: "#333",
+    color: COLORS.text,
   },
   noResults: {
     textAlign: "center",
-    color: "#999",
+    color: COLORS.textLighter,
     fontSize: 14,
     marginTop: 20,
   },
-
-  // Transporter cards
   transporterCard: {
     borderWidth: 2,
     borderColor: "#e5e5e5",
     borderRadius: 12,
     padding: 16,
     marginBottom: 12,
-    backgroundColor: "#fafafa",
+    backgroundColor: COLORS.inputBg,
   },
   transporterCardSelected: {
-    borderColor: BRAND,
-    backgroundColor: "#f0fce4",
+    borderColor: COLORS.brand,
+    backgroundColor: COLORS.brandLight,
   },
   transporterRow: {
     flexDirection: "row",
@@ -1203,17 +1208,17 @@ const styles = StyleSheet.create({
   transporterName: {
     fontSize: 16,
     fontWeight: "bold",
-    color: "#333",
+    color: COLORS.text,
     marginBottom: 4,
   },
   transporterEmail: {
     fontSize: 13,
-    color: "#666",
+    color: COLORS.textLight,
     marginBottom: 2,
   },
   transporterPhone: {
     fontSize: 13,
-    color: "#666",
+    color: COLORS.textLight,
   },
   radioOuter: {
     width: 24,
@@ -1223,18 +1228,17 @@ const styles = StyleSheet.create({
     borderColor: "#ccc",
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#fff",
+    backgroundColor: COLORS.white,
   },
   radioOuterSelected: {
-    borderColor: BRAND,
+    borderColor: COLORS.brand,
   },
   radioInner: {
     width: 12,
     height: 12,
     borderRadius: 6,
-    backgroundColor: BRAND,
+    backgroundColor: COLORS.brand,
   },
-
   emptyState: {
     alignItems: "center",
     paddingVertical: 40,
@@ -1245,15 +1249,13 @@ const styles = StyleSheet.create({
   },
   emptyStateText: {
     fontSize: 16,
-    color: "#999",
+    color: COLORS.textLighter,
   },
-
-  // Error screen
   errorContainer: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
-    backgroundColor: "#F4F6F0",
+    backgroundColor: COLORS.background,
     padding: 20,
   },
   errorIcon: {
@@ -1263,24 +1265,24 @@ const styles = StyleSheet.create({
   errorTitle: {
     fontSize: 22,
     fontWeight: "bold",
-    color: "#333",
+    color: COLORS.text,
     marginBottom: 8,
   },
   errorMessage: {
     fontSize: 14,
-    color: "#666",
+    color: COLORS.textLight,
     textAlign: "center",
     marginBottom: 24,
     lineHeight: 20,
   },
   retryBtn: {
-    backgroundColor: BRAND,
+    backgroundColor: COLORS.brand,
     paddingHorizontal: 24,
     paddingVertical: 12,
     borderRadius: 10,
   },
   retryTxt: {
-    color: "#fff",
+    color: COLORS.white,
     fontSize: 16,
     fontWeight: "bold",
   },

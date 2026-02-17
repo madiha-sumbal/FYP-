@@ -1,4 +1,4 @@
-// src/constants/coordinates.js
+
 export const stopCoordinates = {
   'Chaklala Bus Stop': { latitude: 33.6008, longitude: 73.0963 },
   'Korang Road': { latitude: 33.583, longitude: 73.1 },

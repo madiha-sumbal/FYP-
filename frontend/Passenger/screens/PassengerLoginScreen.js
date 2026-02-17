@@ -15,7 +15,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const API_BASE_URL = 'http://192.168.10.12:3000/api';
+const API_BASE_URL = 'http://172.21.243.83:3000/api';
 
 export default function PassengerLogin({ navigation }) {
   const [email, setEmail] = useState('');
@@ -23,29 +23,7 @@ export default function PassengerLogin({ navigation }) {
   const [loading, setLoading] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
 
-  // Check if already logged in
-  useEffect(() => {
-    checkExistingAuth();
-  }, []);
 
-  const checkExistingAuth = async () => {
-    try {
-      const token = await AsyncStorage.getItem('authToken');
-      const userId = await AsyncStorage.getItem('userId');
-      
-      console.log("🔍 Checking existing auth:");
-      console.log("  - Token:", token ? "Present" : "Missing");
-      console.log("  - User ID:", userId ? userId : "Missing");
-      
-      if (token && userId) {
-        console.log("✅ Already logged in, navigating to dashboard");
-        // ✅ FIXED: Changed from 'PassengerDashboard' to 'PassengerAppNavigation'
-        navigation.replace('PassengerAppNavigation');
-      }
-    } catch (error) {
-      console.error('Error checking auth:', error);
-    }
-  };
 
   const handleLogin = async () => {
     // Validation
@@ -168,7 +146,7 @@ export default function PassengerLogin({ navigation }) {
   };
 
   const handleRegister = () => {
-    navigation.navigate('PassengerRegister');
+    navigation.navigate('PassengerRequestScreen');
   };
 
   return (
