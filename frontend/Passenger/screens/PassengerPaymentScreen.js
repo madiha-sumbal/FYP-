@@ -15,7 +15,7 @@ import Icon from 'react-native-vector-icons/Ionicons';
 import { LinearGradient } from 'expo-linear-gradient';
 import styles from '../../styles/PassengerPaymentStyle';
 
-const API_BASE_URL = 'http://172.21.243.83:3000/api';
+const API_BASE_URL = 'http://192.168.10.7:3000/api';
 
 export default function PaymentsScreen({ navigation }) {
   const [selectedTab, setSelectedTab] = useState('current');

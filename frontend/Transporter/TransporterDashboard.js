@@ -1,639 +1,1105 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   View, Text, ScrollView, TouchableOpacity, TextInput,
-  StyleSheet, SafeAreaView, Alert, RefreshControl, Animated,
-  Dimensions, ActivityIndicator, Modal, KeyboardAvoidingView,
+  StyleSheet, SafeAreaView, Alert, RefreshControl,
+  Animated, Dimensions, ActivityIndicator, Modal,
   Platform, Image,
 } from 'react-native';
-import MapView, { Marker, PROVIDER_GOOGLE, Polyline } from 'react-native-maps';
+import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useNavigation } from '@react-navigation/native';
 
-const { width, height } = Dimensions.get('window');
+const { width } = Dimensions.get('window');
 
-// ==================== CONSTANTS ====================
-const GOOGLE_MAPS_API_KEY = 'AIzaSyDiZhjAhYniDLe4Ndr1u87NdDfIdZS6SME';
-const API_BASE_URL = 'http://172.21.243.83:3000/api';
-
-const COLORS = {
-  primary: '#afd826',
-  primaryDark: '#8fb320',
-  primaryLight: '#d4e99e',
-  success: '#28a745',
-  warning: '#f39c12',
-  danger: '#dc3545',
-  white: '#ffffff',
-  black: '#111111',
-  gray: '#6c757d',
-  darkGray: '#495057',
-  lightGray: '#f8f9fa',
-  border: '#e0e0e0',
-  cardBg: '#ffffff',
-  sectionBg: '#f4f6f8',
+// ─── COLOUR PALETTE ──────────────────────────────────────────────────────────
+const C = {
+  primary:     '#A1D826',
+  primaryDark: '#A1D826',
+  primaryLight:'#A1D826',
+  primaryPale: '#E6F4C3',
+  primaryGhost:'#F5F9E8',
+  white:       '#FFFFFF',
+  offWhite:    '#FAFAFA',
+  textDark:    '#A1D826',
+  textMid:     '#030303',
+  textLight:   '#000000',
+  border:      '#D4E090',
+  divider:     '#E8F2B0',
+  error:       '#E53935',
+  warning:     '#F57C00',
 };
 
+// ─── CONSTANTS ────────────────────────────────────────────────────────────────
+const VEHICLE_CAPS   = { car: 4, van: 12, bus: 30 };
+const VEHICLE_INFO   = {
+  car: { icon: '🚗', label: 'Car',  desc: 'Sedan / Hatchback', capacity: 4  },
+  van: { icon: '🚐', label: 'Van',  desc: 'Minibus / Van',     capacity: 12 },
+  bus: { icon: '🚌', label: 'Bus',  desc: 'Large Bus / Coach', capacity: 30 },
+};
+
+const API_BASE = 'http://192.168.10.7:3000/api';
+
 const MENU_ITEMS = [
-  { key: 'overview',    label: 'Dashboard',           icon: 'dashboard' },
-  { key: 'profile',     label: 'Profile',             icon: 'account-circle' },
-  { key: 'poll',        label: 'Polls',               icon: 'poll' },
-  { key: 'routes',      label: 'Routes',              icon: 'map' },
-  { key: 'assign',      label: 'Assign',              icon: 'assignment-ind' },
-  { key: 'tracking',    label: 'Tracking',            icon: 'my-location' },
-  { key: 'driver-req',  label: 'Driver Requests',     icon: 'group-add' },
-  { key: 'pass-req',    label: 'Passenger Requests',  icon: 'person-add' },
-  { key: 'payments',    label: 'Payments',            icon: 'account-balance-wallet' },
-  { key: 'complaints',  label: 'Complaints',          icon: 'support-agent' },
-  { key: 'notifications', label: 'Notifications',     icon: 'notifications-active' },
+  { key: 'overview',    label: 'Dashboard',           icon: 'dashboard'            },
+  { key: 'profile',     label: 'My Profile',          icon: 'account-circle'       },
+  { key: 'poll',        label: 'Availability Polls',  icon: 'poll'                 },
+  { key: 'smart-route', label: 'Smart Routes',        icon: 'auto-awesome'         },
+  { key: 'routes',      label: 'Routes',              icon: 'map'                  },
+  { key: 'assign',      label: 'Assign Driver',       icon: 'assignment-ind'       },
+  { key: 'tracking',    label: 'Live Tracking',       icon: 'my-location'          },
+  { key: 'driver-req',  label: 'Driver Requests',     icon: 'group-add'            },
+  { key: 'pass-req',    label: 'Passenger Requests',  icon: 'person-add'           },
+  { key: 'payments',    label: 'Payments',            icon: 'account-balance-wallet'},
+  { key: 'complaints',  label: 'Complaints',          icon: 'support-agent'        },
+  { key: 'notifications',label:'Notifications',       icon: 'notifications-active' },
 ];
 
-// ==================== API SERVICE ====================
+// ─── API SERVICE ──────────────────────────────────────────────────────────────
 class ApiService {
+  // ✅ FIX: getAuthData now reads all possible keys and resolves transporterId correctly
   async getAuthData() {
     try {
-      const [token, transporterId, transporterData] = await Promise.all([
+      const [token, transporterId, userId, td] = await Promise.all([
         AsyncStorage.getItem('authToken'),
         AsyncStorage.getItem('transporterId'),
+        AsyncStorage.getItem('userId'),
         AsyncStorage.getItem('transporterData'),
       ]);
+
+      let parsedData = null;
+      try {
+        parsedData = td ? JSON.parse(td) : null;
+      } catch (_) {}
+
+      // ✅ Resolve the correct transporterId:
+      // Priority: transporterId key → userId key → transporterData.id → transporterData._id
+      const resolvedTransporterId =
+        transporterId ||
+        userId ||
+        parsedData?.id ||
+        parsedData?._id ||
+        null;
+
       return {
         token,
-        transporterId,
-        transporterData: transporterData ? JSON.parse(transporterData) : null,
+        transporterId: resolvedTransporterId,
+        transporterData: parsedData,
       };
-    } catch (error) {
-      console.error('❌ Error getting auth data:', error);
+    } catch {
       return { token: null, transporterId: null, transporterData: null };
     }
   }
 
-  async apiCall(endpoint, options = {}) {
-    try {
-      const { token } = await this.getAuthData();
-      if (!token) throw new Error('Authentication required');
-      const headers = {
+  async call(endpoint, options = {}) {
+    const { token } = await this.getAuthData();
+    if (!token) throw new Error('Authentication required');
+    const res = await fetch(`${API_BASE}${endpoint}`, {
+      ...options,
+      headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${token}`,
+        Authorization:  `Bearer ${token}`,
         ...options.headers,
-      };
-      const response = await fetch(`${API_BASE_URL}${endpoint}`, { ...options, headers });
-      const responseText = await response.text();
-      if (!response.ok) {
-        if (response.status === 401 || response.status === 403) throw new Error('Authentication failed');
-        throw new Error(`API Error: ${response.status}`);
-      }
-      return responseText ? JSON.parse(responseText) : {};
-    } catch (error) {
-      console.error('❌ API Error:', endpoint, error);
-      throw error;
+      },
+    });
+    const text = await res.text();
+    if (!res.ok) {
+      if (res.status === 401 || res.status === 403) throw new Error('Authentication failed');
+      throw new Error(`API Error ${res.status}`);
     }
+    return text ? JSON.parse(text) : {};
   }
 
+  /* ── Profile ── */
+  // ✅ FIX: getProfile now uses JWT token's userId from the /api/transporter/profile/:id endpoint
+  // If transporterId is missing, falls back to /api/profile (token-based auth)
   async getProfile() {
-    try {
-      const { transporterId } = await this.getAuthData();
-      const response = await this.apiCall(`/transporter/profile/${transporterId}`);
-      const p = response.data || response.transporter || response;
+    const { transporterId } = await this.getAuthData();
+
+    if (!transporterId) {
+      // Fallback: use token-based profile endpoint
+      const r = await this.call('/profile');
       return {
-        id: p._id || p.id || transporterId,
-        name: p.name || 'Transporter',
-        email: p.email || 'email@example.com',
-        phone: p.phone || p.phoneNumber || 'N/A',
-        company: p.company || p.companyName || 'Transport Company',
-        address: p.address || 'N/A',
-        license: p.license || p.licenseNumber || 'N/A',
-        registrationDate: p.registrationDate || new Date().toISOString(),
-        location: p.location || 'N/A',
-        status: p.status || 'active',
-        profileImage: p.profileImage || p.avatar || null,
+        id:               r._id || r.id || '',
+        name:             r.name             || 'Transporter',
+        email:            r.email            || '',
+        phone:            r.phone || r.phoneNumber || 'N/A',
+        company:          r.company || r.companyName || 'Transport Co.',
+        address:          r.address          || 'N/A',
+        license:          r.license || r.licenseNumber || 'N/A',
+        registrationDate: r.registrationDate
+                            ? new Date(r.registrationDate).toLocaleDateString()
+                            : 'N/A',
+        location:         r.location || r.address || 'N/A',
+        status:           r.status           || 'active',
+        profileImage:     r.profileImage     || null,
       };
-    } catch (error) {
-      console.error('❌ Error loading profile:', error);
-      return null;
     }
+
+    const r = await this.call(`/transporter/profile/${transporterId}`);
+    const p = r.data || r.transporter || r;
+    return {
+      id:               p._id || p.id || transporterId,
+      name:             p.name             || 'Transporter',
+      email:            p.email            || '',
+      phone:            p.phone || p.phoneNumber || 'N/A',
+      company:          p.company || p.companyName || 'Transport Co.',
+      address:          p.address          || 'N/A',
+      license:          p.license || p.licenseNumber || 'N/A',
+      registrationDate: p.registrationDate
+                          ? new Date(p.registrationDate).toLocaleDateString()
+                          : 'N/A',
+      location:         p.location || p.address || 'N/A',
+      status:           p.status           || 'active',
+      profileImage:     p.profileImage     || null,
+    };
   }
 
-  async updateProfile(profileData) {
+  async updateProfile(data) {
     const { transporterId } = await this.getAuthData();
-    return this.apiCall(`/transporter/profile/${transporterId}`, {
+    return this.call(`/transporter/profile/${transporterId}`, {
       method: 'PUT',
-      body: JSON.stringify(profileData),
+      body:   JSON.stringify(data),
     });
   }
 
+  /* ── Stats ── */
   async getStats() {
-    try {
-      const { transporterId } = await this.getAuthData();
-      const response = await this.apiCall(`/dashboard/stats?transporterId=${transporterId}`);
-      const s = response.stats || response.data || response;
-      return {
-        activeDrivers:    parseInt(s.activeDrivers)    || 0,
-        totalPassengers:  parseInt(s.totalPassengers)  || 0,
-        completedTrips:   parseInt(s.completedTrips)   || 0,
-        ongoingTrips:     parseInt(s.ongoingTrips)     || 0,
-        complaints:       parseInt(s.complaints)       || 0,
-        paymentsReceived: parseInt(s.paymentsReceived) || 0,
-        paymentsPending:  parseInt(s.paymentsPending)  || 0,
-      };
-    } catch {
-      return { activeDrivers:0, totalPassengers:0, completedTrips:0, ongoingTrips:0, complaints:0, paymentsReceived:0, paymentsPending:0 };
-    }
-  }
-
-  async getPolls() {
-    try {
-      const { transporterId } = await this.getAuthData();
-      const response = await this.apiCall(`/polls?transporterId=${transporterId}`);
-      return Array.isArray(response) ? response : (response.polls || response.data || []);
-    } catch { return []; }
-  }
-
-  async createPoll(pollData) {
     const { transporterId } = await this.getAuthData();
-    return this.apiCall('/polls', {
+    const r = await this.call(`/dashboard/stats?transporterId=${transporterId}`);
+    const s = r.stats || r.data || r;
+    return {
+      activeDrivers:   +s.activeDrivers   || 0,
+      totalPassengers: +s.totalPassengers  || 0,
+      completedTrips:  +s.completedTrips   || 0,
+      ongoingTrips:    +s.ongoingTrips     || 0,
+      complaints:      +s.complaints       || 0,
+      paymentsReceived:+s.paymentsReceived || 0,
+      paymentsPending: +s.paymentsPending  || 0,
+    };
+  }
+
+  /* ── Polls ── */
+  async getPolls() {
+    const { transporterId } = await this.getAuthData();
+    const r = await this.call(`/polls?transporterId=${transporterId}`);
+    return Array.isArray(r) ? r : (r.polls || r.data || []);
+  }
+
+  async createPoll(data) {
+    const { transporterId } = await this.getAuthData();
+    return this.call('/polls', {
       method: 'POST',
-      body: JSON.stringify({ ...pollData, transporterId }),
+      body:   JSON.stringify({ ...data, transporterId }),
     });
   }
 
-  async deletePoll(pollId) {
-    return this.apiCall(`/polls/${pollId}`, { method: 'DELETE' });
+  async deletePoll(id) {
+    return this.call(`/polls/${id}`, { method: 'DELETE' });
   }
 
-  async getAvailableDrivers(date) {
-    try {
-      const { transporterId } = await this.getAuthData();
-      const response = await this.apiCall(`/availability/drivers?date=${date}&transporterId=${transporterId}`);
-      return response.drivers || [];
-    } catch { return []; }
+  /* ── Drivers ── */
+  async getDrivers() {
+    const { transporterId } = await this.getAuthData();
+    const r = await this.call(`/drivers?transporterId=${transporterId}`);
+    return Array.isArray(r) ? r : (r.drivers || r.data || []);
   }
 
-  async assignRouteFromPoll(pollId, assignmentData) {
+  /* ── Smart Routes — calls server optimizer ── */
+  async optimizeRoutes(passengers, drivers, pollId) {
+    return this.call('/smart-routes/optimize', {
+      method: 'POST',
+      body: JSON.stringify({ passengers, drivers, pollId }),
+    });
+  }
+
+  async assignRouteFromPoll(pollId, routeData) {
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
-    return this.apiCall('/routes/assign', {
+    return this.call('/routes/assign', {
       method: 'POST',
       body: JSON.stringify({
         pollId,
-        driverId:    assignmentData.driverId,
-        routeName:   assignmentData.routeName,
-        startPoint:  assignmentData.startPoint  || 'Start Point',
-        destination: assignmentData.destination || 'Destination',
-        timeSlot:    assignmentData.timeSlot,
-        pickupTime:  assignmentData.pickupTime  || assignmentData.timeSlot,
-        date:        tomorrow.toISOString(),
+        driverId:     routeData.driverId,
+        routeName:    routeData.routeName,
+        startPoint:   routeData.startPoint || 'Starting Point',
+        destination:  routeData.destination || 'Destination',
+        timeSlot:     routeData.timeSlot,
+        pickupTime:   routeData.pickupTime || routeData.timeSlot,
+        date:         tomorrow.toISOString(),
+        passengers:   routeData.passengers || [],
+        stops:        routeData.stops || [],
+        estimatedTime:routeData.estimatedTime,
+        estimatedFuel:routeData.estimatedFuel,
+        estimatedKm:  routeData.estimatedKm,
+        vehicleType:  routeData.vehicleType,
       }),
     });
   }
 
-  // ── NEW: assign driver to an existing route ──
   async assignDriverToRoute(routeId, driverId) {
-    return this.apiCall(`/routes/${routeId}/assign-driver`, {
+    return this.call(`/routes/${routeId}/assign-driver`, {
       method: 'PUT',
       body: JSON.stringify({ driverId }),
     });
   }
 
-  async getDrivers() {
-    try {
-      const { transporterId } = await this.getAuthData();
-      const response = await this.apiCall(`/drivers?transporterId=${transporterId}`);
-      return Array.isArray(response) ? response : (response.drivers || response.data || []);
-    } catch { return []; }
-  }
-
+  /* ── Requests ── */
   async getDriverRequests() {
-    try {
-      const { transporterId } = await this.getAuthData();
-      const response = await this.apiCall(`/join-requests?type=driver&transporterId=${transporterId}`);
-      const requests = Array.isArray(response) ? response : (response.requests || response.data || []);
-      return requests.filter(r => r.status === 'pending');
-    } catch { return []; }
+    const { transporterId } = await this.getAuthData();
+    const r = await this.call(`/join-requests?type=driver&transporterId=${transporterId}`);
+    return (Array.isArray(r) ? r : (r.requests || r.data || []))
+      .filter(x => x.status === 'pending');
   }
 
   async approveDriverRequest(id) {
     const { transporterId } = await this.getAuthData();
-    return this.apiCall(`/join-requests/${id}/accept`, { method:'PUT', body: JSON.stringify({ transporterId }) });
+    return this.call(`/join-requests/${id}/accept`, {
+      method: 'PUT',
+      body: JSON.stringify({ transporterId }),
+    });
   }
 
   async rejectDriverRequest(id) {
-    return this.apiCall(`/join-requests/${id}/reject`, { method:'PUT' });
+    return this.call(`/join-requests/${id}/reject`, { method: 'PUT' });
   }
 
   async getPassengerRequests() {
-    try {
-      const { transporterId } = await this.getAuthData();
-      const response = await this.apiCall(`/join-requests?type=passenger&transporterId=${transporterId}`);
-      const requests = Array.isArray(response) ? response : (response.requests || response.data || []);
-      return requests.filter(r => r.status === 'pending');
-    } catch { return []; }
+    const { transporterId } = await this.getAuthData();
+    const r = await this.call(`/join-requests?type=passenger&transporterId=${transporterId}`);
+    return (Array.isArray(r) ? r : (r.requests || r.data || []))
+      .filter(x => x.status === 'pending');
   }
 
   async approvePassengerRequest(id) {
     const { transporterId } = await this.getAuthData();
-    return this.apiCall(`/join-requests/${id}/accept`, { method:'PUT', body: JSON.stringify({ transporterId }) });
+    return this.call(`/join-requests/${id}/accept`, {
+      method: 'PUT',
+      body: JSON.stringify({ transporterId }),
+    });
   }
 
   async rejectPassengerRequest(id) {
-    return this.apiCall(`/join-requests/${id}/reject`, { method:'PUT' });
+    return this.call(`/join-requests/${id}/reject`, { method: 'PUT' });
   }
 
+  /* ── Routes / Trips ── */
   async getRoutes() {
-    try {
-      const { transporterId } = await this.getAuthData();
-      const response = await this.apiCall(`/routes?transporterId=${transporterId}`);
-      return Array.isArray(response) ? response : (response.routes || response.data || []);
-    } catch { return []; }
+    const { transporterId } = await this.getAuthData();
+    const r = await this.call(`/routes?transporterId=${transporterId}`);
+    return Array.isArray(r) ? r : (r.routes || r.data || []);
   }
 
   async getTrips() {
-    try {
-      const { transporterId } = await this.getAuthData();
-      const response = await this.apiCall(`/trips?transporterId=${transporterId}`);
-      return Array.isArray(response) ? response : (response.trips || response.data || []);
-    } catch { return []; }
+    const { transporterId } = await this.getAuthData();
+    const r = await this.call(`/trips?transporterId=${transporterId}`);
+    return Array.isArray(r) ? r : (r.trips || r.data || []);
   }
 
+  /* ── Misc ── */
   async getComplaints() {
-    try {
-      const { transporterId } = await this.getAuthData();
-      const response = await this.apiCall(`/complaints?transporterId=${transporterId}`);
-      return Array.isArray(response) ? response : (response.complaints || response.data || []);
-    } catch { return []; }
+    const { transporterId } = await this.getAuthData();
+    const r = await this.call(`/complaints?transporterId=${transporterId}`);
+    return Array.isArray(r) ? r : (r.complaints || r.data || []);
   }
 
   async getNotifications() {
-    try {
-      const { transporterId } = await this.getAuthData();
-      const response = await this.apiCall(`/notifications?transporterId=${transporterId}`);
-      return Array.isArray(response) ? response : (response.notifications || response.data || []);
-    } catch { return []; }
+    const { transporterId } = await this.getAuthData();
+    const r = await this.call(`/notifications?transporterId=${transporterId}`);
+    return Array.isArray(r) ? r : (r.notifications || r.data || []);
   }
 
-  async markNotificationAsRead(id) {
-    return this.apiCall(`/notifications/${id}/read`, { method:'PUT' });
-  }
-
-  async getAddressFromCoords(lat, lng) {
-    try {
-      const res = await fetch(
-        `https://maps.googleapis.com/maps/api/geocode/json?latlng=${lat},${lng}&key=${GOOGLE_MAPS_API_KEY}`
-      );
-      const data = await res.json();
-      if (data.status === 'OK' && data.results.length > 0) {
-        return data.results[0].formatted_address;
-      }
-      return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-    } catch {
-      return `${lat.toFixed(5)}, ${lng.toFixed(5)}`;
-    }
+  async markRead(id) {
+    return this.call(`/notifications/${id}/read`, { method: 'PUT' });
   }
 }
 
-const apiService = new ApiService();
+const api = new ApiService();
 
-// ==================== AUTH HOOK ====================
-const useAuth = () => {
-  const navigation = useNavigation();
-
-  const checkAuth = useCallback(async () => {
-    try {
-      const { token, transporterId } = await apiService.getAuthData();
-      if (!token || !transporterId) {
-        Alert.alert('Authentication Required', 'Please login to continue', [
-          { text:'OK', onPress:() => navigation.reset({ index:0, routes:[{ name:'TransporterLogin' }] }) },
-        ]);
-        return false;
-      }
-      return true;
-    } catch {
-      navigation.reset({ index:0, routes:[{ name:'TransporterLogin' }] });
-      return false;
-    }
-  }, [navigation]);
-
-  const logout = useCallback(() => {
-    Alert.alert('Logout', 'Are you sure you want to log out?', [
-      { text:'Cancel', style:'cancel' },
-      {
-        text:'Logout', style:'destructive', onPress: async () => {
-          await AsyncStorage.multiRemove(['authToken','transporterId','transporterData','transporterEmail','transporterName','userRole']);
-          navigation.reset({ index:0, routes:[{ name:'TransporterLogin' }] });
-        },
-      },
-    ]);
-  }, [navigation]);
-
-  return { checkAuth, logout };
+// ─── TIME PICKER ──────────────────────────────────────────────────────────────
+const TimePicker = ({ visible, onClose, onSelect }) => {
+  const hours = ['01','02','03','04','05','06','07','08','09','10','11','12'];
+  const [h, setH] = useState('07');
+  const [m, setM] = useState('00');
+  const [p, setP] = useState('AM');
+  return (
+    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
+      <View style={tp.overlay}>
+        <View style={tp.box}>
+          <View style={tp.hdr}>
+            <Icon name="access-time" size={19} color={C.white} style={{ marginRight: 8 }} />
+            <Text style={tp.hdrTxt}>Select Time</Text>
+          </View>
+          <View style={tp.body}>
+            <Text style={tp.lbl}>HOUR</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
+              {hours.map(x => (
+                <TouchableOpacity key={x} style={[tp.chip, h===x && tp.chipOn]} onPress={() => setH(x)}>
+                  <Text style={[tp.chipTxt, h===x && tp.chipTxtOn]}>{x}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <Text style={tp.lbl}>MINUTE</Text>
+            <View style={{ flexDirection:'row', gap:8, marginBottom:12 }}>
+              {['00','15','30','45'].map(x => (
+                <TouchableOpacity key={x} style={[tp.chip,{flex:1,alignItems:'center'},m===x&&tp.chipOn]} onPress={()=>setM(x)}>
+                  <Text style={[tp.chipTxt,m===x&&tp.chipTxtOn]}>{x}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <Text style={tp.lbl}>PERIOD</Text>
+            <View style={{ flexDirection:'row', gap:8, marginBottom:12 }}>
+              {['AM','PM'].map(x => (
+                <TouchableOpacity key={x} style={[tp.chip,{flex:1,alignItems:'center'},p===x&&tp.chipOn]} onPress={()=>setP(x)}>
+                  <Text style={[tp.chipTxt,p===x&&tp.chipTxtOn]}>{x}</Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+            <View style={tp.preview}>
+              <Text style={tp.previewTime}>{h}:{m}</Text>
+              <Text style={tp.previewPd}>{p}</Text>
+            </View>
+            <View style={{ flexDirection:'row', gap:10, marginTop:10 }}>
+              <TouchableOpacity style={tp.cancelBtn} onPress={onClose}>
+                <Text style={tp.cancelTxt}>Cancel</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={tp.confirmBtn} onPress={() => { onSelect(`${h}:${m} ${p}`); onClose(); }}>
+                <Icon name="check" size={15} color={C.white} />
+                <Text style={tp.confirmTxt}>Add</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  );
 };
 
-// ==================== SHARED UI COMPONENTS ====================
-const StatCard = ({ label, value, iconName, color }) => (
-  <View style={styles.statCard}>
-    <View style={[styles.statIconWrap, { backgroundColor: color + '22' }]}>
-      <Icon name={iconName} size={26} color={color} />
-    </View>
-    <Text style={styles.statValue}>{value}</Text>
-    <Text style={styles.statLabel}>{label}</Text>
-  </View>
-);
+const tp = StyleSheet.create({
+  overlay:    { flex:1, backgroundColor:'rgba(0,0,0,0.45)', justifyContent:'center', alignItems:'center', padding:20 },
+  box:        { backgroundColor:C.white, borderRadius:22, width:'100%', maxWidth:380, overflow:'hidden' },
+  hdr:        { backgroundColor:C.primaryDark, flexDirection:'row', alignItems:'center', padding:16 },
+  hdrTxt:     { fontSize:17, fontWeight:'900', color:C.white },
+  body:       { padding:16 },
+  lbl:        { fontSize:10, fontWeight:'800', color:C.textLight, letterSpacing:1.2, marginBottom:8 },
+  chip:       { paddingHorizontal:14, paddingVertical:10, borderRadius:10, borderWidth:1.5, borderColor:C.border, backgroundColor:C.primaryGhost, marginRight:8 },
+  chipOn:     { backgroundColor:C.primaryDark, borderColor:C.primaryDark },
+  chipTxt:    { fontSize:15, fontWeight:'700', color:C.textMid },
+  chipTxtOn:  { color:C.white },
+  preview:    { backgroundColor:C.primaryGhost, borderRadius:14, padding:14, alignItems:'center', flexDirection:'row', justifyContent:'center', gap:8, borderWidth:1, borderColor:C.border },
+  previewTime:{ fontSize:34, fontWeight:'900', color:C.primaryDark, letterSpacing:-1 },
+  previewPd:  { fontSize:19, fontWeight:'700', color:C.primary, marginTop:6 },
+  cancelBtn:  { flex:1, padding:13, borderRadius:12, borderWidth:1.5, borderColor:C.border, alignItems:'center', backgroundColor:C.primaryGhost },
+  cancelTxt:  { fontWeight:'700', color:C.textMid, fontSize:14 },
+  confirmBtn: { flex:2, padding:13, borderRadius:12, backgroundColor:C.primaryDark, flexDirection:'row', justifyContent:'center', alignItems:'center', gap:6 },
+  confirmTxt: { color:C.white, fontWeight:'800', fontSize:14 },
+});
 
-const QuickActionCard = ({ iconName, title, onPress, badge }) => (
-  <TouchableOpacity style={styles.quickActionCard} onPress={onPress} activeOpacity={0.8}>
-    <View style={styles.quickActionIcon}>
-      <Icon name={iconName} size={24} color={COLORS.primaryDark} />
-      {badge > 0 && (
-        <View style={[styles.badge, { top:-4, right:-4 }]}>
-          <Text style={styles.badgeText}>{badge > 9 ? '9+' : badge}</Text>
-        </View>
-      )}
-    </View>
-    <Text style={styles.quickActionTitle}>{title}</Text>
-  </TouchableOpacity>
-);
-
-const ProfileImage = ({ uri, name, size = 60 }) => {
-  const initials = useMemo(() => {
+// ─── SHARED COMPONENTS ────────────────────────────────────────────────────────
+const Avatar = ({ uri, name, size = 60 }) => {
+  const init = useMemo(() => {
     if (!name) return 'T';
-    const parts = name.split(' ');
-    return parts.length > 1
-      ? `${parts[0][0]}${parts[1][0]}`.toUpperCase()
-      : name.substring(0, 2).toUpperCase();
+    const pts = name.trim().split(' ');
+    return pts.length > 1 ? `${pts[0][0]}${pts[1][0]}`.toUpperCase() : name.substring(0,2).toUpperCase();
   }, [name]);
-
   return (
-    <View style={{ width:size, height:size, borderRadius:size/2, overflow:'hidden', backgroundColor:COLORS.primary, justifyContent:'center', alignItems:'center' }}>
-      {uri ? (
-        <Image source={{ uri }} style={{ width:size, height:size }} />
-      ) : (
-        <Text style={{ color:COLORS.white, fontSize:size*0.35, fontWeight:'800' }}>{initials}</Text>
-      )}
+    <View style={{ width:size, height:size, borderRadius:size/2, overflow:'hidden', backgroundColor:C.primaryDark, justifyContent:'center', alignItems:'center', borderWidth:2, borderColor:C.primaryLight }}>
+      {uri
+        ? <Image source={{ uri }} style={{ width:size, height:size }} />
+        : <Text style={{ color:C.white, fontSize:size*0.35, fontWeight:'900' }}>{init}</Text>
+      }
     </View>
   );
 };
 
-const SectionHeader = ({ title }) => (
-  <View style={styles.sectionHeaderRow}>
-    <Text style={styles.sectionTitle}>{title}</Text>
-  </View>
+const StatCard = ({ label, value, iconName, onPress }) => (
+  <TouchableOpacity style={s.statCard} onPress={onPress} activeOpacity={onPress ? 0.75 : 1}>
+    <View style={s.statIconWrap}>
+      <Icon name={iconName} size={21} color={C.primaryDark} />
+    </View>
+    <Text style={s.statValue}>{value}</Text>
+    <Text style={s.statLabel}>{label}</Text>
+  </TouchableOpacity>
 );
 
-// ==================== MAIN DASHBOARD ====================
+// ─── SMART ROUTE CARD ─────────────────────────────────────────────────────────
+const SmartRouteCard = ({ result, onConfirm, onDiscard, isConfirming }) => {
+  const [expanded, setExpanded] = useState(false);
+  const vi = VEHICLE_INFO[result.vehicleType] || VEHICLE_INFO.van;
+  const hasWarnings = result.warnings?.length > 0;
+  const noDriver = result.isNewRoute;
+
+  return (
+    <View style={[s.card, { borderTopWidth: 3, borderTopColor: noDriver ? C.warning : C.primaryDark }]}>
+      {/* Header */}
+      <View style={{ flexDirection:'row', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
+        <View style={{ flexDirection:'row', alignItems:'center', gap:10 }}>
+          <View style={[s.vIconWrap, { backgroundColor: noDriver ? '#FFF3E0' : C.primaryGhost }]}>
+            <Text style={{ fontSize:24 }}>{vi.icon}</Text>
+          </View>
+          <View>
+            <Text style={s.cardTitle} numberOfLines={1}>
+              {noDriver ? `Needs ${vi.label} Driver` : result.driverName}
+            </Text>
+            <View style={{ flexDirection:'row', alignItems:'center', gap:6, marginTop:3 }}>
+              <View style={[s.pillBadge, { backgroundColor: C.primaryPale }]}>
+                <Text style={[s.pillBadgeTxt, { color: C.primaryDark }]}>
+                  {vi.label} · cap {vi.capacity}
+                </Text>
+              </View>
+              <View style={[s.pillBadge, { backgroundColor: result.preferenceGroup ? '#E8F5E9' : C.primaryGhost }]}>
+                <Text style={[s.pillBadgeTxt, { color: result.preferenceGroup ? '#2E7D32' : C.textMid }]}>
+                  {result.preferenceGroup ? '🔒 Preference' : '🤖 Auto'}
+                </Text>
+              </View>
+            </View>
+          </View>
+        </View>
+        <View style={{ alignItems:'flex-end' }}>
+          <Text style={s.paxBig}>{result.passengerCount}</Text>
+          <Text style={{ fontSize:10, color:C.textLight }}>passengers</Text>
+        </View>
+      </View>
+
+      {/* Stats */}
+      <View style={s.statsRow}>
+        {[
+          { i:'schedule',          v:result.estimatedTime, l:'Time'   },
+          { i:'local-gas-station', v:result.estimatedFuel, l:'Fuel'   },
+          { i:'straighten',        v:result.estimatedKm,   l:'Dist.'  },
+        ].map((item, idx, arr) => (
+          <React.Fragment key={idx}>
+            <View style={s.statBox}>
+              <Icon name={item.i} size={16} color={C.primaryDark} />
+              <Text style={s.statBoxVal}>{item.v}</Text>
+              <Text style={s.statBoxLbl}>{item.l}</Text>
+            </View>
+            {idx < arr.length-1 && <View style={s.statDiv} />}
+          </React.Fragment>
+        ))}
+      </View>
+
+      {/* Matrix source */}
+      {result.matrixSource && (
+        <View style={s.srcBadge}>
+          <Icon name={result.matrixSource === 'osrm' ? 'wifi' : 'offline-bolt'} size={11} color={C.primaryDark} />
+          <Text style={s.srcTxt}>{result.matrixSource === 'osrm' ? 'OSRM (live)' : 'Haversine (offline)'}</Text>
+        </View>
+      )}
+
+      {/* Stops */}
+      <TouchableOpacity style={s.stopsHeader} onPress={() => setExpanded(!expanded)}>
+        <Text style={s.stopsTitle}>Route Stops ({result.stops.length})</Text>
+        <Icon name={expanded ? 'expand-less' : 'expand-more'} size={20} color={C.primaryDark} />
+      </TouchableOpacity>
+
+      {expanded && result.stops.map((stop, i) => (
+        <View key={i} style={s.stopRow}>
+          <View style={[s.stopDot, { backgroundColor: stop.type === 'pickup' ? C.primaryDark : C.primary }]} />
+          <View style={s.stopLineWrap}>
+            {i < result.stops.length-1 && <View style={s.stopLine} />}
+          </View>
+          <View style={{ flex:1 }}>
+            <Text style={s.stopName}>
+              {stop.name}
+              <Text style={{ fontWeight:'600', color: stop.type === 'pickup' ? C.primaryDark : C.primary }}>
+                {' '}{stop.type === 'pickup' ? '↑ Pickup' : '↓ Drop-off'}
+              </Text>
+            </Text>
+            {stop.address && <Text style={s.stopAddr} numberOfLines={1}>{stop.address}</Text>}
+          </View>
+        </View>
+      ))}
+
+      {/* Passengers list */}
+      {expanded && result.passengers?.length > 0 && (
+        <View style={{ marginTop:10 }}>
+          <Text style={s.stopsTitle}>Passengers</Text>
+          {result.passengers.map((p, i) => (
+            <View key={i} style={s.paxRow}>
+              <View style={s.paxAvatar}>
+                <Text style={{ fontSize:11, fontWeight:'800', color:C.primaryDark }}>
+                  {(p.name||'P').split(' ').map(w=>w[0]).join('').substring(0,2).toUpperCase()}
+                </Text>
+              </View>
+              <View style={{ flex:1 }}>
+                <Text style={{ fontSize:13, fontWeight:'700', color:C.textDark }}>{p.name}</Text>
+                {p.vehiclePreference && (
+                  <View style={[s.pillBadge, { backgroundColor:'#E8F5E9', alignSelf:'flex-start', marginTop:2 }]}>
+                    <Text style={[s.pillBadgeTxt, { color:'#2E7D32' }]}>
+                      Prefers {VEHICLE_INFO[p.vehiclePreference]?.icon} {p.vehiclePreference}
+                    </Text>
+                  </View>
+                )}
+              </View>
+            </View>
+          ))}
+        </View>
+      )}
+
+      {/* Warnings */}
+      {hasWarnings && result.warnings.map((w, i) => (
+        <View key={i} style={[s.warnBox, { borderColor: w.includes('⚠') || w.includes('No') ? C.warning : C.border }]}>
+          <Icon name="warning" size={13} color={C.warning} />
+          <Text style={[s.warnTxt, { color: C.warning }]}>{w}</Text>
+        </View>
+      ))}
+
+      {/* Actions */}
+      <View style={s.twoBtn}>
+        <TouchableOpacity style={s.discardBtn} onPress={onDiscard}>
+          <Icon name="delete-outline" size={16} color={C.white} />
+          <Text style={s.btnTxt}>Discard</Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[s.confirmBtn2, isConfirming && { opacity:0.6 }]}
+          onPress={onConfirm}
+          disabled={isConfirming}
+        >
+          {isConfirming
+            ? <ActivityIndicator size="small" color={C.white} />
+            : (
+              <>
+                <Icon name="check-circle" size={16} color={C.white} />
+                <Text style={s.btnTxt}>Confirm Route</Text>
+              </>
+            )
+          }
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+};
+
+// ─── REQUEST CARD ──────────────────────────────────────────────────────────────
+const RequestCard = ({ req, onAccept, onReject, isProcessing }) => {
+  const vInfo = VEHICLE_INFO[req.vehicleType || req.vehicle_type] || null;
+  const pInfo = VEHICLE_INFO[req.vehiclePreference || req.vehicle_preference] || null;
+  return (
+    <View style={s.card}>
+      <View style={{ flexDirection:'row', alignItems:'center', gap:10, marginBottom:12 }}>
+        <View style={s.reqAvatar}>
+          <Text style={{ fontSize:22 }}>{req.type === 'driver' ? '🚗' : '👤'}</Text>
+        </View>
+        <View style={{ flex:1 }}>
+          <Text style={s.cardTitle}>{req.name || req.fullName}</Text>
+          <View style={[s.pillBadge, { marginTop:3, backgroundColor:C.primaryPale }]}>
+            <Text style={[s.pillBadgeTxt, { color:C.primaryDark }]}>
+              {req.type === 'driver' ? 'Driver Request' : 'Passenger Request'}
+            </Text>
+          </View>
+        </View>
+      </View>
+      <View style={{ gap:5, marginBottom:10 }}>
+        {req.email      && <View style={s.detailRow}><Icon name="email"       size={13} color={C.primaryDark} /><Text style={s.detailTxt}>{req.email}</Text></View>}
+        {req.phone      && <View style={s.detailRow}><Icon name="phone"       size={13} color={C.primaryDark} /><Text style={s.detailTxt}>{req.phone}</Text></View>}
+        {req.license    && <View style={s.detailRow}><Icon name="credit-card" size={13} color={C.primaryDark} /><Text style={s.detailTxt}>License: {req.license}</Text></View>}
+        {req.pickupPoint && <View style={s.detailRow}><Icon name="place"      size={13} color={C.primaryDark} /><Text style={s.detailTxt}>{req.pickupPoint}</Text></View>}
+        {req.destination && <View style={s.detailRow}><Icon name="flag"       size={13} color={C.primaryDark} /><Text style={s.detailTxt}>{req.destination}</Text></View>}
+      </View>
+      {vInfo && (
+        <View style={s.vBadge}>
+          <Text style={{ fontSize:20 }}>{vInfo.icon}</Text>
+          <View style={{ marginLeft:10 }}>
+            <Text style={s.vBadgeLbl}>Vehicle Type</Text>
+            <Text style={s.vBadgeVal}>{vInfo.label} — {vInfo.desc}</Text>
+          </View>
+        </View>
+      )}
+      {pInfo && (
+        <View style={[s.vBadge, { marginTop:6, backgroundColor:'#E8F5E9', borderColor:'#A5D6A7' }]}>
+          <Text style={{ fontSize:20 }}>{pInfo.icon}</Text>
+          <View style={{ marginLeft:10 }}>
+            <Text style={s.vBadgeLbl}>Travel Preference 🔒</Text>
+            <Text style={[s.vBadgeVal, { color:'#2E7D32' }]}>{pInfo.label} only — {pInfo.desc}</Text>
+          </View>
+        </View>
+      )}
+      <View style={s.twoBtn}>
+        <TouchableOpacity style={s.rejectBtn} onPress={onReject} disabled={isProcessing}>
+          <Icon name="close" size={16} color={C.white} />
+          <Text style={s.btnTxt}>Reject</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={s.acceptBtn} onPress={onAccept} disabled={isProcessing}>
+          {isProcessing
+            ? <ActivityIndicator size="small" color={C.white} />
+            : <><Icon name="check" size={16} color={C.white} /><Text style={s.btnTxt}>Accept</Text></>
+          }
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+};
+
+// ─── DRIVER CARD ───────────────────────────────────────────────────────────────
+const DriverCard = ({ driver }) => {
+  const vi   = VEHICLE_INFO[driver.vehicleType || driver.vehicle] || VEHICLE_INFO.van;
+  const cap  = vi.capacity || driver.capacity || 8;
+  const fill = driver.passengers?.length || 0;
+  const pct  = Math.min((fill / cap) * 100, 100);
+  return (
+    <View style={s.driverCard}>
+      <View style={[s.driverAvatar, { backgroundColor:C.primaryDark }]}>
+        <Text style={s.driverAvatarTxt}>
+          {(driver.name||'D').split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase()}
+        </Text>
+        <View style={[s.driverDot, { backgroundColor:driver.status==='active' ? C.primary : C.border }]} />
+      </View>
+      <View style={{ flex:1 }}>
+        <View style={{ flexDirection:'row', justifyContent:'space-between', alignItems:'center' }}>
+          <Text style={s.driverName} numberOfLines={1}>{driver.name}</Text>
+          <Text style={{ fontSize:16 }}>{vi.icon}</Text>
+        </View>
+        <Text style={s.driverSub} numberOfLines={1}>{vi.label} · cap {cap}</Text>
+        <View style={s.capRow}>
+          <Text style={s.capTxt}>{fill}/{cap}</Text>
+          <View style={s.capBg}>
+            <View style={[s.capFill, { width:`${pct}%`, backgroundColor: pct>80 ? C.error : C.primary }]} />
+          </View>
+        </View>
+        {driver.phone && (
+          <View style={{ flexDirection:'row', alignItems:'center', gap:3, marginTop:3 }}>
+            <Icon name="phone" size={10} color={C.textLight} />
+            <Text style={{ fontSize:10, color:C.textLight }}>{driver.phone}</Text>
+          </View>
+        )}
+      </View>
+    </View>
+  );
+};
+
+// ─── MAIN DASHBOARD ───────────────────────────────────────────────────────────
 const TransporterDashboard = () => {
-  const navigation = useNavigation();
-  const { checkAuth, logout } = useAuth();
+  const navigation  = useNavigation();
+  const [section,   setSection]   = useState('overview');
+  const [sidebar,   setSidebar]   = useState(false);
+  const [loading,   setLoading]   = useState(true);
+  const [refreshing,setRefreshing]= useState(false);
+  const slideAnim = useRef(new Animated.Value(-295)).current;
 
-  const [sidebarVisible, setSidebarVisible]   = useState(false);
-  const [activeSection, setActiveSection]     = useState('overview');
-  const [refreshing, setRefreshing]           = useState(false);
-  const [lastUpdated, setLastUpdated]         = useState(new Date());
-  const [slideAnim]                           = useState(new Animated.Value(-280));
-  const [isLoading, setIsLoading]             = useState(true);
+  // Data
+  const [profile,        setProfile]        = useState(null);
+  const [editProfile,    setEditProfile]     = useState(null);
+  const [isEditingPro,   setIsEditingPro]    = useState(false);
+  const [stats,          setStats]          = useState({ activeDrivers:0,totalPassengers:0,completedTrips:0,ongoingTrips:0,complaints:0,paymentsReceived:0,paymentsPending:0 });
+  const [polls,          setPolls]          = useState([]);
+  const [drivers,        setDrivers]        = useState([]);
+  const [routes,         setRoutes]         = useState([]);
+  const [trips,          setTrips]          = useState([]);
+  const [driverReqs,     setDriverReqs]     = useState([]);
+  const [passReqs,       setPassReqs]       = useState([]);
+  const [complaints,     setComplaints]     = useState([]);
+  const [notifications,  setNotifications]  = useState([]);
 
-  const [profile, setProfile]                           = useState(null);
-  const [isEditingProfile, setIsEditingProfile]         = useState(false);
-  const [stats, setStats]                               = useState({ activeDrivers:0, totalPassengers:0, completedTrips:0, ongoingTrips:0, complaints:0, paymentsReceived:0, paymentsPending:0 });
-  const [polls, setPolls]                               = useState([]);
-  const [routes, setRoutes]                             = useState([]);
-  const [driverRequests, setDriverRequests]             = useState([]);
-  const [passengerRequests, setPassengerRequests]       = useState([]);
-  const [complaints, setComplaints]                     = useState([]);
-  const [notifications, setNotifications]               = useState([]);
-  const [vans, setVans]                                 = useState([]);
-  const [selectedPoll, setSelectedPoll]                 = useState(null);
-  // ── used only for Poll → Assign flow (kept for backward compat) ──
-  const [selectedPollForAssignment, setSelectedPollForAssignment] = useState(null);
+  // Smart Route state
+  const [smartResults,   setSmartResults]   = useState([]);
+  const [optimizing,     setOptimizing]     = useState(false);
+  const [confirmingIdx,  setConfirmingIdx]  = useState(null);
+  const [activePoll,     setActivePoll]     = useState(null);
 
-  // ── init ──
+  // Poll modal
+  const [selectedPoll,   setSelectedPoll]   = useState(null);
+  const [lastUpdated,    setLastUpdated]    = useState(new Date());
+
   useEffect(() => {
-    checkAuth().then(ok => { if (ok) loadAllData(); });
+    checkAuthAndLoad();
   }, []);
 
   useEffect(() => {
     Animated.spring(slideAnim, {
-      toValue: sidebarVisible ? 0 : -280,
+      toValue: sidebar ? 0 : -295,
       useNativeDriver: true,
-      tension: 80,
-      friction: 12,
+      tension: 80, friction: 12,
     }).start();
-  }, [sidebarVisible]);
+  }, [sidebar]);
 
-  // ── loaders ──
-  const loadAllData = async () => {
+  // ✅ FIX: checkAuthAndLoad now also checks for 'userId' key as fallback
+  const checkAuthAndLoad = async () => {
+    const { token, transporterId } = await api.getAuthData();
+    if (!token || !transporterId) {
+      navigation.reset({ index:0, routes:[{ name:'TransporterLogin' }] });
+      return;
+    }
+    await loadAll();
+  };
+
+  const loadAll = async () => {
     try {
-      setIsLoading(true);
-      await Promise.all([
-        loadProfile(), loadStats(), loadPolls(),
-        loadDriverRequests(), loadPassengerRequests(),
-        loadRoutes(), loadComplaints(), loadNotifications(), loadTrips(),
+      setLoading(true);
+      const [p, st, po, dr, req_d, req_p, rt, tr, co, no] = await Promise.allSettled([
+        api.getProfile(),
+        api.getStats(),
+        api.getPolls(),
+        api.getDrivers(),
+        api.getDriverRequests(),
+        api.getPassengerRequests(),
+        api.getRoutes(),
+        api.getTrips(),
+        api.getComplaints(),
+        api.getNotifications(),
       ]);
+      if (p.status==='fulfilled'  && p.value)   setProfile(p.value);
+      if (st.status==='fulfilled' && st.value)  setStats(st.value);
+      if (po.status==='fulfilled' && po.value)  setPolls(po.value);
+      if (dr.status==='fulfilled' && dr.value)  setDrivers(dr.value);
+      if (req_d.status==='fulfilled') setDriverReqs(req_d.value||[]);
+      if (req_p.status==='fulfilled') setPassReqs(req_p.value||[]);
+      if (rt.status==='fulfilled')    setRoutes(rt.value||[]);
+      if (tr.status==='fulfilled')    setTrips(tr.value||[]);
+      if (co.status==='fulfilled')    setComplaints(co.value||[]);
+      if (no.status==='fulfilled')    setNotifications(no.value||[]);
       setLastUpdated(new Date());
-    } catch (error) {
-      if (error.message === 'Authentication required' || error.message === 'Authentication failed') {
-        Alert.alert('Session Expired', 'Please login again', [
-          { text:'OK', onPress:()=> navigation.reset({ index:0, routes:[{ name:'TransporterLogin' }] }) },
+    } catch (e) {
+      if (e.message?.includes('Authentication')) {
+        Alert.alert('Session Expired', 'Please login again.', [
+          { text:'OK', onPress:() => navigation.reset({ index:0, routes:[{ name:'TransporterLogin' }] }) }
         ]);
-      } else {
-        Alert.alert('Error', 'Failed to load data. Please check your connection.');
       }
     } finally {
-      setIsLoading(false);
+      setLoading(false);
     }
   };
 
-  const loadProfile           = async () => { const d = await apiService.getProfile(); if (d) setProfile({ ...d, registrationDate: d.registrationDate ? new Date(d.registrationDate).toLocaleDateString() : 'N/A' }); };
-  const loadStats             = async () => setStats(await apiService.getStats());
-  const loadPolls             = async () => setPolls(await apiService.getPolls());
-  const loadDriverRequests    = async () => setDriverRequests(await apiService.getDriverRequests());
-  const loadPassengerRequests = async () => setPassengerRequests(await apiService.getPassengerRequests());
-  const loadRoutes            = async () => setRoutes(await apiService.getRoutes());
-  const loadComplaints        = async () => setComplaints(await apiService.getComplaints());
-  const loadNotifications     = async () => setNotifications(await apiService.getNotifications());
-
-  const loadTrips = async () => {
-    try {
-      const data = await apiService.getTrips();
-      if (!data || !data.length) { setVans([]); return; }
-      setVans(data.map(trip => {
-        const picked = (Array.isArray(trip.passengers) ? trip.passengers : []).filter(p => p && (p.status==='picked'||p.status==='current'));
-        return {
-          id: trip._id || trip.id,
-          name: `Van - ${trip.driverName || 'Unknown'}`,
-          driver: trip.driverName || 'Unknown Driver',
-          route: trip.routeName || 'Unknown Route',
-          timeSlot: trip.timeSlot || 'N/A',
-          status: trip.status || 'Unknown',
-          passengers: picked.length,
-          capacity: trip.capacity || 8,
-          currentStop: trip.currentStop || 'N/A',
-          currentLocation: trip.currentLocation || { latitude:33.6844, longitude:73.0479 },
-          speed: trip.speed || 0,
-          eta: trip.eta || '0 min',
-          color: '#3498DB',
-        };
-      }));
-    } catch { setVans([]); }
-  };
-
-  const handleRefresh = useCallback(() => {
+  const onRefresh = useCallback(() => {
     setRefreshing(true);
-    loadAllData().finally(() => setRefreshing(false));
+    loadAll().finally(() => setRefreshing(false));
   }, []);
 
-  const unreadCount = useMemo(() => notifications.filter(n => !n.read).length, [notifications]);
+  const unread = useMemo(() => notifications.filter(n => !n.read).length, [notifications]);
+  const totalBadge = driverReqs.length + passReqs.length + unread + smartResults.length;
 
-  // ==================== SIDEBAR ====================
+  const nav = (sec) => { setSection(sec); setSidebar(false); };
+
+  // ── SMART ROUTE OPTIMIZER (calls server) ────────────────────────────────────
+  const handleOptimize = async (poll) => {
+    if (!poll) { Alert.alert('No Poll', 'Select a poll first.'); return; }
+    setOptimizing(true);
+    setActivePoll(poll);
+    setSmartResults([]);
+    try {
+      const passengers = (poll.responses || [])
+        .filter(r => r.response === 'yes')
+        .map((r, i) => ({
+          id:               r.passengerId || r._id || `p_${i}`,
+          name:             r.passengerName || 'Passenger',
+          vehiclePreference:r.vehiclePreference || null,
+          pickupLocation:   r.pickupLocation || null,
+          pickupLat:        r.pickupLat || null,
+          pickupLng:        r.pickupLng || null,
+          pickupAddress:    r.pickupPoint || r.pickupAddress || 'Pickup',
+          dropLocation:     r.dropLocation || null,
+          dropLat:          r.dropLat || null,
+          dropLng:          r.dropLng || null,
+          dropAddress:      r.destination || r.dropAddress || 'Drop-off',
+          timeSlot:         r.selectedTimeSlot || r.timeSlot || poll.timeSlots?.[0] || '08:00 AM',
+        }));
+
+      if (!passengers.length) {
+        Alert.alert('No Passengers', 'No passengers responded "Yes" to this poll.');
+        setOptimizing(false);
+        return;
+      }
+
+      const driversPayload = drivers.map(d => ({
+        id:          d._id || d.id,
+        name:        d.name,
+        vehicleType: d.vehicleType || d.vehicle || 'van',
+        currentLocation: d.currentLocation || null,
+        lat:         d.latitude  || null,
+        lng:         d.longitude || null,
+        capacity:    VEHICLE_CAPS[d.vehicleType || d.vehicle || 'van'] || 8,
+      }));
+
+      console.log(`[SmartRoute] ${passengers.length} passengers, ${driversPayload.length} drivers`);
+      const res = await api.optimizeRoutes(passengers, driversPayload, poll._id);
+      if (res.success && Array.isArray(res.routes)) {
+        setSmartResults(res.routes);
+        nav('smart-route');
+        if (res.routes.length === 0) {
+          Alert.alert('No Routes', 'No routes could be generated.');
+        }
+      } else {
+        Alert.alert('Error', res.error || 'Optimization failed');
+      }
+    } catch (err) {
+      console.error('[SmartRoute]', err);
+      Alert.alert('Error', 'Could not reach the optimizer. Check server connection.');
+    } finally {
+      setOptimizing(false);
+    }
+  };
+
+  const handleConfirmRoute = async (result, idx) => {
+    setConfirmingIdx(idx);
+    try {
+      if (!activePoll) throw new Error('No active poll');
+      await api.assignRouteFromPoll(activePoll._id, {
+        driverId:     result.driverId,
+        routeName:    result.driverName
+                        ? `${result.driverName} - ${new Date().toLocaleDateString()}`
+                        : `Route ${idx + 1} - ${new Date().toLocaleDateString()}`,
+        timeSlot:     result.passengers?.[0]?.timeSlot || '08:00 AM',
+        vehicleType:  result.vehicleType,
+        passengers:   result.passengers,
+        stops:        result.stops,
+        estimatedTime:result.estimatedTime,
+        estimatedFuel:result.estimatedFuel,
+        estimatedKm:  result.estimatedKm,
+      });
+      setSmartResults(prev => prev.filter((_,i) => i !== idx));
+      Alert.alert('Route Confirmed! ✅', `${result.driverName || 'Route'} assigned with ${result.passengerCount} passenger(s).\n⏱ ${result.estimatedTime}  ⛽ ${result.estimatedFuel}  📏 ${result.estimatedKm}`);
+      await loadAll();
+    } catch (err) {
+      Alert.alert('Error', err.message || 'Could not assign route.');
+    } finally {
+      setConfirmingIdx(null);
+    }
+  };
+
+  const handleDiscardRoute = (idx) => {
+    Alert.alert('Discard Route?', 'This suggestion will be removed.', [
+      { text:'Cancel', style:'cancel' },
+      { text:'Discard', style:'destructive', onPress:() => setSmartResults(prev => prev.filter((_,i)=>i!==idx)) },
+    ]);
+  };
+
+  const logout = () => {
+    Alert.alert('Logout', 'Are you sure?', [
+      { text:'Cancel', style:'cancel' },
+      { text:'Logout', style:'destructive', onPress: async () => {
+        // ✅ FIX: clear all possible auth keys on logout
+        await AsyncStorage.multiRemove(['authToken','transporterId','userId','transporterData']);
+        navigation.reset({ index:0, routes:[{ name:'TransporterLogin' }] });
+      }},
+    ]);
+  };
+
+  // ─── SIDEBAR ──────────────────────────────────────────────────────────────
   const Sidebar = () => (
-    <Animated.View style={[styles.sidebar, { transform:[{ translateX:slideAnim }] }]}>
-      <View style={styles.sidebarHeader}>
-        <ProfileImage uri={profile?.profileImage} name={profile?.name} size={48} />
+    <Animated.View style={[s.sidebar, { transform:[{ translateX:slideAnim }] }]}>
+      <View style={s.sidebarHdr}>
+        <Avatar uri={profile?.profileImage} name={profile?.name} size={50} />
         <View style={{ marginLeft:12, flex:1 }}>
-          <Text style={styles.sidebarName}>{profile?.name || 'Loading...'}</Text>
-          <Text style={styles.sidebarCompany}>{profile?.company || 'Transport Company'}</Text>
+          <Text style={s.sidebarName} numberOfLines={1}>{profile?.name || 'Loading...'}</Text>
+          <Text style={s.sidebarCo}   numberOfLines={1}>{profile?.company || 'Transport Co.'}</Text>
+          <View style={s.sidebarStatus}>
+            <View style={s.sidebarDot} />
+            <Text style={s.sidebarStatusTxt}>Active</Text>
+          </View>
         </View>
-        <TouchableOpacity onPress={() => setSidebarVisible(false)} style={styles.sidebarClose}>
-          <Icon name="close" size={22} color={COLORS.white} />
+        <TouchableOpacity onPress={() => setSidebar(false)} style={s.sidebarClose}>
+          <Icon name="close" size={19} color={C.primaryLight} />
         </TouchableOpacity>
       </View>
       <ScrollView showsVerticalScrollIndicator={false}>
         {MENU_ITEMS.map(item => {
-          const isActive = activeSection === item.key;
-          const badgeNum =
-            item.key === 'notifications' ? unreadCount :
-            item.key === 'driver-req'    ? driverRequests.length :
-            item.key === 'pass-req'      ? passengerRequests.length : 0;
+          const active = section === item.key;
+          const badge =
+            item.key === 'notifications' ? unread :
+            item.key === 'driver-req'    ? driverReqs.length :
+            item.key === 'pass-req'      ? passReqs.length :
+            item.key === 'smart-route'   ? smartResults.length : 0;
           return (
             <TouchableOpacity
               key={item.key}
-              style={[styles.menuItem, isActive && styles.menuItemActive]}
-              onPress={() => { setActiveSection(item.key); setSidebarVisible(false); }}
-              activeOpacity={0.7}
+              style={[s.menuItem, active && s.menuItemOn]}
+              onPress={() => nav(item.key)}
             >
-              <Icon name={item.icon} size={22} color={isActive ? COLORS.primaryDark : COLORS.gray} />
-              <Text style={[styles.menuItemText, isActive && styles.menuItemTextActive]}>{item.label}</Text>
-              {badgeNum > 0 && (
-                <View style={styles.menuBadge}>
-                  <Text style={styles.menuBadgeText}>{badgeNum > 9 ? '9+' : badgeNum}</Text>
+              {active && <View style={s.menuBar} />}
+              <View style={[s.menuIconWrap, active && s.menuIconOn]}>
+                <Icon name={item.icon} size={19} color={active ? C.primaryDark : C.textLight} />
+              </View>
+              <Text style={[s.menuTxt, active && s.menuTxtOn]}>{item.label}</Text>
+              {badge > 0 && (
+                <View style={s.menuBadge}>
+                  <Text style={s.menuBadgeTxt}>{badge > 9 ? '9+' : badge}</Text>
                 </View>
               )}
             </TouchableOpacity>
           );
         })}
-        <View style={styles.menuDivider} />
-        <TouchableOpacity style={styles.logoutMenuItem} onPress={logout}>
-          <Icon name="logout" size={22} color={COLORS.danger} />
-          <Text style={styles.logoutMenuText}>Logout</Text>
+        <View style={s.menuDivider} />
+        <TouchableOpacity style={s.logoutItem} onPress={logout}>
+          <View style={s.menuIconWrap}>
+            <Icon name="logout" size={19} color={C.primaryDark} />
+          </View>
+          <Text style={[s.menuTxt, { color:C.primaryDark, fontWeight:'700' }]}>Logout</Text>
         </TouchableOpacity>
+        <View style={{ height:30 }} />
       </ScrollView>
     </Animated.View>
   );
 
-  // ==================== OVERVIEW ====================
+  // ─── OVERVIEW ─────────────────────────────────────────────────────────────
   const OverviewSection = () => (
     <ScrollView
-      style={styles.section}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={handleRefresh} colors={[COLORS.primary]} />}
+      style={s.section}
+      contentContainerStyle={{ paddingBottom:24 }}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[C.primary]} />}
       showsVerticalScrollIndicator={false}
     >
-      <SectionHeader title="Dashboard" />
-      <Text style={styles.updateText}>Last updated: {lastUpdated.toLocaleTimeString()}</Text>
-      <View style={styles.statsGrid}>
-        <StatCard label="Active Drivers"   value={stats.activeDrivers}   iconName="directions-car"  color={COLORS.primary} />
-        <StatCard label="Passengers"       value={stats.totalPassengers} iconName="people"          color={COLORS.success} />
-        <StatCard label="Completed Trips"  value={stats.completedTrips}  iconName="check-circle"    color={COLORS.primaryDark} />
-        <StatCard label="Ongoing Trips"    value={stats.ongoingTrips}    iconName="sync"            color={COLORS.warning} />
-        <StatCard label="Complaints"       value={stats.complaints}      iconName="support-agent"   color={COLORS.danger} />
-        <StatCard label="Payments Recv."   value={stats.paymentsReceived} iconName="account-balance-wallet" color={COLORS.success} />
+      <View style={s.welcomeCard}>
+        <View style={{ flex:1 }}>
+          <Text style={s.welcomeGreet}>Good {new Date().getHours() < 12 ? 'Morning' : 'Afternoon'} 👋</Text>
+          <Text style={s.welcomeName}>{profile?.name || 'Transporter'}</Text>
+          <Text style={s.welcomeTime}>Updated {lastUpdated.toLocaleTimeString()}</Text>
+        </View>
+        <Avatar uri={profile?.profileImage} name={profile?.name} size={50} />
       </View>
-      <Text style={styles.sectionSubtitle}>Quick Actions</Text>
-      <View style={styles.quickActionsGrid}>
-        <QuickActionCard iconName="poll"            title="Polls"       onPress={() => setActiveSection('poll')} />
-        <QuickActionCard iconName="map"             title="Routes"      onPress={() => setActiveSection('routes')} />
-        <QuickActionCard iconName="assignment-ind"  title="Assign"      onPress={() => setActiveSection('assign')} />
-        <QuickActionCard iconName="my-location"     title="Tracking"    onPress={() => setActiveSection('tracking')} />
-        <QuickActionCard iconName="group-add"       title="Driver Req"  onPress={() => setActiveSection('driver-req')} badge={driverRequests.length} />
-        <QuickActionCard iconName="person-add"      title="Pass. Req"   onPress={() => setActiveSection('pass-req')}  badge={passengerRequests.length} />
+
+      {smartResults.length > 0 && (
+        <TouchableOpacity style={s.smartBanner} onPress={() => nav('smart-route')}>
+          <View style={s.smartBannerIcon}><Icon name="auto-awesome" size={19} color={C.primaryDark} /></View>
+          <View style={{ flex:1 }}>
+            <Text style={s.smartBannerTitle}>{smartResults.length} Smart Route{smartResults.length!==1?'s':''} Ready!</Text>
+            <Text style={s.smartBannerSub}>Tap to review and confirm</Text>
+          </View>
+          <Icon name="chevron-right" size={21} color={C.textDark} />
+        </TouchableOpacity>
+      )}
+      {optimizing && (
+        <View style={s.optimizingRow}>
+          <ActivityIndicator size="small" color={C.primaryDark} />
+          <Text style={s.optimizingTxt}>Building optimized routes via OSRM...</Text>
+        </View>
+      )}
+
+      <Text style={s.sectionLbl}>TODAY'S OVERVIEW</Text>
+      <View style={s.statsGrid}>
+        {[
+          { l:'Active Drivers',  v:stats.activeDrivers,   i:'directions-car',         a:()=>nav('tracking')     },
+          { l:'Passengers',      v:stats.totalPassengers,  i:'people',                 a:null                    },
+          { l:'Trips Done',      v:stats.completedTrips,   i:'check-circle',           a:null                    },
+          { l:'Active Trips',    v:stats.ongoingTrips,     i:'sync',                   a:null                    },
+          { l:'Complaints',      v:stats.complaints,       i:'support-agent',          a:()=>nav('complaints')   },
+          { l:'Payments In',     v:`Rs.${stats.paymentsReceived}`, i:'account-balance-wallet', a:()=>nav('payments') },
+        ].map((it,i) => <StatCard key={i} label={it.l} value={it.v} iconName={it.i} onPress={it.a} />)}
       </View>
-      {unreadCount > 0 && (
-        <TouchableOpacity style={styles.notifBanner} onPress={() => setActiveSection('notifications')}>
-          <Icon name="notifications-active" size={22} color={COLORS.white} />
-          <Text style={styles.notifBannerText}>You have {unreadCount} unread notification{unreadCount > 1 ? 's' : ''}</Text>
-          <Icon name="chevron-right" size={22} color={COLORS.white} />
+
+      <Text style={s.sectionLbl}>QUICK ACTIONS</Text>
+      <View style={s.quickGrid}>
+        {[
+          { i:'auto-awesome', l:'Smart\nRoutes',  k:'smart-route', b:smartResults.length },
+          { i:'poll',         l:'Polls',          k:'poll'                               },
+          { i:'map',          l:'Routes',         k:'routes'                             },
+          { i:'my-location',  l:'Tracking',       k:'tracking'                           },
+          { i:'group-add',    l:'Driver\nReq.',   k:'driver-req',  b:driverReqs.length   },
+          { i:'person-add',   l:'Pass.\nReq.',    k:'pass-req',    b:passReqs.length     },
+        ].map((it,idx) => (
+          <TouchableOpacity key={idx} style={s.quickCard} onPress={() => nav(it.k)}>
+            <View style={s.quickIconWrap}>
+              <Icon name={it.i} size={23} color={C.primaryDark} />
+              {it.b > 0 && (
+                <View style={s.quickBadge}>
+                  <Text style={s.quickBadgeTxt}>{it.b>9?'9+':it.b}</Text>
+                </View>
+              )}
+            </View>
+            <Text style={s.quickLabel}>{it.l}</Text>
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      {unread > 0 && (
+        <TouchableOpacity style={s.notifBanner} onPress={() => nav('notifications')}>
+          <Icon name="notifications-active" size={17} color={C.primaryDark} />
+          <Text style={s.notifBannerTxt}>{unread} unread notification{unread!==1?'s':''}</Text>
+          <Icon name="chevron-right" size={17} color={C.textDark} />
         </TouchableOpacity>
       )}
     </ScrollView>
   );
 
-  // ==================== PROFILE ====================
+  // ─── PROFILE ──────────────────────────────────────────────────────────────
   const ProfileSection = () => {
-    if (!profile) return <ActivityIndicator style={{ flex:1 }} color={COLORS.primary} />;
+    const [saving, setSaving] = useState(false);
+    const p = editProfile || profile;
+    const setField = (k, v) => setEditProfile(prev => ({ ...(prev || profile), [k]:v }));
+
+    if (!p) return <View style={{ flex:1, justifyContent:'center', alignItems:'center' }}><ActivityIndicator size="large" color={C.primaryDark} /></View>;
+
     return (
-      <ScrollView style={styles.section} showsVerticalScrollIndicator={false}>
-        <SectionHeader title="Profile" />
-        <View style={[styles.card, { alignItems:'center', paddingVertical:24 }]}>
-          <ProfileImage uri={profile.profileImage} name={profile.name} size={80} />
-          <Text style={[styles.cardTitle, { marginTop:12, fontSize:20 }]}>{profile.name}</Text>
-          <Text style={{ color:COLORS.gray, fontSize:14 }}>{profile.company}</Text>
-          <View style={[styles.statusPill, { backgroundColor: profile.status==='active' ? COLORS.success+'22' : COLORS.danger+'22' }]}>
-            <Text style={{ color: profile.status==='active' ? COLORS.success : COLORS.danger, fontWeight:'700', fontSize:12 }}>
-              {profile.status?.toUpperCase()}
-            </Text>
+      <ScrollView style={s.section} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom:30 }}>
+        <View style={s.profileHero}>
+          <View style={s.profileHeroBg} />
+          <Avatar uri={p.profileImage} name={p.name} size={82} />
+          <Text style={s.profileName}>{p.name}</Text>
+          <Text style={s.profileCo}>{p.company}</Text>
+          <View style={s.activeChip}>
+            <View style={[s.activeDot, { backgroundColor: p.status==='active' ? C.primary : C.border }]} />
+            <Text style={s.activeChipTxt}>{p.status==='active' ? 'Active Account' : 'Inactive'}</Text>
           </View>
         </View>
-        <View style={styles.card}>
-          <Text style={styles.cardSectionLabel}>Personal Information</Text>
-          {isEditingProfile ? (
+        <View style={s.card}>
+          <Text style={s.cardLabel}>Account Information</Text>
+          {isEditingPro ? (
             <>
               {[
-                { key:'name',    label:'Name',    keyboard:'default' },
-                { key:'phone',   label:'Phone',   keyboard:'phone-pad' },
-                { key:'company', label:'Company', keyboard:'default' },
-                { key:'address', label:'Address', keyboard:'default' },
-                { key:'license', label:'License', keyboard:'default' },
+                { k:'name',    l:'Full Name',  i:'person'      },
+                { k:'phone',   l:'Phone',      i:'phone'       },
+                { k:'company', l:'Company',    i:'business'    },
+                { k:'address', l:'Address',    i:'place'       },
+                { k:'license', l:'License',    i:'credit-card' },
               ].map(f => (
-                <View key={f.key}>
-                  <Text style={styles.inputLabel}>{f.label}</Text>
-                  <TextInput
-                    style={styles.input}
-                    value={profile[f.key]}
-                    onChangeText={t => setProfile({ ...profile, [f.key]:t })}
-                    keyboardType={f.keyboard}
-                    multiline={f.key==='address'}
-                  />
+                <View key={f.k} style={{ marginBottom:12 }}>
+                  <Text style={s.inputLabel}>{f.l}</Text>
+                  <View style={s.inputRow}>
+                    <Icon name={f.i} size={16} color={C.primaryDark} style={{ marginRight:8 }} />
+                    <TextInput
+                      style={s.inputInner}
+                      value={p[f.k] || ''}
+                      onChangeText={t => setField(f.k, t)}
+                      placeholderTextColor={C.textLight}
+                    />
+                  </View>
                 </View>
               ))}
-              <TouchableOpacity style={styles.primaryBtn} onPress={async () => {
-                try {
-                  await apiService.updateProfile(profile);
-                  setIsEditingProfile(false);
-                  Alert.alert('Success','Profile updated');
-                  await loadProfile();
-                } catch { Alert.alert('Error','Failed to update profile'); }
-              }}>
-                <Text style={styles.primaryBtnText}>Save Changes</Text>
+              <TouchableOpacity
+                style={[s.primaryBtn, saving && { opacity:0.6 }]}
+                disabled={saving}
+                onPress={async () => {
+                  setSaving(true);
+                  try {
+                    await api.updateProfile(editProfile);
+                    setProfile(editProfile);
+                    setEditProfile(null);
+                    setIsEditingPro(false);
+                    Alert.alert('Saved!', 'Profile updated.');
+                  } catch {
+                    Alert.alert('Error', 'Could not update profile.');
+                  } finally {
+                    setSaving(false);
+                  }
+                }}
+              >
+                {saving ? <ActivityIndicator color={C.white} /> : <><Icon name="save" size={16} color={C.white} /><Text style={s.primaryBtnTxt}>Save Changes</Text></>}
               </TouchableOpacity>
-              <TouchableOpacity style={[styles.primaryBtn, styles.secondaryBtn]} onPress={() => { setIsEditingProfile(false); loadProfile(); }}>
-                <Text style={styles.primaryBtnText}>Cancel</Text>
+              <TouchableOpacity style={[s.outlineBtn, { marginTop:8 }]} onPress={() => { setEditProfile(null); setIsEditingPro(false); }}>
+                <Text style={s.outlineBtnTxt}>Cancel</Text>
               </TouchableOpacity>
             </>
           ) : (
             <>
               {[
-                { label:'Email',      value:profile.email },
-                { label:'Phone',      value:profile.phone },
-                { label:'Company',    value:profile.company },
-                { label:'Address',    value:profile.address },
-                { label:'License',    value:profile.license },
-                { label:'Location',   value:profile.location },
-                { label:'Registered', value:profile.registrationDate },
-              ].map(row => (
-                <View key={row.label} style={styles.profileRow}>
-                  <Text style={styles.profileLabel}>{row.label}</Text>
-                  <Text style={styles.profileValue}>{row.value}</Text>
+                { l:'Email',       v:p.email,            i:'email'         },
+                { l:'Phone',       v:p.phone,            i:'phone'         },
+                { l:'Company',     v:p.company,          i:'business'      },
+                { l:'Address',     v:p.address,          i:'place'         },
+                { l:'License',     v:p.license,          i:'credit-card'   },
+                { l:'Location',    v:p.location,         i:'location-on'   },
+                { l:'Member Since',v:p.registrationDate, i:'calendar-today'},
+              ].map((r, i) => (
+                <View key={i} style={s.profileRow}>
+                  <View style={s.profileRowIcon}><Icon name={r.i} size={15} color={C.primaryDark} /></View>
+                  <View style={{ flex:1 }}>
+                    <Text style={s.profileRowLabel}>{r.l}</Text>
+                    <Text style={s.profileRowValue}>{r.v || 'N/A'}</Text>
+                  </View>
                 </View>
               ))}
-              <TouchableOpacity style={styles.primaryBtn} onPress={() => setIsEditingProfile(true)}>
-                <Text style={styles.primaryBtnText}>Edit Profile</Text>
+              <TouchableOpacity style={[s.primaryBtn, { marginTop:10 }]} onPress={() => { setEditProfile({ ...profile }); setIsEditingPro(true); }}>
+                <Icon name="edit" size={16} color={C.white} />
+                <Text style={s.primaryBtnTxt}>Edit Profile</Text>
               </TouchableOpacity>
             </>
           )}
@@ -642,162 +1108,215 @@ const TransporterDashboard = () => {
     );
   };
 
-  // ==================== POLLS ====================
+  // ─── POLLS ────────────────────────────────────────────────────────────────
   const PollSection = () => {
-    const [newPoll, setNewPoll]         = useState({ title:'', selectedSlots:[], closingTime:'' });
-    const [pollResponses, setPollResponses] = useState([]);
-    const [deletingId, setDeletingId]   = useState(null);
-
-    const customTimeSlots = ['07:00 AM','07:30 AM','08:00 AM'];
-
-    const toggleSlot = slot => setNewPoll(prev => ({
-      ...prev,
-      selectedSlots: prev.selectedSlots.includes(slot)
-        ? prev.selectedSlots.filter(s => s !== slot)
-        : [...prev.selectedSlots, slot],
-    }));
+    const [newPoll, setNewPoll] = useState({ title:'', timeSlots:[], closingTime:'' });
+    const [creatingPoll, setCreatingPoll] = useState(false);
+    const [deletingId, setDeletingId] = useState(null);
+    const [tpVis, setTpVis] = useState(false);
+    const [cpVis, setCpVis] = useState(false);
 
     const createPoll = async () => {
-      if (!newPoll.title || !newPoll.selectedSlots.length || !newPoll.closingTime) {
-        Alert.alert('Error','Please fill all fields and select at least one time slot');
-        return;
-      }
+      if (!newPoll.title.trim())     { Alert.alert('Missing','Enter a poll title.');      return; }
+      if (!newPoll.timeSlots.length) { Alert.alert('Missing','Add at least one time slot.'); return; }
+      if (!newPoll.closingTime)      { Alert.alert('Missing','Set a closing time.');       return; }
       try {
-        setIsLoading(true);
-        const res = await apiService.createPoll({
+        setCreatingPoll(true);
+        const res = await api.createPoll({
           title:       newPoll.title,
-          timeSlots:   newPoll.selectedSlots,
+          timeSlots:   newPoll.timeSlots,
           closesAt:    newPoll.closingTime,
-          closingDate: new Date(Date.now() + 24*60*60*1000),
+          closingDate: new Date(Date.now() + 86400000),
         });
-        setNewPoll({ title:'', selectedSlots:[], closingTime:'' });
-        await loadPolls();
-        Alert.alert('Success', `Poll created! ${res.notificationsSent || 0} passengers notified.`);
-      } catch { Alert.alert('Error','Failed to create poll'); }
-      finally  { setIsLoading(false); }
+        setNewPoll({ title:'', timeSlots:[], closingTime:'' });
+        await api.getPolls().then(setPolls);
+        Alert.alert('Poll Sent! 📋', `Poll created.${res.notificationsSent ? ` ${res.notificationsSent} passengers notified.` : ''}`);
+      } catch {
+        Alert.alert('Error', 'Could not create poll.');
+      } finally {
+        setCreatingPoll(false);
+      }
     };
 
     const confirmDelete = (poll) => {
-      Alert.alert(
-        'Delete Poll',
-        `"${poll.title}" ko delete karna chahte hain? Yeh action undo nahi ho sakti.`,
-        [
-          { text:'Cancel', style:'cancel' },
-          {
-            text:'Delete', style:'destructive', onPress: async () => {
-              try {
-                setDeletingId(poll._id);
-                await apiService.deletePoll(poll._id);
-                await loadPolls();
-                Alert.alert('Deleted','Poll successfully deleted.');
-              } catch { Alert.alert('Error','Poll delete karne mein masla aya.'); }
-              finally { setDeletingId(null); }
-            },
-          },
-        ]
-      );
+      Alert.alert('Delete Poll?', `"${poll.title}" will be removed.`, [
+        { text:'Cancel', style:'cancel' },
+        { text:'Delete', style:'destructive', onPress: async () => {
+          setDeletingId(poll._id);
+          try { await api.deletePoll(poll._id); await api.getPolls().then(setPolls); }
+          catch { Alert.alert('Error','Could not delete.'); }
+          finally { setDeletingId(null); }
+        }},
+      ]);
     };
 
     return (
-      <ScrollView style={styles.section} showsVerticalScrollIndicator={false}>
-        <SectionHeader title="Polls" />
-
-        {/* Create Poll Card */}
-        <View style={styles.card}>
-          <Text style={styles.cardSectionLabel}>New Poll</Text>
-          <Text style={styles.inputLabel}>Poll Title</Text>
-          <TextInput style={styles.input} placeholder="e.g. Tomorrow's Morning Route" value={newPoll.title} onChangeText={t => setNewPoll({ ...newPoll, title:t })} />
-          <Text style={styles.inputLabel}>Time Slots</Text>
-          {customTimeSlots.map((slot,i) => (
-            <TouchableOpacity key={i} style={[styles.timeSlotOption, newPoll.selectedSlots.includes(slot) && styles.timeSlotSelected]} onPress={() => toggleSlot(slot)}>
-              <View style={[styles.checkbox, newPoll.selectedSlots.includes(slot) && styles.checkboxSelected]}>
-                {newPoll.selectedSlots.includes(slot) && <Icon name="check" size={14} color={COLORS.white} />}
-              </View>
-              <Text style={styles.timeSlotLabel}>{slot}</Text>
-            </TouchableOpacity>
-          ))}
-          <Text style={styles.inputLabel}>Closing Time</Text>
-          <TextInput style={styles.input} placeholder="e.g. 06:00 PM" value={newPoll.closingTime} onChangeText={t => setNewPoll({ ...newPoll, closingTime:t })} />
-          <TouchableOpacity style={[styles.primaryBtn, isLoading && styles.primaryBtnDisabled]} onPress={createPoll} disabled={isLoading}>
-            {isLoading ? <ActivityIndicator color={COLORS.white} /> : <><Icon name="poll" size={18} color={COLORS.white} /><Text style={[styles.primaryBtnText,{marginLeft:8}]}>Create Poll & Notify Passengers</Text></>}
-          </TouchableOpacity>
+      <ScrollView style={s.section} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom:24 }}>
+        <View style={s.pageHeader}>
+          <View style={[s.pageHdrIcon, { backgroundColor:C.primaryDark }]}>
+            <Icon name="poll" size={21} color={C.white} />
+          </View>
+          <View style={{ flex:1 }}>
+            <Text style={s.pageTitle}>Availability Polls</Text>
+            <Text style={s.pageSub}>Ask passengers if they need a ride</Text>
+          </View>
         </View>
 
-        {/* Polls List */}
-        <Text style={styles.sectionSubtitle}>Active Polls</Text>
-        {polls.length > 0 ? polls.map(poll => (
-          <View key={poll._id} style={styles.card}>
-            <View style={{ flexDirection:'row', justifyContent:'space-between', alignItems:'flex-start' }}>
-              <View style={{ flex:1 }}>
-                <Text style={styles.cardTitle}>{poll.title}</Text>
-                <Text style={styles.pollMeta}>📅 Created: {new Date(poll.createdAt).toLocaleDateString()}</Text>
-                <Text style={styles.pollMeta}>⏰ Closes at: {poll.closesAt}</Text>
-                <Text style={styles.pollMeta}>🕐 Slots: {poll.timeSlots?.join(', ') || 'None'}</Text>
-              </View>
-              <TouchableOpacity onPress={() => confirmDelete(poll)} disabled={deletingId === poll._id} style={styles.deleteBtn}>
-                {deletingId === poll._id ? <ActivityIndicator size="small" color={COLORS.danger} /> : <Icon name="delete" size={18} color={COLORS.danger} />}
-              </TouchableOpacity>
-            </View>
-            <View style={styles.responseStatsRow}>
-              <View style={[styles.responseStatBox, { backgroundColor:'#e8f5e9' }]}>
-                <Text style={[styles.responseStatNum, { color:COLORS.success }]}>{poll.responses?.filter(r=>r.response==='yes').length || 0}</Text>
-                <Text style={styles.responseStatLabel}>Will Travel</Text>
-              </View>
-              <View style={[styles.responseStatBox, { backgroundColor:'#fce4ec' }]}>
-                <Text style={[styles.responseStatNum, { color:COLORS.danger }]}>{poll.responses?.filter(r=>r.response==='no').length || 0}</Text>
-                <Text style={styles.responseStatLabel}>Won't Travel</Text>
-              </View>
-              <View style={[styles.responseStatBox, { backgroundColor:'#f3f4f6' }]}>
-                <Text style={[styles.responseStatNum, { color:COLORS.black }]}>{poll.responses?.length || 0}</Text>
-                <Text style={styles.responseStatLabel}>Total</Text>
-              </View>
-            </View>
-            <View style={{ flexDirection:'row', gap:8, marginTop:10 }}>
-              <TouchableOpacity style={[styles.outlineBtn, { flex:1 }]} onPress={() => { setSelectedPoll(poll); setPollResponses(poll.responses || []); }}>
-                <Icon name="visibility" size={16} color={COLORS.primaryDark} />
-                <Text style={styles.outlineBtnText}>Responses</Text>
-              </TouchableOpacity>
-              {(poll.responses?.filter(r=>r.response==='yes').length || 0) > 0 && (
-                <TouchableOpacity style={[styles.primaryBtn, { flex:1, marginTop:0 }]} onPress={() => {
-                  setSelectedPollForAssignment(poll);
-                  setActiveSection('assign');
-                }}>
-                  <Icon name="assignment-ind" size={16} color={COLORS.white} />
-                  <Text style={[styles.primaryBtnText,{marginLeft:6}]}>Assign Route</Text>
-                </TouchableOpacity>
-              )}
-            </View>
+        <View style={s.card}>
+          <Text style={s.cardLabel}>Create New Poll</Text>
+          <Text style={s.inputLabel}>Poll Title</Text>
+          <View style={s.inputRow}>
+            <Icon name="title" size={16} color={C.primaryDark} style={{ marginRight:8 }} />
+            <TextInput
+              style={s.inputInner}
+              placeholder="e.g. Tomorrow Morning Route"
+              placeholderTextColor={C.textLight}
+              value={newPoll.title}
+              onChangeText={t => setNewPoll(p => ({ ...p, title:t }))}
+            />
           </View>
-        )) : (
-          <View style={styles.emptyState}>
-            <Icon name="poll" size={48} color={COLORS.border} />
-            <Text style={styles.emptyText}>No active polls</Text>
-            <Text style={styles.emptySubtext}>Create a poll to get travel confirmations from passengers</Text>
-          </View>
-        )}
-
-        {/* Responses Modal */}
-        <Modal visible={!!selectedPoll} animationType="slide" onRequestClose={() => setSelectedPoll(null)}>
-          <SafeAreaView style={{ flex:1 }}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Poll Responses</Text>
-              <TouchableOpacity onPress={() => setSelectedPoll(null)}><Icon name="close" size={24} color={COLORS.black} /></TouchableOpacity>
-            </View>
-            <ScrollView style={styles.modalContent}>
-              {pollResponses.length === 0 ? (
-                <View style={styles.emptyState}><Text style={styles.emptyText}>No responses yet</Text></View>
-              ) : pollResponses.map((r,i) => (
-                <View key={i} style={styles.responseCard}>
-                  <View style={{ flexDirection:'row', justifyContent:'space-between' }}>
-                    <Text style={styles.responseName}>{r.passengerName}</Text>
-                    <View style={[styles.statusBadge, { backgroundColor: r.response==='yes' ? COLORS.success : COLORS.danger }]}>
-                      <Text style={styles.statusBadgeText}>{r.response==='yes' ? 'Will Travel' : "Won't Travel"}</Text>
-                    </View>
-                  </View>
-                  {r.response==='yes' && (<><Text style={styles.responseDetail}>🕐 {r.selectedTimeSlot}</Text><Text style={styles.responseDetail}>📍 {r.pickupPoint}</Text></>)}
-                  <Text style={styles.responseDate}>{new Date(r.respondedAt).toLocaleString()}</Text>
+          <Text style={s.inputLabel}>Time Slots</Text>
+          {newPoll.timeSlots.length > 0 && (
+            <View style={{ flexDirection:'row', flexWrap:'wrap', gap:6, marginBottom:8 }}>
+              {newPoll.timeSlots.map((slot, i) => (
+                <View key={i} style={s.slotTag}>
+                  <Icon name="schedule" size={11} color={C.primaryDark} />
+                  <Text style={s.slotTagTxt}>{slot}</Text>
+                  <TouchableOpacity onPress={() => setNewPoll(p => ({ ...p, timeSlots:p.timeSlots.filter(x=>x!==slot) }))}>
+                    <Icon name="close" size={12} color={C.textLight} />
+                  </TouchableOpacity>
                 </View>
               ))}
+            </View>
+          )}
+          <TouchableOpacity style={s.addTimeBtn} onPress={() => setTpVis(true)}>
+            <Icon name="add-circle-outline" size={18} color={C.primaryDark} />
+            <Text style={s.addTimeTxt}>Add Time Slot</Text>
+          </TouchableOpacity>
+          <Text style={[s.inputLabel, { marginTop:12 }]}>Closing Time</Text>
+          <TouchableOpacity style={s.inputRow} onPress={() => setCpVis(true)}>
+            <Icon name="alarm" size={16} color={C.primaryDark} style={{ marginRight:8 }} />
+            <Text style={[s.inputInner, { flex:1, color: newPoll.closingTime ? C.textDark : C.textLight }]}>
+              {newPoll.closingTime || 'Tap to set closing time'}
+            </Text>
+            <Icon name="chevron-right" size={16} color={C.textLight} />
+          </TouchableOpacity>
+          <TouchableOpacity style={[s.primaryBtn, creatingPoll && { opacity:0.5 }]} onPress={createPoll} disabled={creatingPoll}>
+            {creatingPoll
+              ? <ActivityIndicator color={C.white} />
+              : <><Icon name="send" size={16} color={C.white} /><Text style={s.primaryBtnTxt}>Send to All Passengers</Text></>
+            }
+          </TouchableOpacity>
+        </View>
+
+        <TimePicker visible={tpVis} onClose={() => setTpVis(false)} onSelect={t => {
+          if (!newPoll.timeSlots.includes(t)) setNewPoll(p => ({ ...p, timeSlots:[...p.timeSlots, t] }));
+        }} />
+        <TimePicker visible={cpVis} onClose={() => setCpVis(false)} onSelect={t => setNewPoll(p => ({ ...p, closingTime:t }))} />
+
+        <Text style={s.sectionLbl}>YOUR POLLS ({polls.length})</Text>
+        {polls.length === 0 ? (
+          <View style={s.emptyState}>
+            <View style={s.emptyIconWrap}><Icon name="poll" size={36} color={C.textLight} /></View>
+            <Text style={s.emptyTxt}>No polls yet</Text>
+            <Text style={s.emptySub}>Create your first poll above</Text>
+          </View>
+        ) : polls.map(poll => {
+          const yes = poll.responses?.filter(r => r.response==='yes').length || 0;
+          const no  = poll.responses?.filter(r => r.response==='no').length  || 0;
+          return (
+            <View key={poll._id} style={s.pollCard}>
+              <View style={{ flexDirection:'row', alignItems:'flex-start' }}>
+                <View style={s.pollIcon}><Icon name="poll" size={17} color={C.primaryDark} /></View>
+                <View style={{ flex:1, marginLeft:10 }}>
+                  <Text style={s.pollTitle}>{poll.title}</Text>
+                  <Text style={s.pollMeta}>Closes: {poll.closesAt} · {new Date(poll.createdAt).toLocaleDateString()}</Text>
+                  {poll.timeSlots?.length > 0 && (
+                    <View style={{ flexDirection:'row', flexWrap:'wrap', gap:4, marginTop:6 }}>
+                      {poll.timeSlots.map((sl, i) => (
+                        <View key={i} style={s.slotMini}><Text style={s.slotMiniTxt}>{sl}</Text></View>
+                      ))}
+                    </View>
+                  )}
+                </View>
+                <TouchableOpacity style={s.deletePollBtn} onPress={() => confirmDelete(poll)} disabled={deletingId===poll._id}>
+                  {deletingId===poll._id
+                    ? <ActivityIndicator size="small" color={C.primaryDark} />
+                    : <Icon name="delete" size={18} color={C.primaryDark} />
+                  }
+                </TouchableOpacity>
+              </View>
+              <View style={s.respRow}>
+                <View style={[s.respBox, { backgroundColor:C.primaryGhost }]}>
+                  <Text style={[s.respNum, { color:C.primaryDark }]}>{yes}</Text>
+                  <Text style={s.respLbl}>Coming</Text>
+                </View>
+                <View style={[s.respBox, { backgroundColor:C.primaryPale }]}>
+                  <Text style={[s.respNum, { color:C.primaryDark }]}>{no}</Text>
+                  <Text style={s.respLbl}>Not Coming</Text>
+                </View>
+                <View style={[s.respBox, { backgroundColor:C.primaryGhost }]}>
+                  <Text style={[s.respNum, { color:C.textDark }]}>{poll.responses?.length||0}</Text>
+                  <Text style={s.respLbl}>Total</Text>
+                </View>
+              </View>
+              <View style={{ flexDirection:'row', gap:8, marginTop:10 }}>
+                <TouchableOpacity style={[s.outlineBtn,{flex:1,marginBottom:0}]} onPress={() => setSelectedPoll(poll)}>
+                  <Icon name="visibility" size={14} color={C.primaryDark} />
+                  <Text style={s.outlineBtnTxt}>Responses</Text>
+                </TouchableOpacity>
+                {yes > 0 && (
+                  <TouchableOpacity
+                    style={[s.primaryBtn,{flex:1,marginTop:0}]}
+                    onPress={() => handleOptimize(poll)}
+                    disabled={optimizing}
+                  >
+                    {optimizing && activePoll?._id===poll._id
+                      ? <ActivityIndicator size="small" color={C.white} />
+                      : <><Icon name="auto-awesome" size={14} color={C.white} /><Text style={s.primaryBtnTxt}>Build Route</Text></>
+                    }
+                  </TouchableOpacity>
+                )}
+              </View>
+            </View>
+          );
+        })}
+
+        <Modal visible={!!selectedPoll} animationType="slide" onRequestClose={() => setSelectedPoll(null)}>
+          <SafeAreaView style={{ flex:1, backgroundColor:C.offWhite }}>
+            <View style={s.modalHdr}>
+              <TouchableOpacity onPress={() => setSelectedPoll(null)} style={s.modalBackBtn}>
+                <Icon name="arrow-back" size={21} color={C.textDark} />
+              </TouchableOpacity>
+              <Text style={s.modalTitle}>Poll Responses</Text>
+              <View style={{ width:40 }} />
+            </View>
+            <ScrollView style={{ padding:16 }}>
+              {(selectedPoll?.responses||[]).length === 0 ? (
+                <View style={s.emptyState}><Text style={s.emptyTxt}>No responses yet</Text></View>
+              ) : (
+                (selectedPoll?.responses||[]).map((r, i) => (
+                  <View key={i} style={s.card}>
+                    <View style={{ flexDirection:'row', justifyContent:'space-between', alignItems:'center' }}>
+                      <Text style={s.cardTitle}>{r.passengerName}</Text>
+                      <View style={[s.activeChip, r.response!=='yes' && { backgroundColor:C.primaryPale }]}>
+                        <View style={[s.activeDot, { backgroundColor: r.response==='yes' ? C.primary : C.border }]} />
+                        <Text style={s.activeChipTxt}>{r.response==='yes' ? 'Coming ✓' : 'Not Coming'}</Text>
+                      </View>
+                    </View>
+                    {r.selectedTimeSlot && <Text style={s.pollMeta}>Time: {r.selectedTimeSlot}</Text>}
+                    {r.pickupPoint       && <Text style={s.pollMeta}>Pickup: {r.pickupPoint}</Text>}
+                    {r.vehiclePreference && (
+                      <View style={[s.vBadge, { marginTop:6, backgroundColor:'#E8F5E9' }]}>
+                        <Text>{VEHICLE_INFO[r.vehiclePreference]?.icon}</Text>
+                        <Text style={[s.vBadgeVal, { marginLeft:8, color:'#2E7D32' }]}>
+                          Prefers {r.vehiclePreference} 🔒
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+                ))
+              )}
             </ScrollView>
           </SafeAreaView>
         </Modal>
@@ -805,1220 +1324,686 @@ const TransporterDashboard = () => {
     );
   };
 
-  // ==================== ROUTES ====================
-  // ── Inline Driver Assignment Modal (inside Routes section) ──
-  const RoutesSection = () => {
-    const [routeFilter, setRouteFilter]               = useState('all');
-    const [aiSuggestions, setAiSuggestions]           = useState([]);
-    const [isGenerating, setIsGenerating]             = useState(false);
-    const [showAiPanel, setShowAiPanel]               = useState(false);
-    const [selectedSuggestion, setSelectedSuggestion] = useState(null);
-    const [showDetailModal, setShowDetailModal]       = useState(false);
-
-    // ── NEW: driver-assign modal state for AI suggestion ──
-    const [showAssignModal, setShowAssignModal]       = useState(null); // holds suggestion obj
-    const [availDrivers, setAvailDrivers]             = useState([]);
-    const [pickedDriver, setPickedDriver]             = useState(null);
-    const [assigningRoute, setAssigningRoute]         = useState(false);
-    const [routeNameInput, setRouteNameInput]         = useState('');
-    const [startPointInput, setStartPointInput]       = useState('');
-    const [destinationInput, setDestinationInput]     = useState('');
-
-    const filteredRoutes = useMemo(() => {
-      if (routeFilter === 'all') return routes;
-      return routes.filter(r => r.status === routeFilter);
-    }, [routes, routeFilter]);
-
-    const getEfficiencyColor = score => score >= 75 ? COLORS.success : score >= 45 ? COLORS.warning : COLORS.danger;
-
-    // ── Load drivers for modal ──
-    const openAssignModal = async (suggestion) => {
-      setShowAssignModal(suggestion);
-      setPickedDriver(suggestion.assignedDriver?._id || null);
-      setRouteNameInput(suggestion.routeLabel);
-      setStartPointInput('');
-      setDestinationInput('');
-      try {
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        const d = await apiService.getAvailableDrivers(tomorrow.toISOString().split('T')[0]);
-        setAvailDrivers(d);
-      } catch { setAvailDrivers([]); }
-    };
-
-    const handleAssignFromAI = async () => {
-      if (!showAssignModal || !pickedDriver || !routeNameInput || !showAssignModal.timeSlot) {
-        Alert.alert('Error', 'Please select a driver and fill route name');
-        return;
-      }
-      try {
-        setAssigningRoute(true);
-        await apiService.assignRouteFromPoll(showAssignModal.pollId, {
-          driverId:    pickedDriver,
-          routeName:   routeNameInput,
-          timeSlot:    showAssignModal.timeSlot,
-          startPoint:  startPointInput  || 'Start Point',
-          destination: destinationInput || 'Destination',
-          pickupTime:  showAssignModal.timeSlot,
-        });
-        Alert.alert('Success', `Route "${routeNameInput}" assigned! All parties notified.`, [
-          { text:'OK', onPress: async () => {
-            setShowAssignModal(null);
-            setShowDetailModal(false);
-            setShowAiPanel(false);
-            setAiSuggestions([]);
-            await loadRoutes();
-            await loadTrips();
-          }},
-        ]);
-      } catch { Alert.alert('Error','Failed to assign route.'); }
-      finally   { setAssigningRoute(false); }
-    };
-
-    // ── AI ALGORITHM ──
-    const runAiAlgorithm = useCallback(async () => {
-      setIsGenerating(true);
-      setShowAiPanel(true);
-      try {
-        const [pollsData, driversData] = await Promise.all([
-          apiService.getPolls(),
-          apiService.getDrivers(),
-        ]);
-
-        const confirmed = [];
-        pollsData.forEach(poll => {
-          (poll.responses || []).forEach(r => {
-            if (r.response === 'yes' && r.pickupPoint) {
-              confirmed.push({
-                name:        r.passengerName || 'Passenger',
-                pickupPoint: r.pickupPoint,
-                timeSlot:    r.selectedTimeSlot || (poll.timeSlots?.[0] ?? 'N/A'),
-                pollTitle:   poll.title,
-                pollId:      poll._id,
-              });
-            }
-          });
-        });
-
-        if (confirmed.length === 0) {
-          Alert.alert('No Data','No confirmed passengers found in polls. Please wait for poll responses.');
-          setIsGenerating(false);
-          setShowAiPanel(false);
-          return;
-        }
-
-        // Group by time slot
-        const groups = {};
-        confirmed.forEach(p => {
-          if (!groups[p.timeSlot]) groups[p.timeSlot] = [];
-          groups[p.timeSlot].push(p);
-        });
-
-        // Available drivers
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        let availDriversList = [];
-        try { availDriversList = await apiService.getAvailableDrivers(tomorrow.toISOString().split('T')[0]); } catch {}
-
-        const driverPool = availDriversList.length > 0
-          ? availDriversList.map(a => ({
-              _id:          a.driverId?._id || a._id,
-              name:         a.driverId?.name || a.driverName || 'Driver',
-              phone:        a.driverId?.phone || a.phone || 'N/A',
-              capacity:     a.driverId?.capacity || a.capacity || 8,
-              availableFrom: a.startTime || '',
-              availableTo:   a.endTime   || '',
-            }))
-          : driversData.map(d => ({
-              _id:      d._id,
-              name:     d.name || 'Driver',
-              phone:    d.phone || 'N/A',
-              capacity: d.capacity || 8,
-              availableFrom: '',
-              availableTo:   '',
-            }));
-
-        const suggestions = [];
-        let di = 0;
-        Object.entries(groups).forEach(([timeSlot, passengers], slotIdx) => {
-          const CAPACITY = 8;
-          for (let i = 0; i < passengers.length; i += CAPACITY) {
-            const group      = passengers.slice(i, i + CAPACITY);
-            const driver     = driverPool[di % Math.max(driverPool.length,1)] || null;
-            di++;
-            const uniqueStops = [...new Set(group.map(p => p.pickupPoint))];
-            const groupIdx    = Math.floor(i / CAPACITY);
-            const label       = `Route ${slotIdx + 1}${Math.ceil(passengers.length/CAPACITY)>1?`-${groupIdx+1}`:''}`;
-            const fillRate    = Math.round((group.length / CAPACITY) * 100);
-            const score       = Math.min(100, Math.round(fillRate * 0.7 + (driver ? 30 : 0)));
-            suggestions.push({
-              id: `s-${slotIdx}-${groupIdx}`,
-              routeLabel:     label,
-              timeSlot,
-              passengers:     group,
-              passengerCount: group.length,
-              stops:          uniqueStops,
-              assignedDriver: driver,
-              efficiencyScore: score,
-              fillRate,
-              pollTitle: group[0]?.pollTitle || 'N/A',
-              pollId:    group[0]?.pollId    || null,
-            });
-          }
-        });
-        suggestions.sort((a,b) => b.efficiencyScore - a.efficiencyScore);
-        setAiSuggestions(suggestions);
-      } catch (err) {
-        console.error('AI Error:', err);
-        Alert.alert('Error','Could not generate suggestions. Please try again.');
-        setShowAiPanel(false);
-      } finally {
-        setIsGenerating(false);
-      }
-    }, []);
-
-    // ── Suggestion Detail Modal ──
-    const SuggestionDetailModal = () => {
-      if (!selectedSuggestion) return null;
-      const s = selectedSuggestion;
-      return (
-        <Modal visible={showDetailModal} animationType="slide" onRequestClose={() => setShowDetailModal(false)}>
-          <SafeAreaView style={{ flex:1 }}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>{s.routeLabel}</Text>
-              <TouchableOpacity onPress={() => setShowDetailModal(false)}><Icon name="close" size={24} color={COLORS.black} /></TouchableOpacity>
-            </View>
-            <ScrollView style={styles.modalContent}>
-              {/* Summary */}
-              <View style={styles.card}>
-                <Text style={styles.cardSectionLabel}>Summary</Text>
-                <View style={{ flexDirection:'row', alignItems:'center', marginBottom:12 }}>
-                  <View style={[styles.statIconWrap, { backgroundColor: getEfficiencyColor(s.efficiencyScore)+'22', width:48, height:48, borderRadius:24 }]}>
-                    <Text style={{ fontSize:16, fontWeight:'800', color: getEfficiencyColor(s.efficiencyScore) }}>{s.efficiencyScore}%</Text>
-                  </View>
-                  <Text style={{ marginLeft:12, fontSize:16, fontWeight:'700', color:COLORS.black }}>Efficient</Text>
-                </View>
-                {[
-                  { icon:'schedule',    label:'Time Slot',     val:s.timeSlot },
-                  { icon:'poll',        label:'Poll',          val:s.pollTitle },
-                  { icon:'people',      label:'Passengers',    val:`${s.passengerCount}` },
-                  { icon:'location-on', label:'Unique Stops',  val:`${s.stops.length}` },
-                ].map(row => (
-                  <View key={row.label} style={styles.infoRow}>
-                    <Icon name={row.icon} size={18} color={COLORS.gray} />
-                    <Text style={styles.infoText}>{row.label}: <Text style={{ color:COLORS.black, fontWeight:'700' }}>{row.val}</Text></Text>
-                  </View>
-                ))}
-                <View style={styles.progressBg}>
-                  <View style={[styles.progressFill, { width:`${s.fillRate}%`, backgroundColor: getEfficiencyColor(s.efficiencyScore) }]} />
-                </View>
-              </View>
-
-              {/* Driver */}
-              <View style={styles.card}>
-                <Text style={styles.cardSectionLabel}>Suggested Driver</Text>
-                {s.assignedDriver ? (
-                  <View>
-                    <Text style={styles.driverName}>{s.assignedDriver.name}</Text>
-                    <Text style={styles.driverDetail}>📞 {s.assignedDriver.phone}</Text>
-                    <Text style={styles.driverDetail}>🚐 Capacity: {s.assignedDriver.capacity}</Text>
-                    {s.assignedDriver.availableFrom ? (
-                      <Text style={styles.driverDetail}>✅ {s.assignedDriver.availableFrom} – {s.assignedDriver.availableTo}</Text>
-                    ) : null}
-                  </View>
-                ) : (
-                  <Text style={{ color:COLORS.warning, fontWeight:'600' }}>⚠️ No available driver found. You can still assign below.</Text>
-                )}
-              </View>
-
-              {/* Stops */}
-              <View style={styles.card}>
-                <Text style={styles.cardSectionLabel}>Pickup Stops ({s.stops.length})</Text>
-                {s.stops.map((stop, idx) => (
-                  <View key={idx} style={{ flexDirection:'row', alignItems:'center', marginBottom:8 }}>
-                    <View style={[styles.stopNumber, { backgroundColor: COLORS.primary+'33' }]}>
-                      <Text style={{ fontSize:11, fontWeight:'800', color:COLORS.primaryDark }}>{idx+1}</Text>
-                    </View>
-                    <Text style={{ marginLeft:10, fontSize:14, color:COLORS.black, flex:1 }}>{stop}</Text>
-                  </View>
-                ))}
-              </View>
-
-              {/* Passengers */}
-              <View style={styles.card}>
-                <Text style={styles.cardSectionLabel}>Passengers ({s.passengerCount})</Text>
-                {s.passengers.map((p,i) => (
-                  <View key={i} style={{ flexDirection:'row', marginBottom:8 }}>
-                    <Icon name="person" size={18} color={COLORS.gray} />
-                    <View style={{ marginLeft:8 }}>
-                      <Text style={{ fontSize:13, fontWeight:'700', color:COLORS.black }}>{p.name}</Text>
-                      <Text style={{ fontSize:12, color:COLORS.gray }}>📍 {p.pickupPoint}</Text>
-                    </View>
-                  </View>
-                ))}
-              </View>
-
-              {/* ── ASSIGN BUTTON → opens inline assign modal ── */}
-              <TouchableOpacity
-                style={[styles.primaryBtn, { marginBottom:24 }]}
-                onPress={() => { setShowDetailModal(false); openAssignModal(s); }}
-              >
-                <Icon name="assignment-ind" size={18} color={COLORS.white} />
-                <Text style={[styles.primaryBtnText, { marginLeft:8 }]}>Assign This Route</Text>
-              </TouchableOpacity>
-            </ScrollView>
-          </SafeAreaView>
-        </Modal>
-      );
-    };
-
-    // ── INLINE DRIVER ASSIGN MODAL (stays in Routes section) ──
-    const InlineAssignModal = () => {
-      if (!showAssignModal) return null;
-      const s = showAssignModal;
-      return (
-        <Modal visible={!!showAssignModal} animationType="slide" onRequestClose={() => setShowAssignModal(null)}>
-          <SafeAreaView style={{ flex:1, backgroundColor: COLORS.sectionBg }}>
-            <View style={styles.modalHeader}>
-              <TouchableOpacity onPress={() => setShowAssignModal(null)}>
-                <Icon name="arrow-back" size={24} color={COLORS.black} />
-              </TouchableOpacity>
-              <Text style={[styles.modalTitle, { flex:1, marginLeft:12 }]}>Assign Route</Text>
-            </View>
-            <ScrollView style={styles.modalContent} keyboardShouldPersistTaps="handled">
-
-              {/* Route Info summary */}
-              <View style={styles.card}>
-                <Text style={styles.cardSectionLabel}>Route Info</Text>
-                <Text style={styles.inputLabel}>Route Name</Text>
-                <TextInput
-                  style={styles.input}
-                  value={routeNameInput}
-                  onChangeText={setRouteNameInput}
-                  placeholder="Route name"
-                />
-                <Text style={styles.inputLabel}>Start Point</Text>
-                <TextInput
-                  style={styles.input}
-                  value={startPointInput}
-                  onChangeText={setStartPointInput}
-                  placeholder="e.g. Sector G-8"
-                />
-                <Text style={styles.inputLabel}>Destination</Text>
-                <TextInput
-                  style={styles.input}
-                  value={destinationInput}
-                  onChangeText={setDestinationInput}
-                  placeholder="e.g. Blue Area"
-                />
-                <View style={styles.infoRow}>
-                  <Icon name="schedule" size={16} color={COLORS.gray} />
-                  <Text style={styles.infoText}>Time Slot: <Text style={{ fontWeight:'700', color:COLORS.black }}>{s.timeSlot}</Text></Text>
-                </View>
-                <View style={styles.infoRow}>
-                  <Icon name="people" size={16} color={COLORS.gray} />
-                  <Text style={styles.infoText}>Passengers: <Text style={{ fontWeight:'700', color:COLORS.black }}>{s.passengerCount}</Text></Text>
-                </View>
-              </View>
-
-              {/* Driver selection */}
-              <View style={styles.card}>
-                <Text style={styles.cardSectionLabel}>Select Driver</Text>
-
-                {/* Suggested driver first */}
-                {s.assignedDriver && (
-                  <View style={{ marginBottom:8 }}>
-                    <Text style={{ fontSize:12, color:COLORS.primary, fontWeight:'700', marginBottom:6 }}>⭐ AI Suggested</Text>
-                    <TouchableOpacity
-                      style={[styles.driverOption, pickedDriver === s.assignedDriver._id && styles.driverOptionSelected]}
-                      onPress={() => setPickedDriver(s.assignedDriver._id)}
-                    >
-                      <View style={[styles.driverAvatar, { backgroundColor: COLORS.primary+'33' }]}>
-                        <Icon name="person" size={20} color={COLORS.primaryDark} />
-                      </View>
-                      <View style={{ flex:1, marginLeft:10 }}>
-                        <Text style={styles.driverName}>{s.assignedDriver.name}</Text>
-                        <Text style={styles.driverDetail}>📞 {s.assignedDriver.phone} · 🚐 {s.assignedDriver.capacity}</Text>
-                        {s.assignedDriver.availableFrom ? (
-                          <Text style={[styles.driverDetail, { color:COLORS.success }]}>✅ {s.assignedDriver.availableFrom}–{s.assignedDriver.availableTo}</Text>
-                        ) : null}
-                      </View>
-                      {pickedDriver === s.assignedDriver._id && <Icon name="check-circle" size={22} color={COLORS.primary} />}
-                    </TouchableOpacity>
-                  </View>
-                )}
-
-                {/* All available drivers */}
-                {availDrivers.length > 0 && (
-                  <View>
-                    <Text style={{ fontSize:12, color:COLORS.gray, fontWeight:'700', marginBottom:6 }}>All Available Drivers</Text>
-                    {availDrivers.map((av, i) => {
-                      const d   = av.driverId || av;
-                      const isSel = pickedDriver === d._id;
-                      // Skip if same as suggested
-                      if (s.assignedDriver && d._id === s.assignedDriver._id) return null;
-                      return (
-                        <TouchableOpacity key={i} style={[styles.driverOption, isSel && styles.driverOptionSelected]} onPress={() => setPickedDriver(d._id)}>
-                          <View style={[styles.driverAvatar, { backgroundColor: COLORS.gray+'33' }]}>
-                            <Icon name="person" size={20} color={COLORS.gray} />
-                          </View>
-                          <View style={{ flex:1, marginLeft:10 }}>
-                            <Text style={styles.driverName}>{d.name || av.driverName}</Text>
-                            <Text style={styles.driverDetail}>📞 {d.phone || 'N/A'} · 🚐 {d.capacity || 8}</Text>
-                            {av.startTime && <Text style={[styles.driverDetail, { color:COLORS.success }]}>✅ {av.startTime}–{av.endTime}</Text>}
-                          </View>
-                          {isSel && <Icon name="check-circle" size={22} color={COLORS.primary} />}
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                )}
-
-                {availDrivers.length === 0 && !s.assignedDriver && (
-                  <View style={styles.emptyState}>
-                    <Icon name="person-off" size={36} color={COLORS.border} />
-                    <Text style={styles.emptyText}>No drivers available</Text>
-                    <Text style={styles.emptySubtext}>Drivers need to confirm their availability for tomorrow</Text>
-                  </View>
-                )}
-              </View>
-
-              {/* Summary */}
-              <View style={styles.card}>
-                <Text style={styles.cardSectionLabel}>📋 Assignment Summary</Text>
-                {[
-                  { label:'Route',       val: routeNameInput   || 'Not set' },
-                  { label:'Start',       val: startPointInput  || 'Not set' },
-                  { label:'Destination', val: destinationInput || 'Not set' },
-                  { label:'Time Slot',   val: s.timeSlot },
-                  { label:'Passengers',  val: `${s.passengerCount}` },
-                  { label:'Driver',      val: (() => {
-                    if (!pickedDriver) return 'Not selected';
-                    if (s.assignedDriver && pickedDriver === s.assignedDriver._id) return s.assignedDriver.name;
-                    const found = availDrivers.find(av => (av.driverId?._id || av._id) === pickedDriver);
-                    return found ? (found.driverId?.name || found.driverName || 'Selected') : 'Selected';
-                  })() },
-                ].map(row => (
-                  <View key={row.label} style={styles.profileRow}>
-                    <Text style={styles.profileLabel}>{row.label}</Text>
-                    <Text style={styles.profileValue}>{row.val}</Text>
-                  </View>
-                ))}
-              </View>
-
-              <TouchableOpacity
-                style={[styles.primaryBtn, { marginBottom:32 }, (!pickedDriver || assigningRoute) && styles.primaryBtnDisabled]}
-                onPress={handleAssignFromAI}
-                disabled={!pickedDriver || assigningRoute}
-              >
-                {assigningRoute ? <ActivityIndicator color={COLORS.white} /> : (
-                  <><Icon name="assignment-turned-in" size={18} color={COLORS.white} /><Text style={[styles.primaryBtnText,{marginLeft:8}]}>Assign Route & Notify All</Text></>
-                )}
-              </TouchableOpacity>
-            </ScrollView>
-          </SafeAreaView>
-        </Modal>
-      );
-    };
-
+  // ─── SMART ROUTES ─────────────────────────────────────────────────────────
+  const SmartRouteSection = () => {
+    const pollsWithYes = polls.filter(p => (p.responses?.filter(r => r.response==='yes').length||0) > 0);
     return (
-      <ScrollView style={styles.section} showsVerticalScrollIndicator={false}>
-        <SectionHeader title="Routes" />
-
-        {/* AI Button */}
-        <TouchableOpacity style={styles.aiBtn} onPress={runAiAlgorithm} disabled={isGenerating}>
-          {isGenerating ? <ActivityIndicator color={COLORS.primary} /> : <Icon name="auto-awesome" size={22} color={COLORS.primary} />}
-          <Text style={styles.aiBtnText}>{isGenerating ? 'Generating AI Suggestions...' : 'Generate AI Route Suggestions'}</Text>
-        </TouchableOpacity>
-
-        {/* AI Panel */}
-        {showAiPanel && !isGenerating && (
-          <View style={styles.card}>
-            <View style={{ flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:6 }}>
-              <View>
-                <Text style={styles.cardTitle}>AI Suggestions</Text>
-                <Text style={styles.pollMeta}>{aiSuggestions.length} routes</Text>
-              </View>
-              <TouchableOpacity onPress={() => { setShowAiPanel(false); setAiSuggestions([]); }}>
-                <Icon name="close" size={22} color={COLORS.gray} />
-              </TouchableOpacity>
-            </View>
-            <Text style={{ fontSize:12, color:COLORS.gray, marginBottom:12 }}>Based on driver availability and poll responses. Tap a suggestion for details.</Text>
-            {aiSuggestions.length === 0 ? (
-              <Text style={styles.emptyText}>No suggestions. Confirm poll responses first.</Text>
-            ) : aiSuggestions.map(s => (
-              <TouchableOpacity key={s.id} style={styles.suggestionCard} onPress={() => { setSelectedSuggestion(s); setShowDetailModal(true); }} activeOpacity={0.75}>
-                <View style={{ flexDirection:'row', justifyContent:'space-between', alignItems:'center' }}>
-                  <Text style={{ fontSize:15, fontWeight:'700', color:COLORS.black }}>{s.routeLabel}</Text>
-                  <View style={[styles.statusBadge, { backgroundColor: getEfficiencyColor(s.efficiencyScore) }]}>
-                    <Text style={styles.statusBadgeText}>{s.efficiencyScore}%</Text>
-                  </View>
-                </View>
-                <Text style={styles.pollMeta}>⏰ {s.timeSlot} &nbsp;·&nbsp; 👥 {s.passengerCount} pax &nbsp;·&nbsp; 📍 {s.stops.length} stops</Text>
-                <Text style={[styles.pollMeta, { marginTop:4 }]}>{s.assignedDriver ? s.assignedDriver.name : '⚠️ No driver'}</Text>
-                <Text style={{ fontSize:12, color:COLORS.primary, marginTop:6, fontWeight:'700' }}>Tap for details → Assign here</Text>
-              </TouchableOpacity>
-            ))}
+      <ScrollView style={s.section} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom:24 }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[C.primary]} />}
+      >
+        <View style={s.pageHeader}>
+          <View style={[s.pageHdrIcon, { backgroundColor:C.primaryDark }]}>
+            <Icon name="auto-awesome" size={21} color={C.white} />
           </View>
-        )}
+          <View style={{ flex:1 }}>
+            <Text style={s.pageTitle}>Smart Routes</Text>
+            <Text style={s.pageSub}>AI-powered OSRM route optimization</Text>
+          </View>
+        </View>
 
-        {/* Filter Tabs */}
-        <View style={styles.tabContainer}>
-          {['all','assigned','started','completed'].map(f => (
-            <TouchableOpacity key={f} style={[styles.tab, routeFilter===f && styles.tabActive]} onPress={() => setRouteFilter(f)}>
-              <Text style={[styles.tabText, routeFilter===f && styles.tabTextActive]}>{f.charAt(0).toUpperCase()+f.slice(1)}</Text>
-            </TouchableOpacity>
+        <View style={s.howCard}>
+          <Text style={s.howTitle}>🧠 HOW THE ALGORITHM WORKS</Text>
+          {[
+            { n:'1', t:'Vehicle Preference 🔒', d:'Car passengers → car only. Van passengers → van only. Never mixed.' },
+            { n:'2', t:'Capacity-Based Selection', d:'≤4 passengers → Car  |  5-12 → Van  |  13+ → Bus' },
+            { n:'3', t:'Solo Passenger Merge', d:'A passenger alone never gets their own vehicle — merged into nearest route.' },
+            { n:'4', t:'OSRM Route Matrix', d:'Real road distances via OSRM API. Falls back to Haversine if offline.' },
+            { n:'5', t:'Cheapest Insertion', d:'Each pickup/drop-off inserted at optimal position to minimize fuel & time.' },
+          ].map((step, i) => (
+            <View key={i} style={s.howStep}>
+              <View style={s.howNum}><Text style={s.howNumTxt}>{step.n}</Text></View>
+              <View style={{ flex:1 }}>
+                <Text style={{ fontSize:12, fontWeight:'800', color:C.textDark }}>{step.t}</Text>
+                <Text style={s.howStepTxt}>{step.d}</Text>
+              </View>
+            </View>
           ))}
         </View>
 
-        {/* Routes List */}
-        {filteredRoutes.length > 0 ? filteredRoutes.map(route => (
-          <View key={route._id} style={styles.card}>
-            <View style={{ flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:8 }}>
-              <Text style={styles.cardTitle}>{route.name || route.routeName}</Text>
-              <View style={[styles.statusBadge, { backgroundColor: route.status==='completed' ? COLORS.success : route.status==='started' ? COLORS.warning : COLORS.primary }]}>
-                <Text style={styles.statusBadgeText}>{route.status?.toUpperCase() || 'ASSIGNED'}</Text>
-              </View>
-            </View>
-            {[
-              { icon:'person',         text:`Driver: ${route.driverName || 'Not assigned'}` },
-              route.timeSlot && { icon:'schedule',       text:`Time: ${route.timeSlot}` },
-              route.date     && { icon:'calendar-today', text:`Date: ${new Date(route.date).toLocaleDateString()}` },
-              route.passengers?.length && { icon:'people', text:`Passengers: ${route.passengers.length}` },
-              route.stops?.length      && { icon:'location-on', text:`Stops: ${route.stops.join(', ')}` },
-            ].filter(Boolean).map((row,i) => (
-              <View key={i} style={styles.infoRow}>
-                <Icon name={row.icon} size={16} color={COLORS.gray} />
-                <Text style={styles.infoText}>{row.text}</Text>
-              </View>
-            ))}
-          </View>
-        )) : (
-          <View style={styles.emptyState}>
-            <Icon name="map" size={48} color={COLORS.border} />
-            <Text style={styles.emptyText}>No routes found</Text>
-            <Text style={styles.emptySubtext}>Routes will appear here once created from polls</Text>
-          </View>
-        )}
-
-        <SuggestionDetailModal />
-        <InlineAssignModal />
-      </ScrollView>
-    );
-  };
-
-  // ==================== ASSIGN ====================
-  // ── Now: assign drivers to EXISTING routes from the Routes list ──
-  const AssignSection = () => {
-    const [selectedRoute, setSelectedRoute]     = useState(null);
-    const [availableDrivers, setAvailableDrivers] = useState([]);
-    const [selectedDriver, setSelectedDriver]   = useState(null);
-    const [isAssigning, setIsAssigning]         = useState(false);
-    const [isLoadingDrivers, setIsLoadingDrivers] = useState(false);
-
-    // Also keep old poll-based assignment (from Poll → Assign Route button)
-    const [showPollFlow, setShowPollFlow]       = useState(false);
-    const [pollRouteName, setPollRouteName]     = useState('');
-    const [pollSelectedDriver, setPollSelectedDriver] = useState(null);
-    const [pollSelectedTimeSlot, setPollSelectedTimeSlot] = useState('');
-    const [pollStartPoint, setPollStartPoint]   = useState('');
-    const [pollDestination, setPollDestination] = useState('');
-    const [pollAvailDrivers, setPollAvailDrivers] = useState([]);
-    const [isAssigningPoll, setIsAssigningPoll] = useState(false);
-
-    // Auto-enter poll flow if navigated from Polls section
-    useEffect(() => {
-      if (selectedPollForAssignment) {
-        setShowPollFlow(true);
-        setPollRouteName(selectedPollForAssignment.title);
-        loadPollDrivers();
-      }
-    }, [selectedPollForAssignment]);
-
-    const loadPollDrivers = async () => {
-      try {
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        const d = await apiService.getAvailableDrivers(tomorrow.toISOString().split('T')[0]);
-        setPollAvailDrivers(d);
-      } catch { setPollAvailDrivers([]); }
-    };
-
-    const handleSelectRoute = async (route) => {
-      setSelectedRoute(route);
-      setSelectedDriver(null);
-      setIsLoadingDrivers(true);
-      try {
-        const tomorrow = new Date();
-        tomorrow.setDate(tomorrow.getDate() + 1);
-        const d = await apiService.getAvailableDrivers(tomorrow.toISOString().split('T')[0]);
-        setAvailableDrivers(d);
-      } catch { setAvailableDrivers([]); }
-      finally { setIsLoadingDrivers(false); }
-    };
-
-    const handleAssignDriver = async () => {
-      if (!selectedRoute || !selectedDriver) {
-        Alert.alert('Error','Please select a route and a driver');
-        return;
-      }
-      try {
-        setIsAssigning(true);
-        await apiService.assignDriverToRoute(selectedRoute._id, selectedDriver);
-        Alert.alert('Success', `Driver assigned to "${selectedRoute.name || selectedRoute.routeName}" successfully!`, [
-          { text:'OK', onPress: async () => {
-            setSelectedRoute(null);
-            setSelectedDriver(null);
-            await loadRoutes();
-          }},
-        ]);
-      } catch { Alert.alert('Error','Failed to assign driver.'); }
-      finally { setIsAssigning(false); }
-    };
-
-    const handlePollAssign = async () => {
-      if (!selectedPollForAssignment || !pollSelectedDriver || !pollRouteName || !pollSelectedTimeSlot) {
-        Alert.alert('Error','Please fill all required fields');
-        return;
-      }
-      try {
-        setIsAssigningPoll(true);
-        await apiService.assignRouteFromPoll(selectedPollForAssignment._id, {
-          driverId:    pollSelectedDriver,
-          routeName:   pollRouteName,
-          timeSlot:    pollSelectedTimeSlot,
-          startPoint:  pollStartPoint  || 'Start Point',
-          destination: pollDestination || 'Destination',
-          pickupTime:  pollSelectedTimeSlot,
-        });
-        Alert.alert('Success', `Route "${pollRouteName}" assigned! All parties notified.`, [
-          { text:'OK', onPress: () => {
-            setPollRouteName(''); setPollSelectedDriver(null); setPollSelectedTimeSlot('');
-            setPollStartPoint(''); setPollDestination('');
-            setSelectedPollForAssignment(null);
-            setShowPollFlow(false);
-            loadRoutes(); loadTrips();
-          }},
-        ]);
-      } catch { Alert.alert('Error','Failed to assign route.'); }
-      finally { setIsAssigningPoll(false); }
-    };
-
-    // ── Unassigned routes (no driver yet) ──
-    const unassignedRoutes = useMemo(() =>
-      routes.filter(r => !r.driverName || r.driverName === 'Not assigned' || r.driverName === ''),
-    [routes]);
-
-    return (
-      <ScrollView style={styles.section} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-        <SectionHeader title="Assign Drivers" />
-
-        {/* Toggle between two flows */}
-        <View style={styles.tabContainer}>
-          <TouchableOpacity style={[styles.tab, !showPollFlow && styles.tabActive]} onPress={() => setShowPollFlow(false)}>
-            <Text style={[styles.tabText, !showPollFlow && styles.tabTextActive]}>Existing Routes</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={[styles.tab, showPollFlow && styles.tabActive]} onPress={() => { setShowPollFlow(true); if (!selectedPollForAssignment) {} }}>
-            <Text style={[styles.tabText, showPollFlow && styles.tabTextActive]}>From Poll</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* ═══════════════════════════════════════
-            TAB 1: ASSIGN DRIVER TO EXISTING ROUTE
-            ═══════════════════════════════════════ */}
-        {!showPollFlow && (
-          <>
-            {/* Step 1: Select Route */}
-            <View style={styles.card}>
-              <Text style={styles.stepLabel}>Step 1 — Select a Route</Text>
-              {unassignedRoutes.length > 0 ? unassignedRoutes.map(route => {
-                const isSel = selectedRoute?._id === route._id;
-                return (
-                  <TouchableOpacity
-                    key={route._id}
-                    style={[styles.pollOption, isSel && styles.pollOptionActive]}
-                    onPress={() => handleSelectRoute(route)}
-                  >
-                    <View style={{ flex:1 }}>
-                      <Text style={styles.pollOptionTitle}>{route.name || route.routeName}</Text>
-                      <Text style={styles.pollOptionInfo}>⏰ {route.timeSlot || 'N/A'} &nbsp;·&nbsp; 📍 {route.stops?.join(', ') || 'N/A'}</Text>
-                      <Text style={styles.pollOptionInfo}>👥 {route.passengers?.length || 0} passengers</Text>
-                    </View>
-                    {isSel && <Icon name="check-circle" size={22} color={COLORS.primary} />}
-                  </TouchableOpacity>
-                );
-              }) : (
-                <View style={styles.emptyState}>
-                  <Icon name="map" size={36} color={COLORS.border} />
-                  <Text style={styles.emptyText}>No unassigned routes</Text>
-                  <Text style={styles.emptySubtext}>All routes already have a driver, or create routes from AI suggestions first</Text>
-                </View>
-              )}
-            </View>
-
-            {/* Step 2: Select Driver (shown only after route selected) */}
-            {selectedRoute && (
-              <View style={styles.card}>
-                <Text style={styles.stepLabel}>Step 2 — Select Driver</Text>
-                <Text style={{ fontSize:13, color:COLORS.gray, marginBottom:12 }}>
-                  Assigning to: <Text style={{ color:COLORS.black, fontWeight:'700' }}>{selectedRoute.name || selectedRoute.routeName}</Text>
-                </Text>
-                {isLoadingDrivers ? (
-                  <ActivityIndicator color={COLORS.primary} />
-                ) : availableDrivers.length > 0 ? availableDrivers.map((av, i) => {
-                  const d   = av.driverId || av;
-                  const isSel = selectedDriver === d._id;
-                  return (
-                    <TouchableOpacity key={i} style={[styles.driverOption, isSel && styles.driverOptionSelected]} onPress={() => setSelectedDriver(d._id)}>
-                      <View style={[styles.driverAvatar, { backgroundColor: isSel ? COLORS.primary+'33' : COLORS.gray+'22' }]}>
-                        <Icon name="person" size={20} color={isSel ? COLORS.primaryDark : COLORS.gray} />
-                      </View>
-                      <View style={{ flex:1, marginLeft:10 }}>
-                        <Text style={styles.driverName}>{d.name || av.driverName}</Text>
-                        <Text style={styles.driverDetail}>📞 {d.phone || 'N/A'} &nbsp;·&nbsp; 🚐 Capacity: {d.capacity || 8}</Text>
-                        {av.startTime && <Text style={[styles.driverDetail, { color:COLORS.success }]}>✅ {av.startTime}–{av.endTime}</Text>}
-                      </View>
-                      {isSel && <Icon name="check-circle" size={22} color={COLORS.primary} />}
-                    </TouchableOpacity>
-                  );
-                }) : (
-                  <View style={styles.emptyState}>
-                    <Icon name="person-off" size={36} color={COLORS.border} />
-                    <Text style={styles.emptyText}>No drivers available for tomorrow</Text>
-                    <Text style={styles.emptySubtext}>Drivers need to confirm their availability</Text>
+        {pollsWithYes.length > 0 && (
+          <View style={s.card}>
+            <Text style={s.cardLabel}>SELECT POLL TO OPTIMIZE</Text>
+            {pollsWithYes.map(poll => {
+              const yes = poll.responses?.filter(r=>r.response==='yes').length||0;
+              const isActive = activePoll?._id === poll._id;
+              return (
+                <TouchableOpacity
+                  key={poll._id}
+                  style={[s.selectItem, isActive && s.selectItemOn]}
+                  onPress={() => setActivePoll(poll)}
+                >
+                  <Icon name={isActive ? 'radio-button-checked' : 'radio-button-unchecked'} size={20}
+                    color={isActive ? C.primaryDark : C.textLight} />
+                  <View style={{ marginLeft:10, flex:1 }}>
+                    <Text style={s.selectItemTitle}>{poll.title}</Text>
+                    <Text style={s.selectItemSub}>{yes} passenger{yes!==1?'s':''} traveling · {poll.closesAt}</Text>
                   </View>
-                )}
-
-                {/* Summary */}
-                <View style={{ marginTop:16, padding:14, backgroundColor:COLORS.sectionBg, borderRadius:10 }}>
-                  <Text style={styles.cardSectionLabel}>📋 Assignment Summary</Text>
-                  {[
-                    { label:'Route',    val: selectedRoute.name || selectedRoute.routeName },
-                    { label:'Time',     val: selectedRoute.timeSlot || 'N/A' },
-                    { label:'Passengers', val: `${selectedRoute.passengers?.length || 0}` },
-                    { label:'Driver',   val: (() => {
-                      if (!selectedDriver) return 'Not selected';
-                      const f = availableDrivers.find(av => (av.driverId?._id || av._id) === selectedDriver);
-                      return f ? (f.driverId?.name || f.driverName || 'Selected') : 'Selected';
-                    })() },
-                  ].map(row => (
-                    <View key={row.label} style={styles.profileRow}>
-                      <Text style={styles.profileLabel}>{row.label}</Text>
-                      <Text style={styles.profileValue}>{row.val}</Text>
-                    </View>
-                  ))}
-                </View>
-
-                <TouchableOpacity
-                  style={[styles.primaryBtn, (!selectedDriver || isAssigning) && styles.primaryBtnDisabled]}
-                  onPress={handleAssignDriver}
-                  disabled={!selectedDriver || isAssigning}
-                >
-                  {isAssigning ? <ActivityIndicator color={COLORS.white} /> : (
-                    <><Icon name="assignment-turned-in" size={18} color={COLORS.white} /><Text style={[styles.primaryBtnText,{marginLeft:8}]}>Assign Driver</Text></>
-                  )}
+                  <View style={[s.pillBadge, { backgroundColor:C.primaryPale }]}>
+                    <Text style={[s.pillBadgeTxt, { color:C.primaryDark }]}>{yes} ✓</Text>
+                  </View>
                 </TouchableOpacity>
-              </View>
-            )}
-          </>
+              );
+            })}
+            <TouchableOpacity
+              style={[s.primaryBtn, (!activePoll || optimizing) && { opacity:0.5 }]}
+              onPress={() => handleOptimize(activePoll)}
+              disabled={!activePoll || optimizing}
+            >
+              {optimizing
+                ? <><ActivityIndicator size="small" color={C.white} style={{ marginRight:8 }} /><Text style={s.primaryBtnTxt}>Calculating via OSRM...</Text></>
+                : <><Icon name="auto-awesome" size={16} color={C.white} /><Text style={s.primaryBtnTxt}>Build Optimal Routes</Text></>
+              }
+            </TouchableOpacity>
+          </View>
         )}
 
-        {/* ════════════════════════════════
-            TAB 2: CREATE ROUTE FROM POLL
-            ════════════════════════════════ */}
-        {showPollFlow && (
-          <>
-            {/* Step 1: Poll */}
-            <View style={styles.card}>
-              <Text style={styles.stepLabel}>Step 1 — Select Poll</Text>
-              {polls.filter(p => p.status==='active').length > 0 ? polls.filter(p=>p.status==='active').map(poll => {
-                const yes      = poll.responses?.filter(r=>r.response==='yes').length || 0;
-                const isSel    = selectedPollForAssignment?._id === poll._id;
-                return (
-                  <TouchableOpacity key={poll._id} style={[styles.pollOption, isSel && styles.pollOptionActive]}
-                    onPress={() => { setSelectedPollForAssignment(poll); setPollRouteName(poll.title); loadPollDrivers(); }}
-                  >
-                    <View style={{ flex:1 }}>
-                      <Text style={styles.pollOptionTitle}>{poll.title}</Text>
-                      <Text style={styles.pollOptionInfo}>👥 {yes} passengers confirmed</Text>
-                      <Text style={styles.pollOptionInfo}>🕐 {poll.timeSlots?.join(', ')}</Text>
-                    </View>
-                    {isSel && <Icon name="check-circle" size={22} color={COLORS.primary} />}
-                  </TouchableOpacity>
-                );
-              }) : (
-                <View style={styles.emptyState}>
-                  <Icon name="poll" size={36} color={COLORS.border} />
-                  <Text style={styles.emptyText}>No active polls</Text>
-                  <TouchableOpacity style={[styles.primaryBtn, { marginTop:12 }]} onPress={() => setActiveSection('poll')}>
-                    <Text style={styles.primaryBtnText}>Create Poll</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-            </View>
+        {optimizing && (
+          <View style={[s.card, { alignItems:'center', paddingVertical:40 }]}>
+            <ActivityIndicator size="large" color={C.primaryDark} />
+            <Text style={[s.emptyTxt, { marginTop:14 }]}>Calculating routes...</Text>
+            <Text style={s.emptySub}>Fetching OSRM road matrix · applying preferences · solving insertion</Text>
+          </View>
+        )}
 
-            {selectedPollForAssignment && (
-              <>
-                {/* Step 2: Route Details */}
-                <View style={styles.card}>
-                  <Text style={styles.stepLabel}>Step 2 — Route Details</Text>
-                  <Text style={styles.inputLabel}>Route Name</Text>
-                  <TextInput style={styles.input} value={pollRouteName} onChangeText={setPollRouteName} placeholder="Route name" />
-                  <Text style={styles.inputLabel}>Start Point</Text>
-                  <TextInput style={styles.input} value={pollStartPoint} onChangeText={setPollStartPoint} placeholder="e.g. Sector G-8" />
-                  <Text style={styles.inputLabel}>Destination</Text>
-                  <TextInput style={styles.input} value={pollDestination} onChangeText={setPollDestination} placeholder="e.g. Blue Area" />
-                  <Text style={styles.inputLabel}>Time Slot</Text>
-                  {selectedPollForAssignment.timeSlots?.map((slot,i) => (
-                    <TouchableOpacity key={i} style={[styles.timeSlotOption, pollSelectedTimeSlot===slot && styles.timeSlotSelected]} onPress={() => setPollSelectedTimeSlot(slot)}>
-                      <View style={[styles.checkbox, pollSelectedTimeSlot===slot && styles.checkboxSelected]}>
-                        {pollSelectedTimeSlot===slot && <Icon name="check" size={14} color={COLORS.white} />}
-                      </View>
-                      <Text style={styles.timeSlotLabel}>{slot}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-
-                {/* Step 3: Driver */}
-                <View style={styles.card}>
-                  <Text style={styles.stepLabel}>Step 3 — Select Driver</Text>
-                  {pollAvailDrivers.length > 0 ? pollAvailDrivers.map((av,i) => {
-                    const d   = av.driverId || av;
-                    const isSel = pollSelectedDriver === d._id;
-                    return (
-                      <TouchableOpacity key={i} style={[styles.driverOption, isSel && styles.driverOptionSelected]} onPress={() => setPollSelectedDriver(d._id)}>
-                        <View style={[styles.driverAvatar, { backgroundColor: isSel ? COLORS.primary+'33' : COLORS.gray+'22' }]}>
-                          <Icon name="person" size={20} color={isSel ? COLORS.primaryDark : COLORS.gray} />
-                        </View>
-                        <View style={{ flex:1, marginLeft:10 }}>
-                          <Text style={styles.driverName}>{d.name || av.driverName}</Text>
-                          <Text style={styles.driverDetail}>📞 {d.phone || 'N/A'} &nbsp;·&nbsp; 🚐 {d.capacity || 8}</Text>
-                          {av.startTime && <Text style={[styles.driverDetail, { color:COLORS.success }]}>✅ {av.startTime}–{av.endTime}</Text>}
-                        </View>
-                        {isSel && <Icon name="check-circle" size={22} color={COLORS.primary} />}
-                      </TouchableOpacity>
-                    );
-                  }) : (
-                    <View style={styles.emptyState}>
-                      <Icon name="person-off" size={36} color={COLORS.border} />
-                      <Text style={styles.emptyText}>No drivers available for tomorrow</Text>
-                    </View>
-                  )}
-                </View>
-
-                {/* Summary */}
-                <View style={styles.card}>
-                  <Text style={styles.cardSectionLabel}>📋 Assignment Summary</Text>
-                  {[
-                    { label:'Route',       val: pollRouteName      || 'Not set' },
-                    { label:'Start',       val: pollStartPoint     || 'Not set' },
-                    { label:'Destination', val: pollDestination    || 'Not set' },
-                    { label:'Time Slot',   val: pollSelectedTimeSlot || 'Not selected' },
-                    { label:'Passengers',  val: `${selectedPollForAssignment.responses?.filter(r=>r.response==='yes').length||0}` },
-                  ].map(row => (
-                    <View key={row.label} style={styles.profileRow}>
-                      <Text style={styles.profileLabel}>{row.label}</Text>
-                      <Text style={styles.profileValue}>{row.val}</Text>
-                    </View>
-                  ))}
-                </View>
-
-                <TouchableOpacity
-                  style={[styles.primaryBtn, isAssigningPoll && styles.primaryBtnDisabled]}
-                  onPress={handlePollAssign}
-                  disabled={isAssigningPoll}
-                >
-                  {isAssigningPoll ? <ActivityIndicator color={COLORS.white} /> : (
-                    <><Icon name="assignment-turned-in" size={18} color={COLORS.white} /><Text style={[styles.primaryBtnText,{marginLeft:8}]}>Assign Route & Notify All</Text></>
-                  )}
-                </TouchableOpacity>
-              </>
+        {!optimizing && smartResults.length === 0 && (
+          <View style={s.emptyState}>
+            <View style={s.emptyIconWrap}><Icon name="auto-awesome" size={36} color={C.textLight} /></View>
+            <Text style={s.emptyTxt}>No routes ready</Text>
+            <Text style={s.emptySub}>
+              {pollsWithYes.length > 0
+                ? 'Select a poll above and tap "Build Optimal Routes"'
+                : 'Create a poll and wait for passenger responses first'
+              }
+            </Text>
+            {pollsWithYes.length === 0 && (
+              <TouchableOpacity style={[s.outlineBtn, { marginTop:16 }]} onPress={() => nav('poll')}>
+                <Icon name="poll" size={16} color={C.primaryDark} />
+                <Text style={s.outlineBtnTxt}>Go to Polls</Text>
+              </TouchableOpacity>
             )}
-          </>
+          </View>
+        )}
+
+        {!optimizing && smartResults.map((result, idx) => (
+          <SmartRouteCard
+            key={idx}
+            result={result}
+            onConfirm={() => handleConfirmRoute(result, idx)}
+            onDiscard={() => handleDiscardRoute(idx)}
+            isConfirming={confirmingIdx === idx}
+          />
+        ))}
+
+        {!optimizing && smartResults.length > 0 && (
+          <TouchableOpacity style={s.outlineBtn} onPress={() => { setSmartResults([]); if (activePoll) handleOptimize(activePoll); }}>
+            <Icon name="refresh" size={16} color={C.primaryDark} />
+            <Text style={s.outlineBtnTxt}>Recalculate Routes</Text>
+          </TouchableOpacity>
         )}
       </ScrollView>
     );
   };
 
-  // ==================== TRACKING ====================
-  const TrackingSection = () => {
-    const mapRef = useRef(null);
-    const [selectedVan, setSelectedVan] = useState(null);
-    const [localVans, setLocalVans]     = useState([
-      { id:1, name:'Van A (Route 01)', driver:'Ahmed Ali',   source:{latitude:33.6844,longitude:73.0479}, destination:{latitude:33.7100,longitude:73.0800}, currentLocation:{latitude:33.6844,longitude:73.0479}, color:'#FF5733', status:'En Route', stops:['Sector G-8','Blue Area','F-7 Markaz'] },
-      { id:2, name:'Van B (Route 05)', driver:'Zahid Khan',  source:{latitude:33.6500,longitude:73.0200}, destination:{latitude:33.6800,longitude:73.0500}, currentLocation:{latitude:33.6500,longitude:73.0200}, color:'#33A2FF', status:'En Route', stops:['Saddar','Shamsabad','Faizabad'] },
-    ]);
-
-    const handleSelectVan = van => {
-      setSelectedVan(van);
-      mapRef.current?.animateToRegion({ ...van.currentLocation, latitudeDelta:0.01, longitudeDelta:0.01 }, 800);
-    };
-
-    useEffect(() => {
-      const interval = setInterval(() => {
-        setLocalVans(prev => prev.map(van => {
-          const step = 0.0002;
-          const { latitude:cLat, longitude:cLng } = van.currentLocation;
-          const { latitude:dLat, longitude:dLng } = van.destination;
-          if (Math.abs(cLat-dLat) < step && Math.abs(cLng-dLng) < step) return van;
-          return { ...van, currentLocation:{ latitude: cLat + (dLat-cLat>0?step:-step), longitude: cLng + (dLng-cLng>0?step:-step) } };
-        }));
-      }, 1000);
-      return () => clearInterval(interval);
-    }, [selectedVan]);
-
-    return (
-      <View style={{ flex:1 }}>
-        {selectedVan && (
-          <View style={styles.trackingHeader}>
-            <TouchableOpacity onPress={() => setSelectedVan(null)} style={styles.backBtn}><Icon name="arrow-back" size={20} color={COLORS.black} /></TouchableOpacity>
-            <Text style={styles.trackingHeaderTitle}>{selectedVan.name}</Text>
-            <View style={[styles.statusBadge, { backgroundColor:COLORS.success }]}><Text style={styles.statusBadgeText}>LIVE</Text></View>
-          </View>
-        )}
-        <MapView ref={mapRef} style={[styles.mapWrapper, { height: selectedVan ? height*0.45 : height*0.5 }]}
+  // ─── TRACKING ─────────────────────────────────────────────────────────────
+  const TrackingSection = () => (
+    <View style={s.section}>
+      <View style={[s.pageHeader, { marginBottom:0 }]}>
+        <View style={[s.pageHdrIcon, { backgroundColor:C.primaryDark }]}>
+          <Icon name="my-location" size={21} color={C.white} />
+        </View>
+        <View style={{ flex:1 }}>
+          <Text style={s.pageTitle}>Live Tracking</Text>
+          <Text style={s.pageSub}>{drivers.length} driver{drivers.length!==1?'s':''} registered</Text>
+        </View>
+      </View>
+      <View style={s.mapWrap}>
+        <MapView
+          style={StyleSheet.absoluteFillObject}
           provider={PROVIDER_GOOGLE}
-          initialRegion={{ latitude:33.6844, longitude:73.0479, latitudeDelta:0.05, longitudeDelta:0.05 }}
+          initialRegion={{ latitude:33.6844, longitude:73.0479, latitudeDelta:0.08, longitudeDelta:0.08 }}
         >
-          {localVans.map(van => (
-            (!selectedVan || selectedVan.id===van.id) && (
-              <Marker key={van.id} coordinate={van.currentLocation} onPress={() => handleSelectVan(van)}>
-                <View style={styles.vanMarkerBubble}><Icon name="directions-bus" size={20} color={van.color} /></View>
-              </Marker>
-            )
+          {trips.map(t => t.currentLocation && (
+            <Marker
+              key={t._id}
+              coordinate={{ latitude:t.currentLocation.latitude||33.6844, longitude:t.currentLocation.longitude||73.0479 }}
+              title={t.driverName || 'Driver'}
+              description={t.routeName || ''}
+            />
           ))}
         </MapView>
-        <ScrollView style={styles.section}>
-          {!selectedVan ? (
-            <>
-              <Text style={styles.sectionSubtitle}>Active Vans</Text>
-              {localVans.map(van => (
-                <TouchableOpacity key={van.id} style={styles.vanCard} onPress={() => handleSelectVan(van)} activeOpacity={0.8}>
-                  <View style={[styles.vanColorDot, { backgroundColor:van.color, width:14, height:14, borderRadius:7, marginRight:14 }]} />
-                  <View style={{ flex:1 }}>
-                    <Text style={styles.vanName}>{van.name}</Text>
-                    <Text style={styles.vanDriver}>{van.driver} • {van.status}</Text>
-                  </View>
-                  <View style={[styles.statusBadge, { backgroundColor:COLORS.success }]}><Text style={styles.statusBadgeText}>LIVE</Text></View>
-                </TouchableOpacity>
-              ))}
-            </>
-          ) : (
-            <>
-              <View style={styles.statsRow}>
-                <View style={styles.trackStatBox}><Text style={styles.trackStatLabel}>Current Stop</Text><Text style={styles.trackStatValue}>{selectedVan.stops[1] || 'N/A'}</Text></View>
-                <View style={styles.trackStatBox}><Text style={styles.trackStatLabel}>ETA</Text><Text style={styles.trackStatValue}>12 min</Text></View>
-              </View>
-              <Text style={[styles.sectionSubtitle, { marginTop:12 }]}>Route Timeline</Text>
-              {selectedVan.stops.map((stop,i) => (
-                <View key={i} style={styles.timelineRow}>
-                  <View style={styles.timelineLeft}>
-                    <View style={[styles.timelineDot, { backgroundColor: i===0 ? COLORS.success : i===1 ? COLORS.primary : COLORS.border }]} />
-                    {i < selectedVan.stops.length-1 && <View style={styles.timelineLine} />}
-                  </View>
-                  <Text style={styles.timelineStop}>{stop}</Text>
-                </View>
-              ))}
-            </>
-          )}
-        </ScrollView>
       </View>
-    );
-  };
-
-  // ==================== REQUESTS (SHARED) ====================
-  const RequestCard = ({ req, onAccept, onReject }) => (
-    <View style={styles.card}>
-      <Text style={styles.cardTitle}>{req.name}</Text>
-      <Text style={styles.requestDetail}>📧 {req.email}</Text>
-      <Text style={styles.requestDetail}>📞 {req.phone}</Text>
-      {req.vehicle      && <Text style={styles.requestDetail}>🚐 {req.vehicle}</Text>}
-      {req.license      && <Text style={styles.requestDetail}>🪪 {req.license}</Text>}
-      {req.pickupPoint  && <Text style={styles.requestDetail}>📍 {req.pickupPoint}</Text>}
-      <View style={styles.requestActions}>
-        <TouchableOpacity style={[styles.actionBtn, styles.rejectBtn]} onPress={onReject}>
-          <Icon name="close" size={16} color={COLORS.white} />
-          <Text style={styles.actionBtnText}>Reject</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={[styles.actionBtn, styles.acceptBtn]} onPress={onAccept}>
-          <Icon name="check" size={16} color={COLORS.white} />
-          <Text style={styles.actionBtnText}>Accept</Text>
-        </TouchableOpacity>
-      </View>
+      <ScrollView style={{ flex:1 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom:16 }}>
+        <Text style={s.sectionLbl}>ALL DRIVERS ({drivers.length})</Text>
+        {drivers.length === 0 ? (
+          <View style={s.emptyState}>
+            <View style={s.emptyIconWrap}><Icon name="directions-car" size={36} color={C.textLight} /></View>
+            <Text style={s.emptyTxt}>No drivers yet</Text>
+          </View>
+        ) : (
+          <View style={s.driverGrid}>
+            {drivers.map((d, i) => <DriverCard key={d._id||i} driver={d} />)}
+          </View>
+        )}
+      </ScrollView>
     </View>
   );
 
-  const DriverRequestsSection = () => (
-    <ScrollView style={styles.section} showsVerticalScrollIndicator={false}>
-      <SectionHeader title="Driver Requests" />
-      {driverRequests.length > 0 ? driverRequests.map(req => (
-        <RequestCard key={req._id} req={req}
-          onAccept={async () => { try { await apiService.approveDriverRequest(req._id); await loadDriverRequests(); Alert.alert('Success','Request approved'); } catch { Alert.alert('Error','Failed to approve'); } }}
-          onReject={async () => { try { await apiService.rejectDriverRequest(req._id); await loadDriverRequests(); Alert.alert('Success','Request rejected'); } catch { Alert.alert('Error','Failed to reject'); } }}
-        />
-      )) : (
-        <View style={styles.emptyState}><Icon name="group-add" size={48} color={COLORS.border} /><Text style={styles.emptyText}>No pending driver requests</Text></View>
-      )}
-    </ScrollView>
-  );
-
-  const PassengerRequestsSection = () => (
-    <ScrollView style={styles.section} showsVerticalScrollIndicator={false}>
-      <SectionHeader title="Passenger Requests" />
-      {passengerRequests.length > 0 ? passengerRequests.map(req => (
-        <RequestCard key={req._id} req={req}
-          onAccept={async () => { try { await apiService.approvePassengerRequest(req._id); await loadPassengerRequests(); Alert.alert('Success','Request approved'); } catch { Alert.alert('Error','Failed to approve'); } }}
-          onReject={async () => { try { await apiService.rejectPassengerRequest(req._id); await loadPassengerRequests(); Alert.alert('Success','Request rejected'); } catch { Alert.alert('Error','Failed to reject'); } }}
-        />
-      )) : (
-        <View style={styles.emptyState}><Icon name="person-add" size={48} color={COLORS.border} /><Text style={styles.emptyText}>No pending passenger requests</Text></View>
-      )}
-    </ScrollView>
-  );
-
-  // ==================== PAYMENTS ====================
-  const PaymentsSection = () => (
-    <ScrollView style={styles.section} showsVerticalScrollIndicator={false}>
-      <SectionHeader title="Payments" />
-      <View style={styles.emptyState}><Icon name="account-balance-wallet" size={48} color={COLORS.border} /><Text style={styles.emptyText}>No payment records yet</Text></View>
-    </ScrollView>
-  );
-
-  // ==================== COMPLAINTS ====================
-  const ComplaintsSection = () => (
-    <ScrollView style={styles.section} showsVerticalScrollIndicator={false}>
-      <SectionHeader title="Complaints" />
-      {complaints.length > 0 ? complaints.map(c => (
-        <View key={c._id} style={styles.card}>
-          <View style={{ flexDirection:'row', justifyContent:'space-between' }}>
-            <Text style={styles.cardTitle}>{c.title}</Text>
-            <View style={[styles.statusBadge, { backgroundColor: c.status==='resolved' ? COLORS.success : COLORS.warning }]}>
-              <Text style={styles.statusBadgeText}>{c.status}</Text>
-            </View>
-          </View>
-          <Text style={{ fontSize:13, color:COLORS.darkGray, marginTop:6 }}>{c.description}</Text>
-          <Text style={styles.pollMeta}>By: {c.byName}</Text>
-          <Text style={styles.pollMeta}>{new Date(c.createdAt).toLocaleDateString()}</Text>
+  // ─── ROUTES ───────────────────────────────────────────────────────────────
+  const RoutesSection = () => (
+    <ScrollView style={s.section} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom:24 }}>
+      <View style={s.pageHeader}>
+        <View style={[s.pageHdrIcon, { backgroundColor:C.primaryDark }]}>
+          <Icon name="map" size={21} color={C.white} />
         </View>
-      )) : (
-        <View style={styles.emptyState}><Icon name="sentiment-very-satisfied" size={48} color={COLORS.border} /><Text style={styles.emptyText}>No complaints — all good! 🎉</Text></View>
-      )}
+        <View style={{ flex:1 }}>
+          <Text style={s.pageTitle}>Routes</Text>
+          <Text style={s.pageSub}>{routes.length} route{routes.length!==1?'s':''}</Text>
+        </View>
+      </View>
+      {routes.length === 0 ? (
+        <View style={s.emptyState}>
+          <View style={s.emptyIconWrap}><Icon name="map" size={36} color={C.textLight} /></View>
+          <Text style={s.emptyTxt}>No routes yet</Text>
+          <Text style={s.emptySub}>Use Smart Routes to create and assign routes</Text>
+          <TouchableOpacity style={[s.primaryBtn, { marginTop:16 }]} onPress={() => nav('smart-route')}>
+            <Icon name="auto-awesome" size={16} color={C.white} />
+            <Text style={s.primaryBtnTxt}>Go to Smart Routes</Text>
+          </TouchableOpacity>
+        </View>
+      ) : routes.map(r => {
+        const vi = VEHICLE_INFO[r.vehicleType] || null;
+        return (
+          <View key={r._id||r.id} style={s.card}>
+            <View style={{ flexDirection:'row', alignItems:'center', marginBottom:10 }}>
+              <View style={s.vIconWrap}>
+                <Text style={{ fontSize:22 }}>{vi?.icon || '🚗'}</Text>
+              </View>
+              <View style={{ flex:1, marginLeft:10 }}>
+                <Text style={s.cardTitle}>{r.routeName||r.name}</Text>
+                <View style={s.activeChip}>
+                  <View style={[s.activeDot, { backgroundColor: r.status==='active'?C.primary:C.border }]} />
+                  <Text style={s.activeChipTxt}>{(r.status||'pending').toUpperCase()}</Text>
+                </View>
+              </View>
+            </View>
+            {[
+              { i:'person',            t:r.driverName||'Unassigned'  },
+              { i:'place',             t:r.startPoint                 },
+              { i:'flag',              t:r.destination                },
+              { i:'schedule',          t:r.timeSlot||r.pickupTime     },
+              ...(r.estimatedTime ? [{ i:'timer',             t:r.estimatedTime             }] : []),
+              ...(r.estimatedFuel ? [{ i:'local-gas-station', t:r.estimatedFuel             }] : []),
+              ...(r.estimatedKm   ? [{ i:'straighten',        t:r.estimatedKm               }] : []),
+            ].map((it, i) => it.t && (
+              <View key={i} style={[s.detailRow, { marginBottom:5 }]}>
+                <Icon name={it.i} size={12} color={C.primaryDark} />
+                <Text style={s.detailTxt}>{it.t}</Text>
+              </View>
+            ))}
+          </View>
+        );
+      })}
     </ScrollView>
   );
 
-  // ==================== NOTIFICATIONS ====================
-  const NotificationsSection = () => (
-    <ScrollView style={styles.section} showsVerticalScrollIndicator={false}>
-      <SectionHeader title="Notifications" />
-      {notifications.length > 0 ? notifications.map(n => (
-        <TouchableOpacity key={n._id} style={[styles.card, !n.read && styles.unreadCard]} onPress={async () => { try { await apiService.markNotificationAsRead(n._id); await loadNotifications(); } catch {} }} activeOpacity={0.8}>
-          <View style={{ flexDirection:'row', alignItems:'flex-start', gap:12 }}>
-            <View style={[styles.notifIconWrap, { backgroundColor: COLORS.primary+'22' }]}>
-              <Icon name="notifications" size={22} color={COLORS.primaryDark} />
-            </View>
-            <View style={{ flex:1 }}>
-              <View style={{ flexDirection:'row', justifyContent:'space-between' }}>
-                <Text style={styles.cardTitle}>{n.title}</Text>
-                {!n.read && <View style={styles.unreadDot} />}
-              </View>
-              <Text style={{ fontSize:13, color:COLORS.gray, marginTop:4 }}>{n.message}</Text>
-              <Text style={styles.pollMeta}>{new Date(n.createdAt).toLocaleString()}</Text>
+  // ─── ASSIGN ───────────────────────────────────────────────────────────────
+  const AssignSection = () => {
+    const [selD, setSelD] = useState(null);
+    const [selR, setSelR] = useState(null);
+    const [assigning, setAssigning] = useState(false);
+    return (
+      <ScrollView style={s.section} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom:24 }}>
+        <View style={s.pageHeader}>
+          <View style={[s.pageHdrIcon, { backgroundColor:C.primaryDark }]}>
+            <Icon name="assignment-ind" size={21} color={C.white} />
+          </View>
+          <View style={{ flex:1 }}>
+            <Text style={s.pageTitle}>Assign Driver</Text>
+            <Text style={s.pageSub}>Manual driver-to-route assignment</Text>
+          </View>
+        </View>
+        <View style={s.tipCard}>
+          <Icon name="lightbulb-outline" size={19} color={C.primaryDark} />
+          <View style={{ flex:1, marginLeft:10 }}>
+            <Text style={s.tipTitle}>Use Smart Routes Instead!</Text>
+            <Text style={s.tipTxt}>Smart Routes automatically picks the best vehicle type and driver. This screen is for manual overrides only.</Text>
+          </View>
+        </View>
+        <TouchableOpacity style={s.primaryBtn} onPress={() => nav('smart-route')}>
+          <Icon name="auto-awesome" size={16} color={C.white} />
+          <Text style={s.primaryBtnTxt}>Open Smart Routes</Text>
+        </TouchableOpacity>
+        <Text style={[s.sectionLbl, { marginTop:20 }]}>MANUAL ASSIGNMENT</Text>
+        <Text style={s.inputLabel}>Select Route</Text>
+        <View style={s.card}>
+          {routes.length === 0 ? <Text style={{ color:C.textLight, fontSize:13 }}>No routes available</Text>
+            : routes.map(r => (
+              <TouchableOpacity key={r._id} style={[s.selectItem, selR?._id===r._id && s.selectItemOn]} onPress={() => setSelR(r)}>
+                <Icon name={selR?._id===r._id ? 'radio-button-checked' : 'radio-button-unchecked'} size={20}
+                  color={selR?._id===r._id ? C.primaryDark : C.textLight} />
+                <View style={{ marginLeft:10, flex:1 }}>
+                  <Text style={s.selectItemTitle}>{r.routeName||r.name}</Text>
+                  <Text style={s.selectItemSub}>{r.timeSlot} · {r.startPoint} → {r.destination}</Text>
+                </View>
+              </TouchableOpacity>
+            ))
+          }
+        </View>
+        <Text style={s.inputLabel}>Select Driver</Text>
+        <View style={s.card}>
+          {drivers.length === 0 ? <Text style={{ color:C.textLight, fontSize:13 }}>No drivers available</Text>
+            : drivers.map(d => {
+              const vi = VEHICLE_INFO[d.vehicleType||d.vehicle] || VEHICLE_INFO.van;
+              return (
+                <TouchableOpacity key={d._id} style={[s.selectItem, selD?._id===d._id && s.selectItemOn]} onPress={() => setSelD(d)}>
+                  <Icon name={selD?._id===d._id ? 'radio-button-checked' : 'radio-button-unchecked'} size={20}
+                    color={selD?._id===d._id ? C.primaryDark : C.textLight} />
+                  <View style={{ marginLeft:10, flex:1 }}>
+                    <Text style={s.selectItemTitle}>{d.name} {vi.icon}</Text>
+                    <Text style={s.selectItemSub}>{vi.label} · cap {vi.capacity}</Text>
+                  </View>
+                </TouchableOpacity>
+              );
+            })
+          }
+        </View>
+        <TouchableOpacity
+          style={[s.primaryBtn, (!selR || !selD || assigning) && { opacity:0.4 }]}
+          disabled={!selR || !selD || assigning}
+          onPress={async () => {
+            setAssigning(true);
+            try {
+              await api.assignDriverToRoute(selR._id, selD._id);
+              Alert.alert('Assigned!', `${selD.name} assigned to ${selR.routeName||selR.name}.`);
+              setSelD(null); setSelR(null);
+              await api.getRoutes().then(setRoutes);
+            } catch { Alert.alert('Error','Could not assign.'); }
+            finally { setAssigning(false); }
+          }}
+        >
+          {assigning ? <ActivityIndicator color={C.white} /> : <><Icon name="assignment-ind" size={16} color={C.white} /><Text style={s.primaryBtnTxt}>Assign Now</Text></>}
+        </TouchableOpacity>
+      </ScrollView>
+    );
+  };
+
+  // ─── REQUESTS ────────────────────────────────────────────────────────────
+  const RequestsSection = ({ type }) => {
+    const list     = type==='driver' ? driverReqs : passReqs;
+    const approve  = type==='driver' ? api.approveDriverRequest.bind(api)    : api.approvePassengerRequest.bind(api);
+    const reject   = type==='driver' ? api.rejectDriverRequest.bind(api)     : api.rejectPassengerRequest.bind(api);
+    const reload   = type==='driver' ? () => api.getDriverRequests().then(setDriverReqs) : () => api.getPassengerRequests().then(setPassReqs);
+    const [proc, setProc] = useState(null);
+    return (
+      <ScrollView style={s.section} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom:24 }}>
+        <View style={s.pageHeader}>
+          <View style={[s.pageHdrIcon, { backgroundColor:C.primaryDark }]}>
+            <Icon name={type==='driver'?'group-add':'person-add'} size={21} color={C.white} />
+          </View>
+          <View style={{ flex:1 }}>
+            <Text style={s.pageTitle}>{type==='driver'?'Driver':'Passenger'} Requests</Text>
+            <Text style={s.pageSub}>{list.length} pending</Text>
+          </View>
+        </View>
+        {list.length === 0 ? (
+          <View style={s.emptyState}>
+            <View style={s.emptyIconWrap}><Icon name={type==='driver'?'group-add':'person-add'} size={36} color={C.textLight} /></View>
+            <Text style={s.emptyTxt}>No pending requests</Text>
+            <Text style={s.emptySub}>New requests will appear here</Text>
+          </View>
+        ) : list.map(req => (
+          <RequestCard
+            key={req._id}
+            req={{ ...req, type }}
+            isProcessing={proc===req._id}
+            onAccept={async () => {
+              setProc(req._id);
+              try { await approve(req._id); await reload(); Alert.alert('Accepted!', `${req.name} approved.`); }
+              catch { Alert.alert('Error','Could not approve.'); }
+              finally { setProc(null); }
+            }}
+            onReject={async () => {
+              setProc(req._id);
+              try { await reject(req._id); await reload(); Alert.alert('Rejected', `${req.name} rejected.`); }
+              catch { Alert.alert('Error','Could not reject.'); }
+              finally { setProc(null); }
+            }}
+          />
+        ))}
+      </ScrollView>
+    );
+  };
+
+  // ─── PAYMENTS ────────────────────────────────────────────────────────────
+  const PaymentsSection = () => (
+    <ScrollView style={s.section} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom:24 }}>
+      <View style={s.pageHeader}>
+        <View style={[s.pageHdrIcon, { backgroundColor:C.primaryDark }]}>
+          <Icon name="account-balance-wallet" size={21} color={C.white} />
+        </View>
+        <View style={{ flex:1 }}>
+          <Text style={s.pageTitle}>Payments</Text>
+          <Text style={s.pageSub}>Track your earnings</Text>
+        </View>
+      </View>
+      <View style={s.statsGrid}>
+        <StatCard label="Received" value={`Rs. ${stats.paymentsReceived}`} iconName="check-circle" />
+        <StatCard label="Pending"  value={`Rs. ${stats.paymentsPending}`}  iconName="hourglass-empty" />
+      </View>
+      <View style={s.emptyState}>
+        <View style={s.emptyIconWrap}><Icon name="account-balance-wallet" size={36} color={C.textLight} /></View>
+        <Text style={s.emptyTxt}>Detailed history coming soon</Text>
+      </View>
+    </ScrollView>
+  );
+
+  // ─── COMPLAINTS ──────────────────────────────────────────────────────────
+  const ComplaintsSection = () => (
+    <ScrollView style={s.section} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom:24 }}>
+      <View style={s.pageHeader}>
+        <View style={[s.pageHdrIcon, { backgroundColor:C.primaryDark }]}>
+          <Icon name="support-agent" size={21} color={C.white} />
+        </View>
+        <View style={{ flex:1 }}>
+          <Text style={s.pageTitle}>Complaints</Text>
+          <Text style={s.pageSub}>{complaints.length} total</Text>
+        </View>
+      </View>
+      {complaints.length === 0 ? (
+        <View style={s.emptyState}>
+          <View style={s.emptyIconWrap}><Icon name="check-circle" size={36} color={C.primary} /></View>
+          <Text style={s.emptyTxt}>No complaints!</Text>
+          <Text style={s.emptySub}>Your passengers are happy 🎉</Text>
+        </View>
+      ) : complaints.map((c, i) => (
+        <View key={c._id||i} style={s.card}>
+          <View style={{ flexDirection:'row', justifyContent:'space-between', marginBottom:6 }}>
+            <Text style={[s.cardTitle, { flex:1 }]}>{c.title||'Complaint'}</Text>
+            <View style={[s.activeChip, c.status!=='Resolved' && { backgroundColor:C.primaryPale }]}>
+              <View style={[s.activeDot, { backgroundColor: c.status==='Resolved'?C.primary:C.warning }]} />
+              <Text style={s.activeChipTxt}>{(c.status||'Open').toUpperCase()}</Text>
             </View>
           </View>
-        </TouchableOpacity>
-      )) : (
-        <View style={styles.emptyState}><Icon name="notifications-none" size={48} color={COLORS.border} /><Text style={styles.emptyText}>All caught up!</Text></View>
-      )}
+          <Text style={s.pollMeta}>From: {c.byName||'Unknown'}</Text>
+          {c.description && <Text style={[s.pollMeta, { marginTop:4, color:C.textMid }]}>{c.description}</Text>}
+        </View>
+      ))}
     </ScrollView>
   );
 
-  // ==================== RENDER ====================
-  const renderSection = () => ({
-    overview:     <OverviewSection />,
-    profile:      <ProfileSection />,
-    poll:         <PollSection />,
-    routes:       <RoutesSection />,
-    assign:       <AssignSection />,
-    tracking:     <TrackingSection />,
-    'driver-req': <DriverRequestsSection />,
-    'pass-req':   <PassengerRequestsSection />,
-    payments:     <PaymentsSection />,
-    complaints:   <ComplaintsSection />,
-    notifications:<NotificationsSection />,
-  })[activeSection] || <OverviewSection />;
+  // ─── NOTIFICATIONS ───────────────────────────────────────────────────────
+  const NotificationsSection = () => (
+    <ScrollView style={s.section} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom:24 }}>
+      <View style={s.pageHeader}>
+        <View style={[s.pageHdrIcon, { backgroundColor:C.primaryDark }]}>
+          <Icon name="notifications-active" size={21} color={C.white} />
+        </View>
+        <View style={{ flex:1 }}>
+          <Text style={s.pageTitle}>Notifications</Text>
+          <Text style={s.pageSub}>{unread} unread</Text>
+        </View>
+      </View>
+      {notifications.length === 0 ? (
+        <View style={s.emptyState}>
+          <View style={s.emptyIconWrap}><Icon name="notifications-none" size={36} color={C.textLight} /></View>
+          <Text style={s.emptyTxt}>No notifications</Text>
+        </View>
+      ) : notifications.map((n, i) => (
+        <TouchableOpacity key={n._id||i} style={[s.card, !n.read && { borderLeftWidth:3, borderLeftColor:C.primary }]}
+          onPress={async () => { if (!n.read) { await api.markRead(n._id); await api.getNotifications().then(setNotifications); } }}
+        >
+          <View style={{ flexDirection:'row', justifyContent:'space-between', alignItems:'flex-start' }}>
+            <Text style={[s.cardTitle, { fontSize:14, flex:1 }]}>{n.title}</Text>
+            {!n.read && <View style={{ width:8, height:8, borderRadius:4, backgroundColor:C.primary, marginLeft:8, marginTop:3 }} />}
+          </View>
+          {n.message && <Text style={[s.pollMeta, { marginTop:3, color:C.textMid }]}>{n.message}</Text>}
+          <Text style={[s.pollMeta, { marginTop:3 }]}>{n.createdAt ? new Date(n.createdAt).toLocaleString() : ''}</Text>
+        </TouchableOpacity>
+      ))}
+    </ScrollView>
+  );
+
+  // ─── RENDER ───────────────────────────────────────────────────────────────
+  const renderSection = () => {
+    if (loading) return (
+      <View style={{ flex:1, justifyContent:'center', alignItems:'center' }}>
+        <ActivityIndicator size="large" color={C.primaryDark} />
+        <Text style={{ marginTop:14, color:C.textMid, fontSize:15, fontWeight:'600' }}>Loading dashboard...</Text>
+      </View>
+    );
+    switch (section) {
+      case 'overview':    return <OverviewSection />;
+      case 'profile':     return <ProfileSection />;
+      case 'poll':        return <PollSection />;
+      case 'smart-route': return <SmartRouteSection />;
+      case 'routes':      return <RoutesSection />;
+      case 'assign':      return <AssignSection />;
+      case 'tracking':    return <TrackingSection />;
+      case 'driver-req':  return <RequestsSection type="driver" />;
+      case 'pass-req':    return <RequestsSection type="passenger" />;
+      case 'payments':    return <PaymentsSection />;
+      case 'complaints':  return <ComplaintsSection />;
+      case 'notifications': return <NotificationsSection />;
+      default:            return <OverviewSection />;
+    }
+  };
 
   return (
-    <SafeAreaView style={{ flex:1, backgroundColor:COLORS.white }}>
-      {/* Header */}
-      <View style={styles.header}>
-        <TouchableOpacity style={styles.menuBtn} onPress={() => setSidebarVisible(true)}>
-          <Icon name="menu" size={24} color={COLORS.white} />
-          {(driverRequests.length + passengerRequests.length + unreadCount) > 0 && (
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>{driverRequests.length + passengerRequests.length + unreadCount}</Text>
+    <SafeAreaView style={s.container}>
+      {sidebar && <TouchableOpacity style={s.overlay} onPress={() => setSidebar(false)} activeOpacity={1} />}
+      <Sidebar />
+      <View style={s.header}>
+        <TouchableOpacity onPress={() => setSidebar(true)} style={s.menuBtn}>
+          <Icon name="menu" size={25} color={C.white} />
+          {totalBadge > 0 && (
+            <View style={s.headerBadge}>
+              <Text style={s.headerBadgeTxt}>{Math.min(totalBadge, 9)}</Text>
             </View>
           )}
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Transporter Dashboard</Text>
-        <TouchableOpacity style={styles.menuBtn} onPress={() => setActiveSection('notifications')}>
-          <Icon name="notifications" size={24} color={COLORS.white} />
-          {unreadCount > 0 && (
-            <View style={styles.badge}>
-              <Text style={styles.badgeText}>{unreadCount > 9 ? '9+' : unreadCount}</Text>
-            </View>
-          )}
+        <Text style={s.headerTitle}>
+          {MENU_ITEMS.find(m => m.key===section)?.label || 'Dashboard'}
+        </Text>
+        <TouchableOpacity onPress={() => nav('profile')}>
+          <Avatar uri={profile?.profileImage} name={profile?.name} size={33} />
         </TouchableOpacity>
       </View>
-
-      {sidebarVisible && <Sidebar />}
-      {sidebarVisible && (
-        <TouchableOpacity style={styles.overlay} onPress={() => setSidebarVisible(false)} activeOpacity={1} />
-      )}
-
-      {renderSection()}
-
-      {isLoading && (
-        <View style={styles.loadingOverlay}>
-          <View style={styles.loadingBox}>
-            <ActivityIndicator size="large" color={COLORS.primary} />
-            <Text style={styles.loadingText}>Loading...</Text>
-          </View>
-        </View>
-      )}
+      <View style={{ flex:1 }}>{renderSection()}</View>
     </SafeAreaView>
   );
 };
 
-// ==================== STYLES ====================
-const styles = StyleSheet.create({
-  section:           { flex:1, padding:16, backgroundColor:COLORS.sectionBg },
-  centerContainer:   { flex:1, justifyContent:'center', alignItems:'center' },
-  sectionHeaderRow:  { marginBottom:16 },
-  sectionTitle:      { fontSize:22, fontWeight:'800', color:COLORS.black },
-  sectionSubtitle:   { fontSize:16, fontWeight:'700', color:COLORS.black, marginTop:16, marginBottom:10 },
-  updateText:        { fontSize:12, color:COLORS.gray, marginBottom:16, marginTop:-8 },
-  header:            { flexDirection:'row', alignItems:'center', justifyContent:'space-between', paddingVertical:14, paddingHorizontal:16, backgroundColor:COLORS.primary, elevation:6 },
-  headerTitle:       { fontSize:18, fontWeight:'800', color:COLORS.white },
-  menuBtn:           { width:38, height:38, borderRadius:10, backgroundColor:'rgba(255,255,255,0.2)', justifyContent:'center', alignItems:'center' },
-  badge:             { position:'absolute', top:-2, right:-2, backgroundColor:COLORS.danger, borderRadius:8, minWidth:16, height:16, justifyContent:'center', alignItems:'center', paddingHorizontal:3 },
-  badgeText:         { color:COLORS.white, fontSize:10, fontWeight:'800' },
-  sidebar:           { position:'absolute', top:0, left:0, bottom:0, width:280, backgroundColor:COLORS.white, elevation:24, zIndex:1000 },
-  sidebarHeader:     { flexDirection:'row', justifyContent:'space-between', alignItems:'center', padding:18, paddingTop:48, backgroundColor:COLORS.primary },
-  sidebarName:       { fontSize:16, fontWeight:'700', color:COLORS.white },
-  sidebarCompany:    { fontSize:12, color:'rgba(255,255,255,0.8)', marginTop:2 },
-  sidebarClose:      { padding:4 },
-  menuItem:          { flexDirection:'row', alignItems:'center', paddingVertical:13, paddingHorizontal:16, marginHorizontal:10, marginVertical:2, borderRadius:10 },
-  menuItemActive:    { backgroundColor:'#F0F9D9' },
-  menuItemText:      { fontSize:14, color:COLORS.gray, marginLeft:12, fontWeight:'600', flex:1 },
-  menuItemTextActive:{ color:COLORS.primaryDark, fontWeight:'700' },
-  menuBadge:         { backgroundColor:COLORS.danger, borderRadius:10, minWidth:18, height:18, justifyContent:'center', alignItems:'center', paddingHorizontal:4 },
-  menuBadgeText:     { color:COLORS.white, fontSize:10, fontWeight:'800' },
-  menuDivider:       { height:1, backgroundColor:COLORS.border, marginVertical:10, marginHorizontal:16 },
-  logoutMenuItem:    { flexDirection:'row', alignItems:'center', paddingVertical:13, paddingHorizontal:16, marginHorizontal:10, borderRadius:10, backgroundColor:'#ffebee', marginBottom:16 },
-  logoutMenuText:    { fontSize:14, color:COLORS.danger, marginLeft:12, fontWeight:'700' },
-  overlay:           { position:'absolute', top:0, left:0, right:0, bottom:0, backgroundColor:'rgba(0,0,0,0.45)', zIndex:999 },
-  card:              { backgroundColor:COLORS.cardBg, borderRadius:14, padding:16, marginBottom:12, elevation:2, shadowColor:'#000', shadowOffset:{width:0,height:1}, shadowOpacity:0.06, shadowRadius:4 },
-  cardTitle:         { fontSize:16, fontWeight:'700', color:COLORS.black, marginBottom:4 },
-  cardSectionLabel:  { fontSize:12, fontWeight:'700', color:COLORS.primary, textTransform:'uppercase', letterSpacing:1, marginBottom:12 },
-  statsGrid:         { flexDirection:'row', flexWrap:'wrap', justifyContent:'space-between', marginBottom:8 },
-  statCard:          { width:'48%', backgroundColor:COLORS.cardBg, borderRadius:14, padding:16, marginBottom:12, alignItems:'center', elevation:2, borderTopWidth:3, borderTopColor:COLORS.primary },
-  statIconWrap:      { width:50, height:50, borderRadius:25, justifyContent:'center', alignItems:'center', marginBottom:8 },
-  statValue:         { fontSize:26, fontWeight:'800', color:COLORS.black, marginTop:4 },
-  statLabel:         { fontSize:12, color:COLORS.gray, marginTop:4, textAlign:'center', fontWeight:'600' },
-  quickActionsGrid:  { flexDirection:'row', flexWrap:'wrap', justifyContent:'space-between', marginBottom:8 },
-  quickActionCard:   { width:'31%', backgroundColor:COLORS.cardBg, borderRadius:14, padding:14, marginBottom:10, alignItems:'center', elevation:2 },
-  quickActionIcon:   { width:46, height:46, borderRadius:23, backgroundColor:'#F0F9D9', justifyContent:'center', alignItems:'center', marginBottom:8 },
-  quickActionTitle:  { fontSize:12, color:COLORS.black, fontWeight:'600', textAlign:'center' },
-  notifBanner:       { flexDirection:'row', alignItems:'center', backgroundColor:COLORS.primaryDark, borderRadius:12, padding:14, gap:10, marginTop:8, marginBottom:8 },
-  notifBannerText:   { flex:1, color:COLORS.white, fontSize:14, fontWeight:'600' },
-  statusPill:        { paddingHorizontal:10, paddingVertical:3, borderRadius:20, marginTop:6, alignSelf:'center' },
-  profileRow:        { flexDirection:'row', marginBottom:12, paddingBottom:12, borderBottomWidth:1, borderBottomColor:'#f0f0f0' },
-  profileLabel:      { fontSize:13, fontWeight:'600', color:COLORS.gray, width:110 },
-  profileValue:      { fontSize:13, color:COLORS.black, flex:1 },
-  input:             { borderWidth:1, borderColor:COLORS.border, borderRadius:10, padding:13, marginBottom:8, fontSize:14, backgroundColor:COLORS.white, color:COLORS.black },
-  inputLabel:        { fontSize:13, fontWeight:'600', color:COLORS.darkGray, marginBottom:6, marginTop:4 },
-  stepLabel:         { fontSize:13, fontWeight:'700', color:COLORS.primaryDark, textTransform:'uppercase', letterSpacing:0.8, marginBottom:12 },
-  primaryBtn:        { backgroundColor:COLORS.primary, borderRadius:11, padding:15, alignItems:'center', marginTop:8, elevation:2, flexDirection:'row', justifyContent:'center' },
-  primaryBtnText:    { color:COLORS.white, fontSize:15, fontWeight:'700' },
-  primaryBtnDisabled:{ backgroundColor:COLORS.gray, opacity:0.6 },
-  secondaryBtn:      { backgroundColor:COLORS.gray, marginTop:8 },
-  outlineBtn:        { borderWidth:1.5, borderColor:COLORS.primary, borderRadius:10, padding:10, flexDirection:'row', alignItems:'center', justifyContent:'center', gap:6 },
-  outlineBtnText:    { color:COLORS.primaryDark, fontSize:14, fontWeight:'700' },
-  deleteBtn:         { width:36, height:36, borderRadius:10, backgroundColor:'#ffebee', justifyContent:'center', alignItems:'center' },
-  timeSlotOption:    { flexDirection:'row', alignItems:'center', padding:13, borderRadius:10, marginBottom:8, backgroundColor:'#f8f9fa', borderWidth:1.5, borderColor:COLORS.border },
-  timeSlotSelected:  { backgroundColor:'#F0F9D9', borderColor:COLORS.primary },
-  timeSlotLabel:     { fontSize:14, color:COLORS.black, flex:1 },
-  checkbox:          { width:22, height:22, borderRadius:6, borderWidth:2, borderColor:COLORS.gray, justifyContent:'center', alignItems:'center', marginRight:12 },
-  checkboxSelected:  { backgroundColor:COLORS.primary, borderColor:COLORS.primary },
-  tabContainer:      { flexDirection:'row', backgroundColor:'#eeeeee', borderRadius:10, marginBottom:14, padding:3 },
-  tab:               { flex:1, paddingVertical:10, alignItems:'center', borderRadius:8 },
-  tabActive:         { backgroundColor:COLORS.white, elevation:2 },
-  tabText:           { fontSize:13, color:COLORS.gray, fontWeight:'600' },
-  tabTextActive:     { color:COLORS.primary, fontWeight:'800' },
-  pollMeta:          { fontSize:12, color:COLORS.gray, marginTop:2 },
-  responseStatsRow:  { flexDirection:'row', gap:8, marginTop:10 },
-  responseStatBox:   { flex:1, borderRadius:10, padding:10, alignItems:'center' },
-  responseStatNum:   { fontSize:22, fontWeight:'800' },
-  responseStatLabel: { fontSize:11, color:COLORS.gray, fontWeight:'600', marginTop:2 },
-  modalHeader:       { flexDirection:'row', alignItems:'center', justifyContent:'space-between', padding:16, borderBottomWidth:1, borderBottomColor:COLORS.border },
-  modalTitle:        { fontSize:17, fontWeight:'700', color:COLORS.black },
-  modalContent:      { flex:1, padding:16 },
-  responseCard:      { backgroundColor:'#f8f9fa', borderRadius:10, padding:14, marginBottom:10 },
-  responseName:      { fontSize:15, fontWeight:'700', color:COLORS.black },
-  responseDetail:    { fontSize:13, color:COLORS.darkGray, marginBottom:4 },
-  responseDate:      { fontSize:11, color:COLORS.gray, marginTop:6 },
-  statusBadge:       { paddingHorizontal:10, paddingVertical:3, borderRadius:20 },
-  statusBadgeText:   { color:COLORS.white, fontSize:11, fontWeight:'700' },
-  infoRow:           { flexDirection:'row', alignItems:'center', marginBottom:6 },
-  infoText:          { fontSize:13, color:COLORS.gray, marginLeft:8 },
-  aiBtn:             { flexDirection:'row', alignItems:'center', justifyContent:'center', backgroundColor:COLORS.black, borderRadius:12, padding:14, marginBottom:14, elevation:4, gap:8 },
-  aiBtnText:         { color:COLORS.primary, fontSize:14, fontWeight:'700' },
-  suggestionCard:    { backgroundColor:'#f8f9fa', borderRadius:12, padding:14, marginBottom:10, borderWidth:1, borderColor:COLORS.border },
-  progressBg:        { height:6, backgroundColor:'#e0e0e0', borderRadius:3, marginTop:10, overflow:'hidden' },
-  progressFill:      { height:'100%', borderRadius:3 },
-  pollOption:        { backgroundColor:'#f8f9fa', borderRadius:12, padding:14, marginBottom:10, flexDirection:'row', alignItems:'center', borderWidth:1.5, borderColor:COLORS.border },
-  pollOptionActive:  { backgroundColor:'#F0F9D9', borderColor:COLORS.primary },
-  pollOptionTitle:   { fontSize:15, fontWeight:'700', color:COLORS.black, marginBottom:3 },
-  pollOptionInfo:    { fontSize:12, color:COLORS.gray, marginTop:1 },
-  driverAvatar:      { width:38, height:38, borderRadius:19, justifyContent:'center', alignItems:'center' },
-  driverOption:      { flexDirection:'row', alignItems:'center', padding:13, borderRadius:12, marginBottom:8, backgroundColor:'#f8f9fa', borderWidth:1.5, borderColor:COLORS.border },
-  driverOptionSelected: { backgroundColor:'#F0F9D9', borderColor:COLORS.primary },
-  driverName:        { fontSize:14, fontWeight:'700', color:COLORS.black },
-  driverDetail:      { fontSize:12, color:COLORS.gray, marginTop:2 },
-  trackingHeader:    { flexDirection:'row', alignItems:'center', padding:12, backgroundColor:COLORS.white, elevation:3, gap:12 },
-  backBtn:           { width:36, height:36, borderRadius:18, backgroundColor:'#f0f0f0', justifyContent:'center', alignItems:'center' },
-  trackingHeaderTitle: { fontSize:16, fontWeight:'700', color:COLORS.black, flex:1 },
-  mapWrapper:        { width:'100%', elevation:4 },
-  vanMarkerBubble:   { backgroundColor:COLORS.white, borderRadius:20, padding:6, borderWidth:2, elevation:5 },
-  vanCard:           { flexDirection:'row', alignItems:'center', backgroundColor:COLORS.cardBg, padding:14, borderRadius:14, marginBottom:10, elevation:2 },
-  vanName:           { fontSize:15, fontWeight:'700', color:COLORS.black },
-  vanDriver:         { fontSize:12, color:COLORS.gray, marginTop:2 },
-  statsRow:          { flexDirection:'row', gap:10 },
-  trackStatBox:      { flex:1, backgroundColor:COLORS.cardBg, borderRadius:12, padding:14, alignItems:'center', elevation:2 },
-  trackStatLabel:    { fontSize:12, color:COLORS.gray, fontWeight:'600' },
-  trackStatValue:    { fontSize:20, fontWeight:'800', color:COLORS.black, marginTop:4 },
-  timelineRow:       { flexDirection:'row', alignItems:'flex-start', marginBottom:4 },
-  timelineLeft:      { width:24, alignItems:'center' },
-  timelineDot:       { width:12, height:12, borderRadius:6, marginTop:4 },
-  timelineLine:      { width:2, flex:1, backgroundColor:COLORS.border, marginTop:2 },
-  timelineStop:      { flex:1, fontSize:14, color:COLORS.black, paddingLeft:10, paddingBottom:16, paddingTop:2 },
-  requestDetail:     { fontSize:13, color:COLORS.gray, marginBottom:4 },
-  requestActions:    { flexDirection:'row', justifyContent:'flex-end', marginTop:12, gap:8 },
-  actionBtn:         { flexDirection:'row', alignItems:'center', paddingHorizontal:16, paddingVertical:9, borderRadius:9, gap:6 },
-  acceptBtn:         { backgroundColor:COLORS.success },
-  rejectBtn:         { backgroundColor:COLORS.danger },
-  actionBtnText:     { color:COLORS.white, fontSize:13, fontWeight:'700' },
-  unreadCard:        { borderLeftWidth:3, borderLeftColor:COLORS.primary, backgroundColor:'#FAFFF0' },
-  notifIconWrap:     { width:42, height:42, borderRadius:21, justifyContent:'center', alignItems:'center' },
-  unreadDot:         { width:10, height:10, borderRadius:5, backgroundColor:COLORS.primary },
-  stopNumber:        { width:26, height:26, borderRadius:13, justifyContent:'center', alignItems:'center' },
-  emptyState:        { alignItems:'center', justifyContent:'center', padding:36, backgroundColor:COLORS.cardBg, borderRadius:14, marginTop:10 },
-  emptyText:         { fontSize:15, color:COLORS.gray, marginTop:12, fontWeight:'600' },
-  emptySubtext:      { fontSize:12, color:COLORS.gray, marginTop:6, textAlign:'center' },
-  loadingOverlay:    { position:'absolute', top:0, left:0, right:0, bottom:0, justifyContent:'center', alignItems:'center', backgroundColor:'rgba(0,0,0,0.4)', zIndex:9999 },
-  loadingBox:        { backgroundColor:COLORS.white, borderRadius:16, padding:28, alignItems:'center', elevation:10 },
-  loadingText:       { fontSize:14, color:COLORS.black, marginTop:12, fontWeight:'600' },
-  vanColorDot:       {},
+// ─── STYLES ───────────────────────────────────────────────────────────────────
+const s = StyleSheet.create({
+  container:       { flex:1, backgroundColor:C.offWhite },
+  overlay:         { ...StyleSheet.absoluteFillObject, backgroundColor:'rgba(0,0,0,0.35)', zIndex:10 },
+
+  header:          { flexDirection:'row', alignItems:'center', paddingHorizontal:16, paddingVertical:14, backgroundColor:C.primaryDark, elevation:8, shadowColor:C.primaryDark, shadowOffset:{width:0,height:4}, shadowOpacity:0.3, shadowRadius:10 },
+  menuBtn:         { width:40, height:40, justifyContent:'center', alignItems:'center', position:'relative' },
+  headerTitle:     { flex:1, textAlign:'center', fontSize:17, fontWeight:'900', color:C.white, letterSpacing:-0.3 },
+  headerBadge:     { position:'absolute', top:0, right:0, backgroundColor:C.primaryLight, width:16, height:16, borderRadius:8, justifyContent:'center', alignItems:'center', borderWidth:2, borderColor:C.primaryDark },
+  headerBadgeTxt:  { color:C.textDark, fontSize:8, fontWeight:'900' },
+
+  sidebar:         { position:'absolute', top:0, left:0, width:295, height:'100%', backgroundColor:C.white, zIndex:20, elevation:16 },
+  sidebarHdr:      { backgroundColor:C.primaryDark, paddingTop:Platform.OS==='ios'?54:42, paddingBottom:18, paddingHorizontal:18, flexDirection:'row', alignItems:'center' },
+  sidebarName:     { color:C.white, fontWeight:'900', fontSize:15 },
+  sidebarCo:       { color:C.primaryLight, fontSize:12, marginTop:2 },
+  sidebarStatus:   { flexDirection:'row', alignItems:'center', gap:5, marginTop:5 },
+  sidebarDot:      { width:7, height:7, borderRadius:4, backgroundColor:C.primaryLight },
+  sidebarStatusTxt:{ color:C.primaryPale, fontSize:11, fontWeight:'600' },
+  sidebarClose:    { position:'absolute', top:14, right:14, width:30, height:30, borderRadius:8, backgroundColor:'rgba(255,255,255,0.15)', justifyContent:'center', alignItems:'center' },
+
+  menuItem:        { flexDirection:'row', alignItems:'center', paddingHorizontal:16, paddingVertical:12, position:'relative' },
+  menuItemOn:      { backgroundColor:C.primaryGhost },
+  menuBar:         { position:'absolute', left:0, top:8, bottom:8, width:3, backgroundColor:C.primary, borderRadius:2 },
+  menuIconWrap:    { width:34, height:34, borderRadius:10, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center' },
+  menuIconOn:      { backgroundColor:C.primaryPale },
+  menuTxt:         { flex:1, marginLeft:11, fontSize:13, color:C.textLight, fontWeight:'500' },
+  menuTxtOn:       { color:C.primaryDark, fontWeight:'800' },
+  menuBadge:       { backgroundColor:C.primary, borderRadius:10, paddingHorizontal:6, paddingVertical:2, minWidth:20, alignItems:'center' },
+  menuBadgeTxt:    { color:C.white, fontSize:10, fontWeight:'900' },
+  menuDivider:     { height:1, backgroundColor:C.divider, marginHorizontal:16, marginVertical:5 },
+  logoutItem:      { flexDirection:'row', alignItems:'center', paddingHorizontal:16, paddingVertical:12 },
+
+  section:         { flex:1, paddingHorizontal:14 },
+  sectionLbl:      { fontSize:10, fontWeight:'800', color:C.textLight, letterSpacing:1.2, marginBottom:9, marginTop:4 },
+
+  pageHeader:      { flexDirection:'row', alignItems:'center', paddingTop:16, paddingBottom:12, gap:12 },
+  pageHdrIcon:     { width:44, height:44, borderRadius:13, justifyContent:'center', alignItems:'center' },
+  pageTitle:       { fontSize:21, fontWeight:'900', color:C.textDark, letterSpacing:-0.5 },
+  pageSub:         { fontSize:12, color:C.textLight, marginTop:1 },
+
+  welcomeCard:     { backgroundColor:C.primaryDark, borderRadius:20, padding:16, flexDirection:'row', alignItems:'center', marginTop:14, marginBottom:12, elevation:6 },
+  welcomeGreet:    { fontSize:12, color:C.primaryLight, fontWeight:'600' },
+  welcomeName:     { fontSize:19, fontWeight:'900', color:C.white, letterSpacing:-0.4, marginTop:2 },
+  welcomeTime:     { fontSize:10, color:C.primaryPale, marginTop:2 },
+
+  smartBanner:     { backgroundColor:C.primaryGhost, borderRadius:15, padding:13, flexDirection:'row', alignItems:'center', marginBottom:12, borderWidth:1.5, borderColor:C.border, gap:10 },
+  smartBannerIcon: { width:40, height:40, borderRadius:12, backgroundColor:C.primary, justifyContent:'center', alignItems:'center' },
+  smartBannerTitle:{ fontSize:14, fontWeight:'800', color:C.textDark },
+  smartBannerSub:  { fontSize:11, color:C.textLight, marginTop:1 },
+  optimizingRow:   { flexDirection:'row', backgroundColor:C.primaryGhost, borderRadius:11, padding:11, alignItems:'center', gap:9, marginBottom:10, borderWidth:1, borderColor:C.border },
+  optimizingTxt:   { color:C.primaryDark, fontWeight:'700', fontSize:13, flex:1 },
+
+  statsGrid:       { flexDirection:'row', flexWrap:'wrap', gap:9, marginBottom:6 },
+  statCard:        { backgroundColor:C.white, borderRadius:15, padding:13, width:(width-50)/2, borderWidth:1.5, borderColor:C.divider },
+  statIconWrap:    { width:42, height:42, borderRadius:12, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center', marginBottom:9 },
+  statValue:       { fontSize:21, fontWeight:'900', color:C.textDark, letterSpacing:-0.5 },
+  statLabel:       { fontSize:11, color:C.textLight, marginTop:1, fontWeight:'600' },
+
+  quickGrid:       { flexDirection:'row', flexWrap:'wrap', gap:9, marginBottom:12 },
+  quickCard:       { backgroundColor:C.white, borderRadius:15, paddingVertical:14, paddingHorizontal:6, width:(width-50)/3, alignItems:'center', borderWidth:1.5, borderColor:C.divider },
+  quickIconWrap:   { width:48, height:48, borderRadius:14, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center', marginBottom:7, position:'relative' },
+  quickLabel:      { fontSize:10, color:C.textMid, fontWeight:'700', textAlign:'center', lineHeight:14 },
+  quickBadge:      { position:'absolute', top:-3, right:-3, backgroundColor:C.primary, width:17, height:17, borderRadius:9, justifyContent:'center', alignItems:'center', borderWidth:2, borderColor:C.white },
+  quickBadgeTxt:   { color:C.white, fontSize:8, fontWeight:'900' },
+
+  notifBanner:     { flexDirection:'row', backgroundColor:C.primaryPale, borderRadius:13, padding:12, alignItems:'center', marginBottom:12, gap:9, borderWidth:1, borderColor:C.border },
+  notifBannerTxt:  { flex:1, color:C.textDark, fontWeight:'700', fontSize:12 },
+
+  card:            { backgroundColor:C.white, borderRadius:15, padding:15, marginBottom:11, borderWidth:1.5, borderColor:C.divider },
+  cardTitle:       { fontSize:15, fontWeight:'800', color:C.textDark, letterSpacing:-0.3 },
+  cardLabel:       { fontSize:10, fontWeight:'800', color:C.textLight, textTransform:'uppercase', letterSpacing:1, marginBottom:13 },
+
+  vIconWrap:       { width:46, height:46, borderRadius:13, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center' },
+  pillBadge:       { borderRadius:18, paddingHorizontal:8, paddingVertical:3, alignSelf:'flex-start' },
+  pillBadgeTxt:    { fontSize:10, fontWeight:'700' },
+  paxBig:          { fontSize:24, fontWeight:'900', color:C.primaryDark, letterSpacing:-1 },
+
+  statsRow:        { flexDirection:'row', backgroundColor:C.primaryGhost, borderRadius:13, padding:13, marginBottom:11, alignItems:'center', borderWidth:1, borderColor:C.divider },
+  statBox:         { flex:1, alignItems:'center', gap:3 },
+  statBoxVal:      { fontSize:13, fontWeight:'800', color:C.textDark },
+  statBoxLbl:      { fontSize:10, color:C.textLight },
+  statDiv:         { width:1, height:34, backgroundColor:C.border },
+
+  srcBadge:        { flexDirection:'row', alignItems:'center', gap:4, marginBottom:9, backgroundColor:C.primaryGhost, alignSelf:'flex-start', paddingHorizontal:8, paddingVertical:3, borderRadius:8 },
+  srcTxt:          { fontSize:10, color:C.primaryDark, fontWeight:'600' },
+
+  stopsHeader:     { flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:8 },
+  stopsTitle:      { fontSize:10, fontWeight:'800', color:C.textLight, textTransform:'uppercase', letterSpacing:0.8 },
+  stopRow:         { flexDirection:'row', alignItems:'flex-start', marginBottom:7, gap:0 },
+  stopDot:         { width:10, height:10, borderRadius:5, marginTop:3, marginRight:8 },
+  stopLineWrap:    { position:'absolute', left:4, top:13, bottom:-7, width:2, backgroundColor:C.divider },
+  stopLine:        { flex:1 },
+  stopName:        { fontSize:12, color:C.textDark, fontWeight:'600' },
+  stopAddr:        { fontSize:11, color:C.textLight, marginTop:1 },
+
+  paxRow:          { flexDirection:'row', alignItems:'center', gap:10, marginBottom:7 },
+  paxAvatar:       { width:34, height:34, borderRadius:10, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center' },
+
+  warnBox:         { flexDirection:'row', backgroundColor:'#FFF8E1', borderRadius:9, padding:9, alignItems:'center', gap:5, marginBottom:5, borderWidth:1 },
+  warnTxt:         { flex:1, fontSize:11, fontWeight:'600' },
+
+  twoBtn:          { flexDirection:'row', gap:9, marginTop:13 },
+  discardBtn:      { flex:1, flexDirection:'row', justifyContent:'center', alignItems:'center', gap:5, padding:12, borderRadius:11, backgroundColor:C.textMid },
+  confirmBtn2:     { flex:2, flexDirection:'row', justifyContent:'center', alignItems:'center', gap:5, padding:12, borderRadius:11, backgroundColor:C.primaryDark },
+  rejectBtn:       { flex:1, flexDirection:'row', justifyContent:'center', alignItems:'center', gap:5, padding:12, borderRadius:11, backgroundColor:C.error },
+  acceptBtn:       { flex:1.5, flexDirection:'row', justifyContent:'center', alignItems:'center', gap:5, padding:12, borderRadius:11, backgroundColor:C.primaryDark },
+  btnTxt:          { color:C.white, fontWeight:'800', fontSize:13 },
+
+  howCard:         { backgroundColor:C.primaryGhost, borderRadius:15, padding:15, marginBottom:12, borderWidth:1, borderColor:C.border },
+  howTitle:        { fontSize:10, fontWeight:'800', color:C.primaryDark, marginBottom:11, letterSpacing:1 },
+  howStep:         { flexDirection:'row', alignItems:'flex-start', marginBottom:10, gap:11 },
+  howNum:          { width:26, height:26, borderRadius:13, backgroundColor:C.primaryDark, justifyContent:'center', alignItems:'center', flexShrink:0, marginTop:2 },
+  howNumTxt:       { color:C.white, fontWeight:'900', fontSize:11 },
+  howStepTxt:      { fontSize:11, color:C.textLight, lineHeight:16, marginTop:2 },
+
+  tipCard:         { flexDirection:'row', backgroundColor:C.primaryGhost, borderRadius:13, padding:13, alignItems:'flex-start', marginBottom:9, borderWidth:1.5, borderColor:C.border },
+  tipTitle:        { fontSize:12, fontWeight:'800', color:C.textDark, marginBottom:2 },
+  tipTxt:          { fontSize:12, color:C.textLight, lineHeight:17 },
+
+  driverGrid:      { flexDirection:'row', flexWrap:'wrap', gap:9, marginBottom:7 },
+  driverCard:      { backgroundColor:C.white, borderRadius:15, padding:11, width:(width-40)/2, flexDirection:'row', gap:9, borderWidth:1.5, borderColor:C.divider },
+  driverAvatar:    { width:42, height:42, borderRadius:12, justifyContent:'center', alignItems:'center', position:'relative' },
+  driverAvatarTxt: { color:C.white, fontWeight:'900', fontSize:13 },
+  driverDot:       { position:'absolute', bottom:-1, right:-1, width:11, height:11, borderRadius:6, borderWidth:2, borderColor:C.white },
+  driverName:      { fontSize:12, fontWeight:'800', color:C.textDark, flex:1 },
+  driverSub:       { fontSize:10, color:C.textLight, marginTop:1, marginBottom:3 },
+  capRow:          { flexDirection:'row', alignItems:'center', gap:4, marginBottom:3 },
+  capTxt:          { fontSize:9, color:C.textLight, width:26 },
+  capBg:           { flex:1, height:4, backgroundColor:C.divider, borderRadius:2 },
+  capFill:         { height:4, borderRadius:2 },
+
+  profileHero:     { alignItems:'center', paddingTop:22, paddingBottom:22, marginTop:8, marginBottom:11, backgroundColor:C.white, borderRadius:18, borderWidth:1.5, borderColor:C.divider, overflow:'hidden' },
+  profileHeroBg:   { position:'absolute', top:0, left:0, right:0, height:72, backgroundColor:C.primaryDark },
+  profileName:     { fontSize:21, fontWeight:'900', color:C.textDark, marginTop:11, letterSpacing:-0.4 },
+  profileCo:       { fontSize:13, color:C.textLight, marginTop:3 },
+  activeChip:      { flexDirection:'row', alignItems:'center', gap:5, backgroundColor:C.primaryGhost, borderRadius:18, paddingHorizontal:9, paddingVertical:4, marginTop:7, alignSelf:'flex-start', borderWidth:1, borderColor:C.border },
+  activeDot:       { width:6, height:6, borderRadius:3, backgroundColor:C.primary },
+  activeChipTxt:   { fontSize:10, fontWeight:'800', color:C.primaryDark },
+  profileRow:      { flexDirection:'row', alignItems:'center', paddingVertical:10, borderBottomWidth:1, borderBottomColor:C.divider },
+  profileRowIcon:  { width:32, height:32, borderRadius:9, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center', marginRight:11 },
+  profileRowLabel: { fontSize:10, color:C.textLight, fontWeight:'600' },
+  profileRowValue: { fontSize:13, color:C.textDark, fontWeight:'600', marginTop:1 },
+
+  inputLabel:      { fontSize:12, fontWeight:'700', color:C.textMid, marginBottom:5 },
+  inputRow:        { flexDirection:'row', alignItems:'center', borderWidth:1.5, borderColor:C.border, borderRadius:11, padding:11, backgroundColor:C.white, marginBottom:11 },
+  inputInner:      { flex:1, fontSize:14, color:C.textDark, padding:0 },
+
+  primaryBtn:      { backgroundColor:C.primaryDark, borderRadius:13, padding:14, flexDirection:'row', justifyContent:'center', alignItems:'center', gap:7, marginTop:5, elevation:4 },
+  primaryBtnTxt:   { color:C.white, fontWeight:'800', fontSize:14 },
+  outlineBtn:      { borderWidth:1.5, borderColor:C.primaryDark, borderRadius:13, padding:12, flexDirection:'row', justifyContent:'center', alignItems:'center', gap:5, marginBottom:7, backgroundColor:C.white },
+  outlineBtnTxt:   { color:C.primaryDark, fontWeight:'700', fontSize:13 },
+
+  slotTag:         { flexDirection:'row', alignItems:'center', gap:4, backgroundColor:C.primaryGhost, borderRadius:18, paddingHorizontal:9, paddingVertical:6, borderWidth:1.5, borderColor:C.border },
+  slotTagTxt:      { fontSize:12, color:C.primaryDark, fontWeight:'700' },
+  addTimeBtn:      { flexDirection:'row', alignItems:'center', gap:7, padding:11, borderRadius:11, borderWidth:1.5, borderColor:C.primaryDark, borderStyle:'dashed', backgroundColor:C.primaryGhost, marginBottom:3 },
+  addTimeTxt:      { color:C.primaryDark, fontWeight:'700', fontSize:13 },
+
+  pollCard:        { backgroundColor:C.white, borderRadius:15, padding:15, marginBottom:11, borderWidth:1.5, borderColor:C.divider },
+  pollIcon:        { width:38, height:38, borderRadius:11, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center' },
+  pollTitle:       { fontSize:14, fontWeight:'800', color:C.textDark },
+  pollMeta:        { fontSize:11, color:C.textLight, marginTop:1 },
+  slotMini:        { backgroundColor:C.primaryPale, borderRadius:7, paddingHorizontal:7, paddingVertical:2 },
+  slotMiniTxt:     { fontSize:10, color:C.primaryDark, fontWeight:'700' },
+  deletePollBtn:   { width:34, height:34, borderRadius:9, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center' },
+  respRow:         { flexDirection:'row', gap:7, marginTop:11 },
+  respBox:         { flex:1, borderRadius:11, padding:9, alignItems:'center' },
+  respNum:         { fontSize:21, fontWeight:'900', letterSpacing:-0.5 },
+  respLbl:         { fontSize:10, color:C.textLight, marginTop:2, fontWeight:'500' },
+
+  reqAvatar:       { width:44, height:44, borderRadius:13, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center' },
+  detailRow:       { flexDirection:'row', alignItems:'center', gap:6 },
+  detailTxt:       { fontSize:12, color:C.textMid, flex:1 },
+  vBadge:          { flexDirection:'row', alignItems:'center', backgroundColor:C.primaryGhost, borderRadius:11, padding:9, marginTop:7, borderWidth:1, borderColor:C.border },
+  vBadgeLbl:       { fontSize:10, color:C.textLight, fontWeight:'600' },
+  vBadgeVal:       { fontSize:12, color:C.textDark, fontWeight:'700', marginTop:1 },
+
+  selectItem:      { flexDirection:'row', alignItems:'center', padding:11, borderRadius:11, borderWidth:1.5, borderColor:C.border, marginBottom:7 },
+  selectItemOn:    { borderColor:C.primaryDark, backgroundColor:C.primaryGhost },
+  selectItemTitle: { fontSize:13, fontWeight:'700', color:C.textDark },
+  selectItemSub:   { fontSize:11, color:C.textLight, marginTop:1 },
+
+  mapWrap:         { height:180, borderRadius:16, overflow:'hidden', marginBottom:11, marginTop:7, borderWidth:1, borderColor:C.border },
+
+  modalHdr:        { flexDirection:'row', justifyContent:'space-between', alignItems:'center', padding:15, backgroundColor:C.white, borderBottomWidth:1, borderBottomColor:C.divider },
+  modalBackBtn:    { width:38, height:38, borderRadius:9, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center' },
+  modalTitle:      { fontSize:17, fontWeight:'800', color:C.textDark },
+
+  emptyState:      { alignItems:'center', paddingVertical:42, paddingHorizontal:20 },
+  emptyIconWrap:   { width:76, height:76, borderRadius:22, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center', marginBottom:13, borderWidth:2, borderColor:C.border },
+  emptyTxt:        { fontSize:16, fontWeight:'700', color:C.textMid },
+  emptySub:        { fontSize:12, color:C.textLight, textAlign:'center', marginTop:5, lineHeight:18 },
 });
 
-export default TransporterDashboard; 
+export default TransporterDashboard;
