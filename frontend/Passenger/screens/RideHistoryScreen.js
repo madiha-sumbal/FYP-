@@ -29,7 +29,7 @@ export default function RideHistoryScreen({ navigation }) {
       else setRefreshing(true);
 
       // Replace with your actual API endpoint
-      const response = await fetch('http://192.168.10.7:3000/api/passenger/ride-history', {
+      const response = await fetch('http://192.168.18.49:3000/api/passenger/ride-history', {
         method: 'GET',
         headers: {
           'Content-Type': 'application/json',

@@ -4,7 +4,7 @@ import Icon from 'react-native-vector-icons/Ionicons';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useAuth } from '../../context/AuthContext';
 
-const API_BASE_URL = 'http://192.168.10.7:3000/api';
+const API_BASE_URL = 'http://192.168.18.49:3000/api';
 
 export default function ProfileScreen({ navigation }) {
   const { userToken, userInfo } = useAuth();

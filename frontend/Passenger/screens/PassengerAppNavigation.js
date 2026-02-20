@@ -22,7 +22,7 @@ const Stack = createStackNavigator();
 const Drawer = createDrawerNavigator();
 
 // API Configuration
-const API_BASE_URL = "http://192.168.10.7:3000/api";
+const API_BASE_URL = "http://192.168.18.49:3000/api";
 
 // Dashboard Stack
 function DashboardStack() {

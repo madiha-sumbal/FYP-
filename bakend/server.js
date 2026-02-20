@@ -681,11 +681,65 @@ app.post('/api/routes', authenticateToken, async (req, res) => {
   } catch (err) { res.status(500).json({ success:false }); }
 });
 
+// ==================== ROUTES ====================
 app.get('/api/routes', authenticateToken, async (req, res) => {
   try {
-    const routes = await Route.find({ transporterId:req.query.transporterId||req.userId }).populate('assignedDriver').populate('passengers.passengerId').sort({createdAt:-1});
-    res.json({ success:true, routes, data:routes });
-  } catch (err) { res.status(500).json({ success:false }); }
+    let query = {};
+    
+    if (req.query.assignedDriver) {
+      // ✅ FIXED: 'new' keyword zaroori hai
+      let driverObjId;
+      try {
+        driverObjId = new mongoose.Types.ObjectId(req.query.assignedDriver);
+      } catch (e) {
+        console.log('⚠️ Invalid ObjectId, using string fallback');
+        driverObjId = req.query.assignedDriver;
+      }
+
+      query.$or = [
+        { assignedDriver: driverObjId },
+        { assignedDriver: req.query.assignedDriver }
+      ];
+      
+      console.log('📌 Driver-specific query:', JSON.stringify(query));
+    } else {
+      // Transporter ke liye
+      query.transporterId = req.query.transporterId || req.userId;
+      console.log('📌 Transporter query:', JSON.stringify(query));
+    }
+    
+    const routes = await Route.find(query)
+      .populate('assignedDriver', 'name vehicleType vehicleNo phone')
+      .populate('passengers.passengerId', 'name phone pickupPoint')
+      .sort({ createdAt: -1 });
+    
+    console.log(`✅ ${routes.length} routes found for ${req.query.assignedDriver ? 'DRIVER' : 'TRANSPORTER'}`);
+    
+    res.json({ 
+      success: true, 
+      routes, 
+      data: routes,
+      count: routes.length 
+    });
+  } catch (err) { 
+    console.error('❌ Routes fetch error:', err.message);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch routes',
+      error: err.message 
+    }); 
+  }
+});
+
+app.get('/api/debug/all-routes', authenticateToken, async (req, res) => {
+  try {
+    const routes = await Route.find({})
+      .populate('assignedDriver')
+      .populate('passengers.passengerId');
+    res.json({ success: true, routes });
+  } catch (err) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 app.post('/api/routes/assign', authenticateToken, async (req, res) => {
@@ -979,9 +1033,6 @@ app.get('/api/passenger/request-status/:id', async (req, res) => {
 });
 
 // ==================== JOIN REQUESTS ====================
-// ✅ BUG FIX: transporterId must be cast to ObjectId before querying.
-// Previously, passing req.userId (a string decoded from JWT) directly caused a
-// type mismatch against the ObjectId stored in DB, so transporter saw 0 requests.
 app.get('/api/join-requests', authenticateToken, async (req, res) => {
   try {
     const { type, transporterId } = req.query;
@@ -1055,7 +1106,6 @@ app.put('/api/join-requests/:requestId/accept', authenticateToken, async (req, r
 });
 
 // ==================== REJECT REQUEST ====================
-// ✅ NEW: reject endpoint was completely missing — transporter had no way to decline requests
 app.put('/api/join-requests/:requestId/reject', authenticateToken, async (req, res) => {
   try {
     const request = await JoinRequest.findById(req.params.requestId);
@@ -1109,7 +1159,7 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`
 ╔══════════════════════════════════════╗
 ║  🚀 SERVER RUNNING on port ${PORT}     ║
-║  📡 IP: 192.168.10.7                 ║
+║  📡 IP: 192.168.18.9                 ║
 ║  ✅ vehiclePreference enum FIXED     ║
 ║  ✅ capacity & vehicleType SAVED     ║
 ║  ✅ join-requests ObjectId FIXED     ║

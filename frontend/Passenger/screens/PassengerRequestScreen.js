@@ -17,7 +17,7 @@ import Icon from "react-native-vector-icons/Ionicons";
 import { LinearGradient } from 'expo-linear-gradient';
 import axios from "axios";
 
-const API_BASE_URL = "http://192.168.10.7:3000/api";
+const API_BASE_URL = "http://192.168.18.49:3000/api";
 const GOOGLE_MAPS_API_KEY = "AIzaSyDiZhjAhYniDLe4Ndr1u87NdDfIdZS6SME";
 
 // ─── Vehicle preference options ───────────────────────────────────────────────

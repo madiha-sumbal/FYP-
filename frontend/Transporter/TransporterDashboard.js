@@ -38,7 +38,7 @@ const VEHICLE_INFO   = {
   bus: { icon: '🚌', label: 'Bus',  desc: 'Large Bus / Coach', capacity: 30 },
 };
 
-const API_BASE = 'http://192.168.10.7:3000/api';
+const API_BASE = 'http://192.168.18.49:3000/api';
 
 const MENU_ITEMS = [
   { key: 'overview',    label: 'Dashboard',           icon: 'dashboard'            },
