@@ -19,7 +19,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import MapView, { Marker } from 'react-native-maps';
 
-const API_BASE_URL = 'http://192.168.18.49:3000/api';
+const API_BASE_URL = 'http://192.168.10.14:3000/api';
 const GOOGLE_API_KEY = "AIzaSyDiZhjAhYniDLe4Ndr1u87NdDfIdZS6SME";
 
 export default function TransporterRegisterScreen({ navigation }) {

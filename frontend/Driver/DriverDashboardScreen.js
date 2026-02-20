@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { 
   View, 
   Text, 
@@ -19,7 +19,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width, height } = Dimensions.get("window");
 
-const API_BASE_URL = "http://192.168.18.49:3000/api";
+const API_BASE_URL = "http://192.168.10.14:3000/api";
 const GOOGLE_MAPS_API_KEY = "AIzaSyDiZhjAhYniDLe4Ndr1u87NdDfIdZS6SME";
 
 const UnifiedDriverDashboard = ({ navigation, route }) => {

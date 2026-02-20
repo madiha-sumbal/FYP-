@@ -10,7 +10,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const { width } = Dimensions.get("window");
 
-const API_BASE_URL = "http://192.168.18.49:3000/api";
+const API_BASE_URL = "http://192.168.10.14:3000/api";
 
 const UnifiedDriverDashboard = ({ navigation, route }) => {
   const { driver } = route.params || {};
