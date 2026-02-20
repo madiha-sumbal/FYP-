@@ -32,6 +32,7 @@
     "moment-timezone": "^0.6.0",
     "mongodb": "^7.0.0",
     "mongoose": "^9.1.5",
+    "multer": "^2.0.2",
     "passport-jwt": "^4.0.1",
     "react": "19.1.0",
     "react-dom": "19.1.0",
