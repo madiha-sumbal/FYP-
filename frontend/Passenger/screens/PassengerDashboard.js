@@ -21,7 +21,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // ==================== API BASE URL ====================
-const API_BASE_URL = "http://192.168.10.14:3000/api";
+const API_BASE_URL = "http://192.168.10.12:3000/api";
 const GOOGLE_MAPS_API_KEY = "AIzaSyDiZhjAhYniDLe4Ndr1u87NdDfIdZS6SME";
 
 export default function PassengerDashboard({ navigation }) {

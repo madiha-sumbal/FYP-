@@ -15,7 +15,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import Icon from 'react-native-vector-icons/Ionicons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const API_BASE_URL = 'http://192.168.10.14:3000/api';
+const API_BASE_URL = 'http://192.168.10.12:3000/api';
 
 export default function PassengerLogin({ navigation }) {
   const [email, setEmail] = useState('');

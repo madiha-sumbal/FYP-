@@ -25,9 +25,9 @@ import axios from "axios";
 
 // ✅ FIX: Correct IP matching server.js and TransporterDashboard
 const API_BASE_URL = Platform.select({
-  ios:     "http://192.168.10.14:3000",
-  android: "http://192.168.10.14:3000",
-  default: "http://192.168.10.14:3000",
+  ios:     "http://192.168.10.12:3000",
+  android: "http://192.168.10.12:3000",
+  default: "http://192.168.10.12:3000",
 });
 
 const GOOGLE_MAPS_API_KEY = "AIzaSyDiZhjAhYniDLe4Ndr1u87NdDfIdZS6SME";
@@ -113,7 +113,7 @@ export default function DriverRegisterScreen({ navigation }) {
       setServerConnected(false);
       Alert.alert(
         "Connection Error",
-        `Cannot connect to server at ${API_BASE_URL}\n\nCheck:\n• Backend is running on port 3000\n• IP is 192.168.10.14\n• Same WiFi network`,
+        `Cannot connect to server at ${API_BASE_URL}\n\nCheck:\n• Backend is running on port 3000\n• IP is 192.168.10.12\n• Same WiFi network`,
         [
           { text: "Retry",           onPress: checkServerConnection },
           { text: "Continue Anyway", style: "cancel", onPress: () => setServerConnected(true) },

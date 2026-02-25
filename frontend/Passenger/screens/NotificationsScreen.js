@@ -18,7 +18,7 @@ import Icon from 'react-native-vector-icons/Ionicons';
 import { LinearGradient } from 'expo-linear-gradient';
 
 const { width } = Dimensions.get('window');
-const API_BASE_URL = 'http://192.168.10.14:3000/api';
+const API_BASE_URL = 'http://192.168.10.12:3000/api';
 
 const categories = [
   { id: 'all', label: 'All', icon: 'apps-outline' },

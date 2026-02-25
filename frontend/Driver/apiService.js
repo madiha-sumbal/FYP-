@@ -8,8 +8,8 @@ import { Platform } from 'react-native';
 // ══════════════════════════════════════════════════════
 const API_BASE_URL = Platform.select({
   ios: 'http://localhost:3000',
-  android: 'http://192.168.10.14:3000',
-  default: 'http://192.168.10.14:3000'
+  android: 'http://192.168.10.12:3000',
+  default: 'http://192.168.10.12:3000'
 });
 
 console.log('🌐 API Base URL:', API_BASE_URL);

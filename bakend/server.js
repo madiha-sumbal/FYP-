@@ -84,6 +84,10 @@ const pollSchema = new mongoose.Schema({
     passengerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     passengerName: String, passengerEmail: String,
     response: String, selectedTimeSlot: String, pickupPoint: String,
+    pickupLat: Number, pickupLng: Number,
+    dropLat: Number, dropLng: Number,
+    destination: String,
+    vehiclePreference: { type: String, enum: ['car', 'van', 'bus', null], default: null },
     respondedAt: { type: Date, default: Date.now }
   }],
   createdAt: { type: Date, default: Date.now },
@@ -102,19 +106,37 @@ const driverAvailabilitySchema = new mongoose.Schema({
 const DriverAvailability = mongoose.model('DriverAvailability', driverAvailabilitySchema);
 
 const routeSchema = new mongoose.Schema({
-  name: String, routeName: String, stops: [String],
-  startPoint: String, destination: String,
-  assignedDriver: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-  driverName: String, timeSlot: String, pickupTime: String,
-  distance: String, totalDistance: String, duration: String, estimatedDuration: String,
+  name:         String,
+  routeName:    String,
+  pollId:       { type: mongoose.Schema.Types.ObjectId, ref: 'Poll' },
+  assignedDriver: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  driverName:   { type: String, default: null },
+  stops:        [String],
+  startPoint:   String,
+  destination:  String,
+  timeSlot:     String,
+  pickupTime:   String,
+  date:         Date,
   passengers: [{
-    passengerId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-    passengerName: String, pickupPoint: String,
-    status: { type: String, default: 'pending' }
+    passengerId:   { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    passengerName: String,
+    pickupPoint:   String,
+    status:        { type: String, default: 'pending' },
   }],
-  status: { type: String, default: 'assigned' },
+  estimatedTime:  String,
+  estimatedFuel:  String,
+  estimatedKm:    String,
+  // Pakistan fuel details
+  fuelType:       { type: String, default: 'petrol' },
+  fuelCostPKR:    String,
+  fuelRatePerKm:  Number,
+  vehicleType:    { type: String, default: 'van' },
+  distance:         String,
+  totalDistance:    String,
+  duration:         String,
+  estimatedDuration:String,
+  status: { type: String, default: 'unassigned' },
   transporterId: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-  date: Date,
   createdAt: { type: Date, default: Date.now }
 });
 const Route = mongoose.model('Route', routeSchema);
@@ -251,7 +273,6 @@ async function sendNotification(userId, userRole, title, message, type, relatedI
       pollId: relatedType === 'poll' ? relatedId : null
     });
     await notification.save();
-    console.log(`✅ Notification → ${user.name}: ${title}`);
     return notification;
   } catch (err) {
     console.error('Notification error:', err.message);
@@ -264,9 +285,75 @@ function getColorForType(type) {
   return ({ poll:'#2196F3', route:'#A1D826', confirmation:'#4CAF50', alert:'#FF9800', complaint:'#F44336', feedback:'#FFD700', general:'#9E9E9E', request:'#9C27B0' })[type] || '#9E9E9E';
 }
 
-// ==================== SMART ROUTE OPTIMIZER v2 ====================
+// ==================== PAKISTAN FUEL CALCULATOR ====================
+// Pakistan ke hisaab se fuel rates (2024-2025)
+// Petrol: ~Rs. 278/litre
+// Diesel: ~Rs. 283/litre  
+// CNG: ~Rs. 165/kg (equivalent ~Rs. 130/litre petrol equivalent)
+
+const PAKISTAN_FUEL = {
+  // L per 100km for Pakistani roads (urban/city driving with traffic)
+  // Real-world Pakistan traffic conditions mein consumption zyada hoti hai
+  consumption: {
+    car: 10,    // 10 L/100km - Suzuki Mehran/Alto/WagonR typical city
+    van: 14,    // 14 L/100km - Toyota HiAce/Shehzore typical city  
+    bus: 28,    // 28 L/100km - Hino/Isuzu bus typical city
+  },
+  // Fuel types per vehicle (Pakistan mein van/bus diesel chalti hai mostly)
+  fuelType: {
+    car: 'petrol',
+    van: 'diesel',
+    bus: 'diesel',
+  },
+  // Current Pakistan prices per litre (Rs.)
+  pricePerLitre: {
+    petrol: 278,
+    diesel: 283,
+    cng: 130, // petrol equivalent
+  },
+  // Road factor - Pakistan roads mein actual distance GPS se ~25-35% zyada
+  roadFactor: {
+    car: 1.30,
+    van: 1.28,
+    bus: 1.25,
+  }
+};
+
+/**
+ * Pakistan-specific fuel calculation
+ * @param {number} straightLineKm - Haversine/GPS distance
+ * @param {string} vehicleType - car/van/bus
+ * @returns {object} { fuelLitres, fuelCostPKR, fuelType, actualRoadKm, consumptionPer100km }
+ */
+function calculatePakistanFuel(straightLineKm, vehicleType = 'van') {
+  const vType = vehicleType.toLowerCase();
+  
+  // Road factor apply karo - Pakistan roads mein GPS se actual zyada hota hai
+  const roadFactor = PAKISTAN_FUEL.roadFactor[vType] || 1.30;
+  const actualRoadKm = straightLineKm * roadFactor;
+  
+  // Consumption
+  const consumptionPer100km = PAKISTAN_FUEL.consumption[vType] || 14;
+  const fuelLitres = (actualRoadKm * consumptionPer100km) / 100;
+  
+  // Cost
+  const fType = PAKISTAN_FUEL.fuelType[vType] || 'petrol';
+  const pricePerLitre = PAKISTAN_FUEL.pricePerLitre[fType];
+  const fuelCostPKR = fuelLitres * pricePerLitre;
+  
+  return {
+    fuelLitres:          parseFloat(fuelLitres.toFixed(2)),
+    fuelCostPKR:         Math.round(fuelCostPKR),
+    fuelType:            fType,
+    actualRoadKm:        parseFloat(actualRoadKm.toFixed(1)),
+    consumptionPer100km,
+    pricePerLitre,
+  };
+}
+
+// ==================== SMART ROUTE OPTIMIZER ====================
 const OSRM_BASE = 'https://router.project-osrm.org';
-const VEHICLE_CAPS = { car: 4, van: 12, bus: 30 };
+const VEHICLE_CAPS_SRV = { car: 4, van: 12, bus: 30 };
 const ALPHA = 0.7, BETA = 0.3;
 
 function pickBestVehicle(count) {
@@ -305,17 +392,31 @@ function bestInsertionCost(matrix, route, pi, di) {
   }
   return { cost: best, position: pos };
 }
-function summariseRoute(route, matrix) {
+
+function summariseRoute(route, matrix, vehicleType = 'van') {
   let distM=0, durS=0;
   for (let i=1;i<route.length;i++) { distM+=matrix.distances[route[i-1]]?.[route[i]]||0; durS+=matrix.durations[route[i-1]]?.[route[i]]||0; }
-  const km=distM/1000, mins=Math.round(durS/60);
-  return { estimatedKm:`${km.toFixed(1)} km`, estimatedTime: mins<60?`${mins} min`:`${Math.floor(mins/60)}h ${mins%60}m`, estimatedFuel:`${((km*8)/100).toFixed(1)} L` };
+  const straightKm = distM / 1000;
+  const mins = Math.round(durS / 60);
+  
+  // Pakistan-specific fuel calculation
+  const fuelData = calculatePakistanFuel(straightKm, vehicleType);
+  
+  return {
+    estimatedKm:    `${fuelData.actualRoadKm.toFixed(1)} km`,
+    estimatedTime:  mins < 60 ? `${mins} min` : `${Math.floor(mins/60)}h ${mins%60}m`,
+    estimatedFuel:  `${fuelData.fuelLitres.toFixed(1)} L`,
+    fuelCostPKR:    `Rs. ${fuelData.fuelCostPKR}`,
+    fuelType:       fuelData.fuelType,
+    fuelRatePerKm:  parseFloat((fuelData.fuelLitres / Math.max(fuelData.actualRoadKm, 0.1)).toFixed(3)),
+  };
 }
+
 async function optimiseRoutes(rawPassengers, rawDrivers) {
   if (!rawPassengers?.length) return [];
   const norm = (c,fLat,fLng) => ({ lat: typeof c?.lat==='number'?c.lat:(parseFloat(c?.latitude)||fLat||33.6844), lng: typeof c?.lng==='number'?c.lng:(parseFloat(c?.longitude)||fLng||73.0479) });
   const passengers = rawPassengers.map((p,i) => ({ ...p, _i:i, id:p.id||p._id||`p_${i}`, pickupLoc:norm(p.pickupLocation,p.pickupLat,p.pickupLng), dropLoc:norm(p.dropLocation,p.dropLat,p.dropLng), vehiclePreference:p.vehiclePreference||null }));
-  const drivers = (rawDrivers||[]).map((d,i) => ({ ...d, _i:i, id:d.id||d._id||`d_${i}`, vehicleType:d.vehicleType||d.vehicle||'van', currentLoc:norm(d.currentLocation,d.lat,d.lng), capacityMax:VEHICLE_CAPS[d.vehicleType||d.vehicle||'van']||8 }));
+  const drivers = (rawDrivers||[]).map((d,i) => ({ ...d, _i:i, id:d.id||d._id||`d_${i}`, vehicleType:d.vehicleType||d.vehicle||'van', currentLoc:norm(d.currentLocation,d.lat,d.lng), capacityMax:VEHICLE_CAPS_SRV[d.vehicleType||d.vehicle||'van']||8 }));
   const nD=drivers.length, nP=passengers.length;
   const pIdx=i=>nD+i, dIdx=i=>nD+nP+i;
   const allLocs=[...drivers.map(d=>d.currentLoc),...passengers.map(p=>p.pickupLoc),...passengers.map(p=>p.dropLoc)];
@@ -326,7 +427,7 @@ async function optimiseRoutes(rawPassengers, rawDrivers) {
   ['car','van','bus'].forEach(pref => {
     const group=prefGroups[pref].filter(p=>!assignedIds.has(p.id));
     if (!group.length) return;
-    const cap=VEHICLE_CAPS[pref], available=drivers.filter(d=>d.vehicleType===pref&&!usedDrivers.has(d._i));
+    const cap=VEHICLE_CAPS_SRV[pref], available=drivers.filter(d=>d.vehicleType===pref&&!usedDrivers.has(d._i));
     for (let s=0;s<group.length;s+=cap) {
       const chunk=group.slice(s,s+cap), driver=available.shift()||null;
       if (driver) usedDrivers.add(driver._i);
@@ -348,11 +449,11 @@ async function optimiseRoutes(rawPassengers, rawDrivers) {
     const finalClusters=(large.length?large:clusters).sort((a,b)=>b.length-a.length);
     const freeDrivers=drivers.filter(d=>!usedDrivers.has(d._i));
     finalClusters.forEach(cluster => {
-      const ideal=pickBestVehicle(cluster.length), cap=VEHICLE_CAPS[ideal];
+      const ideal=pickBestVehicle(cluster.length), cap=VEHICLE_CAPS_SRV[ideal];
       for (let s=0;s<cluster.length;s+=cap) {
         const chunk=cluster.slice(s,s+cap), count=chunk.length, idealType=pickBestVehicle(count);
         let di2=freeDrivers.findIndex(d=>d.vehicleType===idealType);
-        if (di2===-1) di2=freeDrivers.findIndex(d=>VEHICLE_CAPS[d.vehicleType]>=count);
+        if (di2===-1) di2=freeDrivers.findIndex(d=>VEHICLE_CAPS_SRV[d.vehicleType]>=count);
         if (di2===-1&&freeDrivers.length>0) di2=0;
         const driver=di2>=0?freeDrivers.splice(di2,1)[0]:null, actualType=driver?driver.vehicleType:idealType;
         if (driver) usedDrivers.add(driver._i);
@@ -379,13 +480,34 @@ async function optimiseRoutes(rawPassengers, rawDrivers) {
         routeSeq.splice(bp,0,di);
       }
     });
-    const {estimatedKm,estimatedTime,estimatedFuel}=summariseRoute(routeSeq,matrix);
+    
+    const vType = a.vehicleType || 'van';
+    const {estimatedKm, estimatedTime, estimatedFuel, fuelCostPKR, fuelType, fuelRatePerKm} = summariseRoute(routeSeq, matrix, vType);
+    
     const stopMap={};
     a.passengers.forEach(p => { stopMap[pIdx(p._i)]={name:p.name||'Passenger',address:p.pickupAddress||p.pickupPoint||'Pickup',type:'pickup'}; stopMap[dIdx(p._i)]={name:p.name||'Passenger',address:p.dropAddress||p.destination||'Drop-off',type:'dropoff'}; });
-    const stops=routeSeq.filter(r=>stopMap[r]).map(r=>stopMap[r]);
-    const cap=VEHICLE_CAPS[a.vehicleType]||8, paxCount=a.passengers.length;
-    if (paxCount>cap) a.warnings.push(`⚠ ${paxCount} passengers exceed ${a.vehicleType} capacity (${cap})`);
-    return { driverId:a.driver?.id||null, driverName:a.driver?.name||`Needs ${(a.vehicleType||'van').toUpperCase()} Driver`, vehicleType:a.vehicleType, vehicleCapacity:cap, passengerCount:paxCount, passengers:a.passengers.map(({_i,pickupLoc,dropLoc,...rest})=>rest), stops, estimatedTime, estimatedFuel, estimatedKm, warnings:[...new Set(a.warnings)], isNewRoute:!a.driver, preferenceGroup:a.preferenceGroup||false, matrixSource:matrix.source };
+    const stops=routeSeq.filter(r=>stopMap[r]).map(r=>stopMap[r].address||stopMap[r].name||'Stop');
+    const cap=VEHICLE_CAPS_SRV[vType]||8, paxCount=a.passengers.length;
+    if (paxCount>cap) a.warnings.push(`⚠ ${paxCount} passengers exceed ${vType} capacity (${cap})`);
+    return {
+      driverId:a.driver?.id||null,
+      driverName:a.driver?.name||`Needs ${(vType).toUpperCase()} Driver`,
+      vehicleType:vType,
+      vehicleCapacity:cap,
+      passengerCount:paxCount,
+      passengers:a.passengers.map(({_i,pickupLoc,dropLoc,...rest})=>rest),
+      stops,
+      estimatedTime,
+      estimatedFuel,
+      estimatedKm,
+      fuelCostPKR,
+      fuelType,
+      fuelRatePerKm,
+      warnings:[...new Set(a.warnings)],
+      isNewRoute:!a.driver,
+      preferenceGroup:a.preferenceGroup||false,
+      matrixSource:matrix.source
+    };
   });
 }
 
@@ -421,12 +543,7 @@ app.post('/api/transporter/login', async (req, res) => {
 // ==================== DRIVER REGISTRATION ====================
 app.post('/api/driver-requests', async (req, res) => {
   try {
-    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    console.log("📥 DRIVER REQUEST");
-    console.log("📦 Body:", JSON.stringify(req.body, null, 2));
-
     const { fullName, email, phone, password, license, vehicleNo, vehicleType, vehicle, capacity, address, location, latitude, longitude, transporterId, transporterName } = req.body;
-
     const missing = [];
     if (!fullName) missing.push('fullName');
     if (!email)    missing.push('email');
@@ -435,10 +552,7 @@ app.post('/api/driver-requests', async (req, res) => {
     if (!license)  missing.push('license');
     if (!vehicleNo) missing.push('vehicleNo');
     if (!transporterId) missing.push('transporterId');
-    if (missing.length > 0) {
-      console.log("❌ Missing:", missing);
-      return res.status(400).json({ success:false, message:`Missing: ${missing.join(', ')}` });
-    }
+    if (missing.length > 0) return res.status(400).json({ success:false, message:`Missing: ${missing.join(', ')}` });
 
     const existingUser = await User.findOne({ email: email.toLowerCase() });
     if (existingUser) return res.status(400).json({ success:false, message:'Email already registered.' });
@@ -446,18 +560,14 @@ app.post('/api/driver-requests', async (req, res) => {
     if (existingReq) return res.status(400).json({ success:false, message:'Pending request already exists for this email.' });
 
     let transporterObjId;
-    try {
-      transporterObjId = new mongoose.Types.ObjectId(transporterId);
-    } catch {
-      return res.status(400).json({ success:false, message:'Invalid transporter ID format.' });
-    }
+    try { transporterObjId = new mongoose.Types.ObjectId(transporterId); }
+    catch { return res.status(400).json({ success:false, message:'Invalid transporter ID format.' }); }
     const transporter = await User.findById(transporterObjId);
     if (!transporter) return res.status(404).json({ success:false, message:'Transporter not found.' });
 
     const CAPS = { car:4, van:12, bus:30 };
     const resolvedVehicleType = vehicleType || vehicle || null;
     const resolvedCapacity = capacity ? Number(capacity) : (resolvedVehicleType ? (CAPS[resolvedVehicleType] || 4) : 4);
-
     let lat = latitude ? parseFloat(latitude) : null;
     let lng = longitude ? parseFloat(longitude) : null;
     if (!lat && location?.coordinates?.length === 2) { lng = location.coordinates[0]; lat = location.coordinates[1]; }
@@ -482,29 +592,10 @@ app.post('/api/driver-requests', async (req, res) => {
       status: 'pending',
       createdAt: new Date()
     });
-
     await newRequest.save();
-
-    console.log("✅ Driver request saved:", newRequest._id);
-    console.log("   Name:", fullName, "| Vehicle:", resolvedVehicleType, "(cap:", resolvedCapacity + ")");
-    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-
-    try {
-      await sendNotification(transporterObjId, 'transporter', 'New Driver Request 🚗', `${fullName} wants to join.\nVehicle: ${resolvedVehicleType||vehicleNo} | Capacity: ${resolvedCapacity}\nLicense: ${license}`, 'request', newRequest._id, 'driver_request', true, 'review_driver_request');
-    } catch (e) { console.error("⚠️ Notification failed:", e.message); }
-
-    return res.status(201).json({
-      success: true,
-      message: 'Driver request submitted! You will be notified once approved.',
-      requestId: newRequest._id,
-      request: { id:newRequest._id, name:newRequest.name, email:newRequest.email, vehicleType:newRequest.vehicleType, capacity:newRequest.capacity, status:newRequest.status, transporterName:newRequest.transporterName }
-    });
-
+    try { await sendNotification(transporterObjId, 'transporter', 'New Driver Request 🚗', `${fullName} wants to join.\nVehicle: ${resolvedVehicleType||vehicleNo} | Capacity: ${resolvedCapacity}\nLicense: ${license}`, 'request', newRequest._id, 'driver_request', true, 'review_driver_request'); } catch (e) {}
+    return res.status(201).json({ success: true, message: 'Driver request submitted! You will be notified once approved.', requestId: newRequest._id });
   } catch (err) {
-    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
-    console.error("❌ DRIVER REQUEST ERROR:", err.message);
-    console.error("Stack:", err.stack);
-    console.log("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━");
     return res.status(500).json({ success:false, message:'Failed to submit request.', error:err.message });
   }
 });
@@ -595,8 +686,7 @@ app.get('/api/polls/:pollId', authenticateToken, async (req, res) => {
   try {
     const poll = await Poll.findById(req.params.pollId);
     if (!poll) return res.status(404).json({ success:false, message:'Not found' });
-    if (new Date()>new Date(poll.closingDate)||poll.status!=='active') return res.status(400).json({ success:false, message:'Poll closed' });
-    res.json({ success:true, poll:{ _id:poll._id, title:poll.title, question:poll.question||'Will you travel tomorrow?', timeSlots:poll.timeSlots||[], closesAt:poll.closesAt, closingDate:poll.closingDate, status:poll.status, transporterId:poll.transporterId, responses:poll.responses||[], createdAt:poll.createdAt } });
+    res.json({ success:true, poll });
   } catch (err) { res.status(500).json({ success:false, message:'Error' }); }
 });
 
@@ -612,12 +702,17 @@ app.post('/api/polls/:pollId/respond', authenticateToken, async (req, res) => {
     if (idx!==-1) poll.responses[idx]=obj; else poll.responses.push(obj);
     await poll.save();
     if (poll.transporterId) await sendNotification(poll.transporterId,'transporter','Poll Response',`${user.name}: ${response==='yes'?'Will travel':'Will not travel'}`,'poll',poll._id,'poll',false);
-    res.json({ success:true, message:'Response recorded', poll:{ ...poll.toObject(), totalResponses:poll.responses.length, yesCount:poll.responses.filter(r=>r.response==='yes').length, noCount:poll.responses.filter(r=>r.response==='no').length } });
+    res.json({ success:true, message:'Response recorded' });
   } catch (err) { res.status(500).json({ success:false, message:'Error' }); }
 });
 
 app.put('/api/polls/:pollId/close', authenticateToken, async (req, res) => {
   try { const p=await Poll.findByIdAndUpdate(req.params.pollId,{status:'closed'},{new:true}); res.json({ success:true, poll:p }); }
+  catch (err) { res.status(500).json({ success:false }); }
+});
+
+app.delete('/api/polls/:pollId', authenticateToken, async (req, res) => {
+  try { await Poll.findByIdAndDelete(req.params.pollId); res.json({ success:true }); }
   catch (err) { res.status(500).json({ success:false }); }
 });
 
@@ -628,13 +723,6 @@ app.get('/api/polls/:pollId/responses', authenticateToken, async (req, res) => {
     const yes=poll.responses.filter(r=>r.response==='yes'), no=poll.responses.filter(r=>r.response==='no');
     res.json({ success:true, summary:{ total:poll.responses.length, yes:yes.length, no:no.length, yesResponses:yes, noResponses:no } });
   } catch (err) { res.status(500).json({ success:false }); }
-});
-
-app.get('/api/debug/check-transporter', authenticateToken, async (req, res) => {
-  try {
-    const user=await User.findById(req.userId), polls=await Poll.find({status:'active'});
-    res.json({ success:true, user:{id:user._id,name:user.name,email:user.email,role:user.role||user.type,transporterId:user.transporterId}, activePolls:polls.map(p=>({id:p._id,title:p.title,transporterId:p.transporterId,matches:user.transporterId&&user.transporterId.toString()===p.transporterId.toString()})) });
-  } catch (err) { res.status(500).json({ success:false, error:err.message }); }
 });
 
 // ==================== DRIVER AVAILABILITY ====================
@@ -664,81 +752,137 @@ app.get('/api/availability', authenticateToken, async (req, res) => {
   } catch (err) { res.status(500).json({ success:false }); }
 });
 
-app.get('/api/availability/drivers', authenticateToken, async (req, res) => {
-  try {
-    const { date, transporterId } = req.query;
-    const drivers = await DriverAvailability.find({ date:date?new Date(date):new Date(), status:'available', confirmed:true, transporterId:transporterId||req.userId }).populate('driverId');
-    res.json({ success:true, drivers });
-  } catch (err) { res.status(500).json({ success:false }); }
-});
-
 // ==================== ROUTES ====================
 app.post('/api/routes', authenticateToken, async (req, res) => {
   try {
-    const { name, stops, destination, transporterId } = req.body;
-    const r = new Route({ name, routeName:name, stops, destination, transporterId:transporterId||req.userId, status:'assigned' });
-    await r.save(); res.json({ success:true, route:r, data:r });
-  } catch (err) { res.status(500).json({ success:false }); }
+    const {
+      name, routeName, pollId,
+      startPoint, destination,
+      timeSlot, pickupTime, date,
+      passengers, stops,
+      estimatedTime, estimatedFuel, estimatedKm,
+      fuelCostPKR, fuelType, fuelRatePerKm,
+      vehicleType, status, transporterId
+    } = req.body;
+
+    const tid = transporterId || req.userId;
+
+    const stopStrings = (stops || []).map(s =>
+      typeof s === 'string' ? s : (s.address || s.name || 'Stop')
+    );
+
+    const passengerList = (passengers || []).map(p => ({
+      passengerId:   p.passengerId || p.id || p._id || null,
+      passengerName: p.passengerName || p.name || 'Passenger',
+      pickupPoint:   p.pickupPoint  || p.pickupAddress || startPoint || 'Pickup',
+      status:        p.status || 'pending',
+    }));
+
+    const r = new Route({
+      name:          routeName || name || 'Route',
+      routeName:     routeName || name || 'Route',
+      pollId:        pollId || null,
+      assignedDriver: null,
+      driverName:    null,
+      stops:         stopStrings,
+      startPoint:    startPoint || stopStrings[0] || 'Multiple Pickup Points',
+      destination:   destination || 'Riphah International University',
+      timeSlot,
+      pickupTime,
+      date:          date ? new Date(date) : new Date(Date.now() + 86400000),
+      passengers:    passengerList,
+      estimatedTime,
+      estimatedFuel,
+      estimatedKm,
+      fuelCostPKR:   fuelCostPKR || null,
+      fuelType:      fuelType || 'petrol',
+      fuelRatePerKm: fuelRatePerKm || null,
+      vehicleType:   vehicleType || 'van',
+      status:        status || 'unassigned',
+      transporterId: tid,
+    });
+
+    await r.save();
+    console.log(`✅ Route saved: "${r.routeName}" | Fuel: ${fuelCostPKR} | Vehicle: ${vehicleType}`);
+    res.status(201).json({ success: true, route: r, data: r, _id: r._id });
+  } catch (err) {
+    console.error('❌ Route save error:', err.message);
+    res.status(500).json({ success: false, message: 'Failed to save route', error: err.message });
+  }
 });
 
-// ==================== ROUTES ====================
 app.get('/api/routes', authenticateToken, async (req, res) => {
   try {
     let query = {};
-    
     if (req.query.assignedDriver) {
-      // ✅ FIXED: 'new' keyword zaroori hai
       let driverObjId;
-      try {
-        driverObjId = new mongoose.Types.ObjectId(req.query.assignedDriver);
-      } catch (e) {
-        console.log('⚠️ Invalid ObjectId, using string fallback');
-        driverObjId = req.query.assignedDriver;
-      }
-
-      query.$or = [
-        { assignedDriver: driverObjId },
-        { assignedDriver: req.query.assignedDriver }
-      ];
-      
-      console.log('📌 Driver-specific query:', JSON.stringify(query));
+      try { driverObjId = new mongoose.Types.ObjectId(req.query.assignedDriver); } catch { driverObjId = req.query.assignedDriver; }
+      query.$or = [{ assignedDriver: driverObjId }, { assignedDriver: req.query.assignedDriver }];
     } else {
-      // Transporter ke liye
       query.transporterId = req.query.transporterId || req.userId;
-      console.log('📌 Transporter query:', JSON.stringify(query));
     }
-    
     const routes = await Route.find(query)
       .populate('assignedDriver', 'name vehicleType vehicleNo phone')
       .populate('passengers.passengerId', 'name phone pickupPoint')
       .sort({ createdAt: -1 });
-    
-    console.log(`✅ ${routes.length} routes found for ${req.query.assignedDriver ? 'DRIVER' : 'TRANSPORTER'}`);
-    
-    res.json({ 
-      success: true, 
-      routes, 
-      data: routes,
-      count: routes.length 
-    });
-  } catch (err) { 
-    console.error('❌ Routes fetch error:', err.message);
-    res.status(500).json({ 
-      success: false, 
-      message: 'Failed to fetch routes',
-      error: err.message 
-    }); 
+    res.json({ success: true, routes, data: routes, count: routes.length });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Failed to fetch routes', error: err.message });
   }
 });
 
-app.get('/api/debug/all-routes', authenticateToken, async (req, res) => {
+app.put('/api/routes/:routeId/assign-driver', authenticateToken, async (req, res) => {
   try {
-    const routes = await Route.find({})
-      .populate('assignedDriver')
-      .populate('passengers.passengerId');
-    res.json({ success: true, routes });
+    const { driverId, assignedDriver } = req.body;
+    const dId = driverId || assignedDriver;
+    if (!dId) return res.status(400).json({ success: false, message: 'driverId is required' });
+
+    const driver = await User.findById(dId);
+    if (!driver) return res.status(404).json({ success: false, message: 'Driver not found' });
+
+    const route = await Route.findByIdAndUpdate(
+      req.params.routeId,
+      { assignedDriver: dId, driverName: driver.name, status: 'assigned' },
+      { new: true }
+    );
+    if (!route) return res.status(404).json({ success: false, message: 'Route not found' });
+
+    let trip = await Trip.findOne({ routeId: route._id });
+    if (!trip) {
+      trip = new Trip({
+        driverId:        dId,
+        driverName:      driver.name,
+        routeId:         route._id,
+        routeName:       route.routeName || route.name,
+        status:          'Scheduled',
+        currentStop:     route.startPoint,
+        currentLocation: { latitude: 33.6844, longitude: 73.0479 },
+        passengers:      (route.passengers || []).map(p => ({
+          _id:            p.passengerId,
+          name:           p.passengerName,
+          pickupPoint:    p.pickupPoint,
+          status:         'pending',
+          confirmedMorning: false,
+        })),
+        stops:         route.stops || [],
+        completedStops: [],
+        timeSlot:      route.timeSlot,
+        capacity:      driver.capacity || 8,
+        vehicleType:   driver.vehicleType || driver.vehicle || route.vehicleType || 'van',
+        vehicleNumber: driver.vehicleNo || driver.van || 'N/A',
+        transporterId: route.transporterId,
+      });
+    } else {
+      trip.driverId   = dId;
+      trip.driverName = driver.name;
+      trip.status     = 'Scheduled';
+    }
+    await trip.save();
+
+    try { await sendNotification(dId, 'driver', 'Route Assigned! 🚐', `${route.routeName || route.name} — ${(route.passengers||[]).length} passengers`, 'route', route._id, 'route', true, 'confirm_route'); } catch {}
+    res.json({ success: true, route, trip, message: `${driver.name} assigned successfully` });
   } catch (err) {
-    res.status(500).json({ success: false, error: err.message });
+    res.status(500).json({ success: false, message: 'Failed to assign driver', error: err.message });
   }
 });
 
@@ -752,16 +896,13 @@ app.post('/api/routes/assign', authenticateToken, async (req, res) => {
     const driver = await User.findById(driverId);
     if (!driver) return res.status(404).json({ success:false, message:'Driver not found' });
     const passengers = yesR.map(r=>({ passengerId:r.passengerId, passengerName:r.passengerName, pickupPoint:r.pickupPoint, status:'pending' }));
-    const stops = [...new Set(passengers.map(p=>p.pickupPoint))];
-    const rDate = new Date(date);
-    const newRoute = new Route({ name:routeName, routeName, stops, startPoint, destination, assignedDriver:driverId, driverName:driver.name, timeSlot, pickupTime, passengers, status:'assigned', transporterId:driver.transporterId, date:rDate });
+    const stops = [...new Set(passengers.map(p=>p.pickupPoint).filter(Boolean))];
+    const newRoute = new Route({ name:routeName, routeName, stops, startPoint, destination, assignedDriver:driverId, driverName:driver.name, timeSlot, pickupTime, passengers, status:'assigned', transporterId:driver.transporterId, date:new Date(date) });
     await newRoute.save();
     const newTrip = new Trip({ driverId, driverName:driver.name, routeId:newRoute._id, routeName, status:'Scheduled', currentStop:startPoint, currentLocation:{latitude:33.6844,longitude:73.0479}, passengers:passengers.map(p=>({_id:p.passengerId,name:p.passengerName,pickupPoint:p.pickupPoint,status:'pending',confirmedMorning:false})), stops, completedStops:[], timeSlot, capacity:driver.capacity||8, vehicleType:driver.vehicleType||driver.vehicle||'Van', vehicleNumber:driver.van||driver.vehicleNo||'N/A', transporterId:driver.transporterId });
     await newTrip.save();
     try { await sendNotification(driverId,'driver','Route Assigned! 🚐',`${routeName} with ${passengers.length} passengers`,'route',newRoute._id,'route',true,'confirm_route'); } catch {}
-    let sent=0;
-    for (const p of passengers) { try { await sendNotification(p.passengerId,'passenger','Route Confirmed! ✓',`Driver: ${driver.name}, Pickup: ${pickupTime}`,'route',newRoute._id,'route',false); sent++; } catch {} }
-    res.json({ success:true, route:newRoute, trip:newTrip, message:`Assigned! ${sent} notified.`, notificationsSent:sent });
+    res.json({ success:true, route:newRoute, trip:newTrip });
   } catch (err) { res.status(500).json({ success:false, message:'Error', error:err.message }); }
 });
 
@@ -778,7 +919,7 @@ app.get('/api/trips', authenticateToken, async (req, res) => {
     const { status, transporterId } = req.query;
     let q = { transporterId:transporterId||req.userId };
     if (status) q.status=status;
-    const trips = await Trip.find(q).populate('driverId').populate('routeId').populate('passengers._id').sort({createdAt:-1});
+    const trips = await Trip.find(q).populate('driverId').populate('routeId').sort({createdAt:-1});
     res.json({ success:true, trips, data:trips });
   } catch { res.status(500).json({ success:false }); }
 });
@@ -787,10 +928,9 @@ app.post('/api/routes/:routeId/start', authenticateToken, async (req, res) => {
   try {
     const route = await Route.findById(req.params.routeId);
     if (!route) return res.status(404).json({ success:false });
-    if (route.assignedDriver.toString()!==req.userId.toString()) return res.status(403).json({ success:false });
     route.status='started'; await route.save();
     const trip = await Trip.findOne({ routeId:route._id });
-    if (trip) { trip.status='En Route'; trip.startTime=new Date(); await trip.save(); for (const p of trip.passengers) await sendNotification(p._id,'passenger','Van Started',`ETA: ${trip.eta||'15 mins'}`,'alert',trip._id,'trip',false); }
+    if (trip) { trip.status='En Route'; trip.startTime=new Date(); await trip.save(); }
     res.json({ success:true, route, trip });
   } catch { res.status(500).json({ success:false }); }
 });
@@ -799,66 +939,10 @@ app.post('/api/routes/:routeId/end', authenticateToken, async (req, res) => {
   try {
     const route = await Route.findById(req.params.routeId);
     if (!route) return res.status(404).json({ success:false });
-    if (route.assignedDriver.toString()!==req.userId.toString()) return res.status(403).json({ success:false });
     route.status='completed'; await route.save();
     const trip = await Trip.findOne({ routeId:route._id });
-    if (trip) { trip.status='Completed'; trip.endTime=new Date(); await trip.save(); for (const p of trip.passengers) if (p.status==='completed') await sendNotification(p._id,'passenger','Trip Done','Rate your experience','feedback',trip._id,'trip',true,'give_feedback'); }
+    if (trip) { trip.status='Completed'; trip.endTime=new Date(); await trip.save(); }
     res.json({ success:true, route, trip });
-  } catch { res.status(500).json({ success:false }); }
-});
-
-app.post('/api/trips/:tripId/send-morning-confirmation', authenticateToken, async (req, res) => {
-  try {
-    const trip = await Trip.findById(req.params.tripId).populate('driverId').populate('passengers._id');
-    if (!trip) return res.status(404).json({ success:false });
-    await sendNotification(trip.driverId._id,'driver','Morning Confirmation','Please confirm ready','confirmation',trip._id,'trip',true,'confirm_trip');
-    for (const p of trip.passengers) await sendNotification(p._id,'passenger','Final Confirmation','Still traveling today?','confirmation',trip._id,'trip',true,'confirm_trip');
-    res.json({ success:true, notificationsSent:trip.passengers.length+1 });
-  } catch { res.status(500).json({ success:false }); }
-});
-
-app.post('/api/trips/:tripId/confirm-passenger', authenticateToken, async (req, res) => {
-  try {
-    const { traveling } = req.body;
-    const trip = await Trip.findById(req.params.tripId);
-    if (!trip) return res.status(404).json({ success:false });
-    const p = trip.passengers.find(p=>p._id.toString()===req.userId.toString());
-    if (!p) return res.status(404).json({ success:false });
-    p.confirmedMorning=true; if (!traveling) p.status='missed';
-    await trip.save();
-    const user = await User.findById(req.userId);
-    await sendNotification(trip.driverId,'driver','Passenger Update',`${user.name} ${traveling?'confirmed traveling':'not traveling'}`,'alert',trip._id,'trip',false);
-    res.json({ success:true });
-  } catch { res.status(500).json({ success:false }); }
-});
-
-app.post('/api/trips/:tripId/confirm-driver', authenticateToken, async (req, res) => {
-  try {
-    const trip = await Trip.findById(req.params.tripId);
-    if (!trip||trip.driverId.toString()!==req.userId.toString()) return res.status(403).json({ success:false });
-    trip.status='Ready'; await trip.save();
-    res.json({ success:true });
-  } catch { res.status(500).json({ success:false }); }
-});
-
-app.put('/api/routes/:routeId/stops/:stopId/status', authenticateToken, async (req, res) => {
-  try {
-    const { status } = req.body;
-    const route = await Route.findById(req.params.routeId);
-    if (!route) return res.status(404).json({ success:false });
-    const rp = route.passengers.find(p=>p._id.toString()===req.params.stopId);
-    if (rp) { rp.status=status; await route.save(); }
-    const trip = await Trip.findOne({ routeId:route._id });
-    if (trip) {
-      const tp = trip.passengers.find(p=>p._id.toString()===req.params.stopId);
-      if (tp) {
-        tp.status=status;
-        if (status==='picked-up') { tp.pickupTime=new Date().toLocaleTimeString(); await sendNotification(tp._id,'passenger','Picked Up','You are on board!','alert',trip._id,'trip',false); }
-        else if (status==='completed') await sendNotification(tp._id,'passenger','Arrived','Thank you!','alert',trip._id,'trip',false);
-        await trip.save();
-      }
-    }
-    res.json({ success:true, stop:rp, trip });
   } catch { res.status(500).json({ success:false }); }
 });
 
@@ -885,6 +969,175 @@ app.get('/api/vans/locations', (req, res) => {
   vans = vans.map(v=>({...v,currentLocation:{latitude:v.currentLocation.latitude+(Math.random()-0.5)*0.001,longitude:v.currentLocation.longitude+(Math.random()-0.5)*0.001}}));
   res.json(vans);
 });
+// ─── MAIN OPTIMIZE ENDPOINT ───────────────────────────────────────────────────
+app.post('/api/optimize', async (req, res) => {
+  try {
+    const { passengers: rawPassengers, destination } = req.body;
+    if (!rawPassengers?.length) return res.json({ routes: [], message: 'No passengers provided' });
+
+    const DEST = {
+      lat:     parseFloat(destination?.lat  || 33.6135),
+      lng:     parseFloat(destination?.lng  || 73.1998),
+      address: destination?.address || 'Riphah International University, Gulberg Greens, Islamabad',
+    };
+
+    // Step 1: Normalize + reverse geocode locations
+    const passengers = await batchReverseGeocode(
+      rawPassengers.map((p, i) => ({
+        id:                p.id || p._id || `p_${i}`,
+        name:              p.name || `Passenger ${i + 1}`,
+        pickupLat:         parseFloat(p.pickupLat || p.latitude || 0),
+        pickupLng:         parseFloat(p.pickupLng || p.longitude || 0),
+        pickupAddress:     p.pickupAddress || p.address || '',
+        vehiclePreference: p.vehiclePreference || null,
+        timeSlot:          p.timeSlot || null,
+      }))
+    );
+
+    const valid   = passengers.filter(p => p.pickupLat !== 0 && p.pickupLng !== 0);
+    const invalid = passengers.filter(p => p.pickupLat === 0 && p.pickupLng === 0);
+
+    // Step 2: Group by vehicle preference
+    const groups = [
+      { passengers: valid.filter(p => p.vehiclePreference === 'car'), forced: 'car' },
+      { passengers: valid.filter(p => p.vehiclePreference === 'van'), forced: 'van' },
+      { passengers: valid.filter(p => p.vehiclePreference === 'bus'), forced: 'bus' },
+      { passengers: valid.filter(p => !p.vehiclePreference),          forced: null  },
+    ].filter(g => g.passengers.length > 0);
+
+    const allRouteGroups = [];
+    const depot = DEST;
+
+    for (const group of groups) {
+      const maxCap = group.forced ? VEHICLE_CAPS[group.forced] : VEHICLE_CAPS.bus;
+      const savedRoutes = clarkWrightSavings(group.passengers, depot, maxCap);
+
+      // Split oversized routes
+      for (let i = savedRoutes.length - 1; i >= 0; i--) {
+        const route = savedRoutes[i];
+        const cap   = group.forced ? VEHICLE_CAPS[group.forced] : VEHICLE_CAPS[
+          route.length <= 4 ? 'car' : route.length <= 12 ? 'van' : 'bus'
+        ];
+        if (route.length > cap) {
+          const chunks = [];
+          for (let j = 0; j < route.length; j += cap) chunks.push(route.slice(j, j + cap));
+          savedRoutes.splice(i, 1, ...chunks);
+        }
+      }
+      savedRoutes.forEach(r => allRouteGroups.push({ passengers: r, forced: group.forced }));
+    }
+
+    if (invalid.length) {
+      for (let i = 0; i < invalid.length; i += VEHICLE_CAPS.van)
+        allRouteGroups.push({
+          passengers: invalid.slice(i, i + VEHICLE_CAPS.van),
+          forced: null,
+          warning: 'No GPS coordinates — manual pickup required',
+        });
+    }
+
+    // Step 3: Build route objects with distances
+    const routeResults = await Promise.all(
+      allRouteGroups.map(async ({ passengers: paxList, forced, warning }, idx) => {
+        const vType = forced || (paxList.length <= 4 ? 'car' : paxList.length <= 12 ? 'van' : 'bus');
+        const cap   = VEHICLE_CAPS[vType];
+        const sorted = nearestNeighborSort(paxList);
+        const waypoints = sorted.map(p => ({ lat: p.pickupLat, lng: p.pickupLng }));
+
+        // Try OSRM for real road distance
+        let distanceKm = 0, durationMins = 0, matrixSource = 'haversine';
+        const osrmResult = await getOSRMRoute(waypoints, DEST);
+        if (osrmResult && osrmResult.distanceKm > 0 && osrmResult.distanceKm < 300) {
+          const minKm  = PK_FUEL.minRouteKm[vType] || 12;
+          distanceKm   = Math.max(osrmResult.distanceKm, minKm);
+          durationMins = osrmResult.durationMins;
+          matrixSource = 'osrm';
+        } else {
+          // Haversine fallback with Pakistan road factor
+          let straight = 0;
+          for (let i = 0; i < waypoints.length - 1; i++)
+            straight += haversineKm(waypoints[i].lat, waypoints[i].lng, waypoints[i+1].lat, waypoints[i+1].lng);
+          if (waypoints.length)
+            straight += haversineKm(waypoints[waypoints.length - 1].lat, waypoints[waypoints.length - 1].lng, DEST.lat, DEST.lng);
+          const roadKm     = straight * (PK_FUEL.roadFactor[vType] || 1.32);
+          distanceKm       = Math.max(roadKm, PK_FUEL.minRouteKm[vType] || 12);
+          durationMins     = Math.max(10, Math.round((distanceKm / (PK_FUEL.avgSpeedKmh[vType] || 23)) * 60));
+        }
+
+        const { fuelLitres, fuelCostPKR, fuelType, consumption } = calculateFuel(distanceKm, vType);
+        const score = optimizationScore(distanceKm, durationMins, fuelLitres, paxList.length);
+
+        const warnings = [];
+        if (warning) warnings.push(warning);
+        if (paxList.length > cap) warnings.push(`Exceeds ${vType} capacity (${paxList.length}/${cap})`);
+        if (matrixSource === 'haversine') warnings.push('Estimated distance — OSRM unavailable');
+
+        const stops = [
+          ...sorted.map(p => ({
+            name:    p.name,
+            address: p.pickupAddress,
+            lat:     p.pickupLat,
+            lng:     p.pickupLng,
+            type:    'pickup',
+          })),
+          { name: 'Destination', address: DEST.address, lat: DEST.lat, lng: DEST.lng, type: 'dropoff' },
+        ];
+
+        return {
+          id:                `route_${idx + 1}`,
+          vehicleType:       vType,
+          passengerCount:    paxList.length,
+          capacity:          cap,
+          passengers:        paxList,
+          stops,
+          estimatedKm:       `${distanceKm.toFixed(1)} km`,
+          estimatedTime:     durationMins < 60 ? `${durationMins} min` : `${Math.floor(durationMins / 60)}h ${durationMins % 60}m`,
+          estimatedFuel:     `${fuelLitres.toFixed(1)} L`,
+          fuelCostPKR:       `Rs. ${fuelCostPKR.toLocaleString()}`,
+          fuelType,
+          consumption:       `${consumption} L/100km`,
+          rawDistanceKm:     parseFloat(distanceKm.toFixed(2)),
+          rawDurationMins:   durationMins,
+          rawFuelLitres:     fuelLitres,
+          rawFuelCostPKR:    fuelCostPKR,
+          matrixSource,
+          optimizationScore: score,
+          warnings,
+          destination:       DEST.address,
+        };
+      })
+    );
+
+    routeResults.sort((a, b) => b.optimizationScore - a.optimizationScore);
+
+    const totalFuelCost  = routeResults.reduce((s, r) => s + r.rawFuelCostPKR, 0);
+    const totalPassengers = routeResults.reduce((s, r) => s + r.passengerCount, 0);
+    const avgScore        = Math.round(routeResults.reduce((s, r) => s + r.optimizationScore, 0) / (routeResults.length || 1));
+
+    res.json({
+      routes:         routeResults,
+      summary: {
+        totalRoutes:    routeResults.length,
+        totalPassengers,
+        totalFuelCost:  `Rs. ${totalFuelCost.toLocaleString()}`,
+        avgScore,
+        destination:    DEST.address,
+      },
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ─── REVERSE GEOCODE ENDPOINT (single point) ──────────────────────────────────
+app.get('/api/geocode', async (req, res) => {
+  const { lat, lng } = req.query;
+  if (!lat || !lng) return res.status(400).json({ error: 'lat and lng required' });
+  const address = await reverseGeocode(lat, lng);
+  res.json({ lat: parseFloat(lat), lng: parseFloat(lng), address });
+});
+
 
 // ==================== SMART ROUTES ====================
 app.post('/api/smart-routes/optimize', async (req, res) => {
@@ -892,8 +1145,18 @@ app.post('/api/smart-routes/optimize', async (req, res) => {
     const { passengers, drivers, pollId } = req.body;
     if (!Array.isArray(passengers)||!passengers.length) return res.status(400).json({ success:false, error:'No passengers' });
     const results = await optimiseRoutes(passengers, drivers||[]);
-    res.json({ success:true, pollId, routes:results, count:results.length, message:`${results.length} route(s) optimized` });
+    res.json({ success:true, pollId, routes:results, count:results.length });
   } catch (err) { res.status(500).json({ success:false, error:'Optimization failed', details:err.message }); }
+});
+
+// ==================== Pakistan Fuel Info API ====================
+app.get('/api/fuel-rates', (req, res) => {
+  res.json({
+    success: true,
+    rates: PAKISTAN_FUEL,
+    note: 'Pakistan current fuel rates - updated periodically',
+    lastUpdated: '2024-12'
+  });
 });
 
 // ==================== COMPLAINTS ====================
@@ -910,7 +1173,7 @@ app.post('/api/complaints', authenticateToken, async (req, res) => {
 
 app.get('/api/complaints', authenticateToken, async (req, res) => {
   try {
-    const c = await Complaint.find({ transporterId:req.query.transporterId||req.userId }).populate('byUserId').populate('againstUserId').populate('tripId').sort({createdAt:-1});
+    const c = await Complaint.find({ transporterId:req.query.transporterId||req.userId }).populate('byUserId').populate('againstUserId').sort({createdAt:-1});
     res.json({ success:true, complaints:c, data:c });
   } catch { res.status(500).json({ success:false }); }
 });
@@ -945,7 +1208,6 @@ app.post('/api/feedback', authenticateToken, async (req, res) => {
     const passengerName = role==='passenger'?user.name:(await User.findById(passengerId))?.name;
     const fb = new Feedback({ tripId, driverId, driverName, passengerId, passengerName, givenBy:role, rating, comment, categories, transporterId:user.transporterId });
     await fb.save(); await Trip.findByIdAndUpdate(tripId,{rating});
-    await sendNotification(role==='passenger'?driverId:passengerId,role==='passenger'?'driver':'passenger','Feedback',`${rating} stars`,'feedback',fb._id,'feedback',false);
     res.json({ success:true, feedback:fb });
   } catch { res.status(500).json({ success:false }); }
 });
@@ -955,17 +1217,8 @@ app.get('/api/feedback', authenticateToken, async (req, res) => {
     const { driverId, passengerId, tripId } = req.query;
     const q={};
     if (driverId) q.driverId=driverId; if (passengerId) q.passengerId=passengerId; if (tripId) q.tripId=tripId;
-    const fb = await Feedback.find(q).populate('driverId').populate('passengerId').populate('tripId').sort({createdAt:-1});
+    const fb = await Feedback.find(q).sort({createdAt:-1});
     res.json({ success:true, feedback:fb, data:fb });
-  } catch { res.status(500).json({ success:false }); }
-});
-
-app.get('/api/feedback/driver/:driverId/summary', async (req, res) => {
-  try {
-    const fb = await Feedback.find({ driverId:req.params.driverId });
-    if (!fb.length) return res.json({ success:true, summary:{ averageRating:0, totalFeedback:0, ratings:{5:0,4:0,3:0,2:0,1:0} } });
-    const avg = (fb.reduce((s,f)=>s+f.rating,0)/fb.length).toFixed(1);
-    res.json({ success:true, summary:{ averageRating:parseFloat(avg), totalFeedback:fb.length, ratings:{5:fb.filter(f=>f.rating===5).length,4:fb.filter(f=>f.rating===4).length,3:fb.filter(f=>f.rating===3).length,2:fb.filter(f=>f.rating===2).length,1:fb.filter(f=>f.rating===1).length} } });
   } catch { res.status(500).json({ success:false }); }
 });
 
@@ -1024,50 +1277,31 @@ app.post('/api/passenger/request', async (req, res) => {
   } catch (err) { res.status(500).json({ success:false, message:'Failed', error:err.message }); }
 });
 
-app.get('/api/passenger/request-status/:id', async (req, res) => {
-  try {
-    const r = await JoinRequest.findById(req.params.id);
-    if (!r) return res.json({ success:false, message:'Not found' });
-    res.json({ success:true, status:r.status, approved:r.status==='accepted', rejected:r.status==='rejected' });
-  } catch { res.status(500).json({ success:false }); }
-});
-
 // ==================== JOIN REQUESTS ====================
 app.get('/api/join-requests', authenticateToken, async (req, res) => {
   try {
     const { type, transporterId } = req.query;
     const rawId = transporterId || req.userId;
-
     let tidObjectId;
-    try {
-      tidObjectId = new mongoose.Types.ObjectId(rawId);
-    } catch (castErr) {
-      return res.status(400).json({ success: false, message: 'Invalid transporterId format' });
-    }
-
+    try { tidObjectId = new mongoose.Types.ObjectId(rawId); }
+    catch { return res.status(400).json({ success: false, message: 'Invalid transporterId format' }); }
     let f = { transporterId: tidObjectId, status: 'pending' };
     if (type) f.type = type;
-
-    const r = await JoinRequest.find(f).populate('transporterId').sort({ createdAt: -1 });
+    const r = await JoinRequest.find(f).sort({ createdAt: -1 });
     res.json({ success: true, requests: r, data: r, count: r.length });
   } catch (err) {
-    console.error('join-requests error:', err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
-// ==================== ACCEPT REQUEST ====================
 app.put('/api/join-requests/:requestId/accept', authenticateToken, async (req, res) => {
   try {
     const request = await JoinRequest.findById(req.params.requestId);
     if (!request||request.status!=='pending') return res.status(400).json({ success:false, message:'Invalid or already processed' });
-
     request.status='accepted'; await request.save();
-
     const CAPS = { car:4, van:12, bus:30 };
     const vType = request.vehicleType || null;
     const cap = request.capacity ? Number(request.capacity) : (vType ? (CAPS[vType]||8) : 8);
-
     const newUser = new User({
       name:                  request.name||request.fullName||'Unknown',
       email:                 request.email,
@@ -1096,28 +1330,19 @@ app.put('/api/join-requests/:requestId/accept', authenticateToken, async (req, r
       registrationDate:      new Date()
     });
     await newUser.save();
-
-    console.log(`✅ Accepted: ${newUser.name} | Role: ${newUser.role} | VehicleType: ${newUser.vehicleType} | Capacity: ${newUser.capacity}`);
-
     await sendNotification(newUser._id, newUser.role, 'Request Approved! 🎉', 'You can now login.', 'confirmation', null, null, false);
-
-    res.json({ success:true, message:'Accepted', user:{ id:newUser._id, _id:newUser._id, name:newUser.name, email:newUser.email, role:newUser.role, vehicleType:newUser.vehicleType, capacity:newUser.capacity, status:newUser.status, transporterId:newUser.transporterId } });
-  } catch (err) { console.error('Accept error:', err.message); res.status(500).json({ success:false, message:'Error', error:err.message }); }
+    res.json({ success:true, message:'Accepted', user:{ id:newUser._id, name:newUser.name, email:newUser.email, role:newUser.role, vehicleType:newUser.vehicleType, capacity:newUser.capacity, status:newUser.status } });
+  } catch (err) { res.status(500).json({ success:false, message:'Error', error:err.message }); }
 });
 
-// ==================== REJECT REQUEST ====================
 app.put('/api/join-requests/:requestId/reject', authenticateToken, async (req, res) => {
   try {
     const request = await JoinRequest.findById(req.params.requestId);
-    if (!request || request.status !== 'pending') {
-      return res.status(400).json({ success: false, message: 'Invalid or already processed' });
-    }
+    if (!request || request.status !== 'pending') return res.status(400).json({ success: false, message: 'Invalid or already processed' });
     request.status = 'rejected';
     await request.save();
-    console.log(`❌ Rejected: ${request.name} | Type: ${request.type}`);
     res.json({ success: true, message: 'Request rejected', requestId: request._id });
   } catch (err) {
-    console.error('Reject error:', err.message);
     res.status(500).json({ success: false, message: 'Error', error: err.message });
   }
 });
@@ -1145,25 +1370,39 @@ app.post('/api/transporter/register', upload.single('profileImage'), async (req,
     if (await User.findOne({ email:email.toLowerCase() })) { if (req.file) fs.unlinkSync(req.file.path); return res.status(400).json({ success:false, message:'Email registered' }); }
     const t = new User({ name:fullName, email:email.toLowerCase(), password, role:'transporter', type:'transporter', phone, company:companyName, license:`TRANS${Date.now()}`, address:`${zone}, ${city}, ${country}`, country, city, zone, profileImage:req.file?`/uploads/${req.file.filename}`:null, status:'active', registrationDate:new Date() });
     await t.save();
-    res.status(201).json({ success:true, message:'Registration successful! You can now login.', transporter:{ id:t._id, name:t.name, email:t.email, phone:t.phone, company:t.company, profileImage:t.profileImage, country:t.country, city:t.city, zone:t.zone } });
+    res.status(201).json({ success:true, message:'Registration successful!', transporter:{ id:t._id, name:t.name, email:t.email } });
   } catch (err) { if (req.file) fs.unlink(req.file.path,()=>{}); res.status(500).json({ success:false, message:'Registration failed.', error:err.message }); }
 });
 
 // ==================== HEALTH CHECK ====================
 app.get('/api/health', (req, res) => {
-  res.json({ success:true, message:'Server Working ✅', timestamp:new Date().toISOString(), fixes:['vehiclePreference enum null fix ✅','capacity saved correctly ✅','vehicleType saved correctly ✅','join-requests ObjectId cast fix ✅','reject endpoint added ✅'] });
+  res.json({
+    success: true,
+    message: 'Server Working ✅',
+    timestamp: new Date().toISOString(),
+    pakistanFuelRates: {
+      petrol: `Rs. ${PAKISTAN_FUEL.pricePerLitre.petrol}/L`,
+      diesel: `Rs. ${PAKISTAN_FUEL.pricePerLitre.diesel}/L`,
+      consumption: {
+        car: `${PAKISTAN_FUEL.consumption.car} L/100km (petrol)`,
+        van: `${PAKISTAN_FUEL.consumption.van} L/100km (diesel)`,
+        bus: `${PAKISTAN_FUEL.consumption.bus} L/100km (diesel)`,
+      }
+    }
+  });
 });
 
 // ==================== START ====================
 app.listen(PORT, '0.0.0.0', () => {
   console.log(`
-╔══════════════════════════════════════╗
-║  🚀 SERVER RUNNING on port ${PORT}     ║
-║  📡 IP: 192.168.18.9                 ║
-║  ✅ vehiclePreference enum FIXED     ║
-║  ✅ capacity & vehicleType SAVED     ║
-║  ✅ join-requests ObjectId FIXED     ║
-║  ✅ reject endpoint ADDED            ║
-╚══════════════════════════════════════╝
+╔══════════════════════════════════════════════════════╗
+║  🚀 SERVER RUNNING on port ${PORT}                     ║
+║  📡 IP: 10.128.159.15                                ║
+║  ⛽ Pakistan Fuel Rates Active:                       ║
+║     Car (Petrol): 10L/100km @ Rs.278/L               ║
+║     Van (Diesel): 14L/100km @ Rs.283/L               ║
+║     Bus (Diesel): 28L/100km @ Rs.283/L               ║
+║  ✅ Road factor applied (30% for Pakistan roads)      ║
+╚══════════════════════════════════════════════════════╝
   `);
 });

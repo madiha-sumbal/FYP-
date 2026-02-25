@@ -3,7 +3,7 @@ import {
   View, Text, ScrollView, TouchableOpacity, TextInput,
   StyleSheet, SafeAreaView, Alert, RefreshControl,
   Animated, Dimensions, ActivityIndicator, Modal,
-  Platform, Image,
+  StatusBar, Image,
 } from 'react-native';
 import MapView, { Marker, PROVIDER_GOOGLE } from 'react-native-maps';
 import Icon from 'react-native-vector-icons/MaterialIcons';
@@ -12,52 +12,523 @@ import { useNavigation } from '@react-navigation/native';
 
 const { width } = Dimensions.get('window');
 
-// ─── COLOUR PALETTE — 2 colors only: #A1D826 + White, text = black ────────────
+// ─── COLOUR PALETTE ───────────────────────────────────────────────────────────
 const C = {
-  primary:      '#A1D826',   // brand green
-  primaryDark:  '#8BBF1E',   // darker green for depth
-  primaryLight: '#B8E040',   // lighter green accent
-  primaryPale:  '#EAF5C2',   // very light green tint
-  primaryGhost: '#F4FAE3',   // ghost green bg
+  primary:      '#B8E040',
+  primaryDark:  '#8BBF1E',
+  primaryLight: '#D4EC80',
+  primaryPale:  '#EAF5C2',
+  primaryGhost: '#F5FAE8',
   white:        '#FFFFFF',
-  offWhite:     '#FAFAFA',
-  textDark:     '#111111',   // near-black
-  textMid:      '#333333',   // dark grey
-  textLight:    '#666666',   // medium grey
-  border:       '#D6EE8A',   // light green border
-  divider:      '#EBF5C4',   // very light green divider
-  error:        '#CC3300',   // red (minimal use)
-  warning:      '#996600',   // dark yellow (minimal use)
+  offWhite:     '#F8F9FA',
+  black:        '#000000',
+  textDark:     '#0A0A0A',
+  textMid:      '#3A3A3A',
+  textLight:    '#6B6B6B',
+  border:       '#D4EC80',
+  divider:      '#EDF5C8',
+  headerBg:     '#8BBF1E',
+  headerText:   '#FFFFFF',
+  error:        '#DC2626',
+  errorLight:   '#FEE2E2',
+  warning:      '#D97706',
+  warningLight: '#FEF3C7',
+  success:      '#16A34A',
+  successLight: '#DCFCE7',
 };
 
 // ─── CONSTANTS ────────────────────────────────────────────────────────────────
-const VEHICLE_CAPS   = { car: 4, van: 12, bus: 30 };
-const VEHICLE_INFO   = {
-  car: { icon: '🚗', label: 'Car',  desc: 'Sedan / Hatchback', capacity: 4  },
-  van: { icon: '🚐', label: 'Van',  desc: 'Minibus / Van',     capacity: 12 },
-  bus: { icon: '🚌', label: 'Bus',  desc: 'Large Bus / Coach', capacity: 30 },
+const VEHICLE_CAPS = { car: 4, van: 12, bus: 30 };
+const VEHICLE_INFO = {
+  car: { icon: '🚗', label: 'Car',  desc: 'Suzuki/Toyota City Car',   capacity: 4  },
+  van: { icon: '🚐', label: 'Van',  desc: 'Toyota HiAce/Shehzore',    capacity: 12 },
+  bus: { icon: '🚌', label: 'Bus',  desc: 'Hino/Isuzu Coach Bus',      capacity: 30 },
 };
 
-const API_BASE = 'http://192.168.10.14:3000/api';
+// ─── PAKISTAN FUEL DATA ───────────────────────────────────────────────────────
+const PK_FUEL = {
+  consumption:   { car: 12,  van: 15,  bus: 30  },   // L/100km
+  fuelType:      { car: 'petrol', van: 'diesel', bus: 'diesel' },
+  pricePerLitre: { petrol: 278, diesel: 283 },
+  roadFactor:    { car: 1.38, van: 1.32, bus: 1.28 }, // straight-line → road km
+  avgSpeedKmh:   { car: 28,  van: 23,  bus: 20  },
+  minRouteKm:    { car: 8,   van: 12,  bus: 20  },
+  minFuelLitres: { car: 1.0, van: 2.0, bus: 6.0 },
+};
+
+const OPT_WEIGHTS  = { distance: 0.35, time: 0.35, fuel: 0.30 };
+const OSRM_BASE    = 'https://router.project-osrm.org';
+const NOMINATIM    = 'https://nominatim.openstreetmap.org';
+const API_BASE     = 'http://10.128.159.15:3000/api';
+
+const fmtTime   = (m) => { const mm = Math.round(m); if (mm < 60) return `${mm} min`; const h = Math.floor(mm/60), r = mm%60; return r===0?`${h}h`:`${h}h ${r}m`; };
+const fmtKm     = (km) => km < 1 ? `${Math.round(km*1000)} m` : `${parseFloat(km).toFixed(1)} km`;
+const fmtLitres = (l)  => `${parseFloat(l).toFixed(1)} L`;
+const fmtPKR    = (r)  => `Rs. ${Math.round(r).toLocaleString('en-PK')}`;
 
 const MENU_ITEMS = [
-  { key: 'overview',    label: 'Dashboard',           icon: 'dashboard'            },
-  { key: 'profile',     label: 'My Profile',          icon: 'account-circle'       },
-  { key: 'poll',        label: 'Availability Polls',  icon: 'poll'                 },
-  { key: 'smart-route', label: 'Smart Routes',        icon: 'auto-awesome'         },
-  { key: 'routes',      label: 'Routes',              icon: 'map'                  },
-  { key: 'assign',      label: 'Assign Driver',       icon: 'assignment-ind'       },
-  { key: 'tracking',    label: 'Live Tracking',       icon: 'my-location'          },
-  { key: 'driver-req',  label: 'Driver Requests',     icon: 'group-add'            },
-  { key: 'pass-req',    label: 'Passenger Requests',  icon: 'person-add'           },
-  { key: 'payments',    label: 'Payments',            icon: 'account-balance-wallet'},
-  { key: 'complaints',  label: 'Complaints',          icon: 'support-agent'        },
-  { key: 'notifications',label:'Notifications',       icon: 'notifications-active' },
+  { key: 'overview',    label: 'Dashboard',          icon: 'dashboard'              },
+  { key: 'profile',     label: 'My Profile',          icon: 'account-circle'         },
+  { key: 'poll',        label: 'Availability Polls',  icon: 'poll'                   },
+  { key: 'smart-route', label: 'Smart Routes',        icon: 'auto-awesome'           },
+  { key: 'routes',      label: 'Routes',              icon: 'map'                    },
+  { key: 'assign',      label: 'Assign Driver',       icon: 'assignment-ind'         },
+  { key: 'tracking',    label: 'Live Tracking',       icon: 'my-location'            },
+  { key: 'driver-req',  label: 'Driver Requests',     icon: 'group-add'              },
+  { key: 'pass-req',    label: 'Passenger Requests',  icon: 'person-add'             },
+  { key: 'payments',    label: 'Payments',            icon: 'account-balance-wallet' },
+  { key: 'complaints',  label: 'Complaints',          icon: 'support-agent'          },
+  { key: 'notifications',label:'Notifications',       icon: 'notifications-active'   },
 ];
+
+// ══════════════════════════════════════════════════════════════════
+// ─── ROUTE OPTIMIZATION ENGINE ────────────────────────────────────
+// FIX 1: All helper functions defined BEFORE the class/optimizer
+// FIX 2: No axios — using native fetch throughout
+// FIX 3: optimizer instance created at module level so handleOptimize can access it
+// ══════════════════════════════════════════════════════════════════
+
+// ─── HAVERSINE DISTANCE (km) ──────────────────────────────────────────────────
+function haversineKm(lat1, lng1, lat2, lng2) {
+  const R = 6371;
+  const a1 = parseFloat(lat1), o1 = parseFloat(lng1);
+  const a2 = parseFloat(lat2), o2 = parseFloat(lng2);
+  if (!a1||!o1||!a2||!o2||isNaN(a1)||isNaN(o1)||isNaN(a2)||isNaN(o2)) return 0;
+  const dLat = (a2-a1)*Math.PI/180;
+  const dLng = (o2-o1)*Math.PI/180;
+  const a = Math.sin(dLat/2)**2 + Math.cos(a1*Math.PI/180)*Math.cos(a2*Math.PI/180)*Math.sin(dLng/2)**2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+}
+
+// ─── CENTROID ─────────────────────────────────────────────────────────────────
+function centroid(points) {
+  const v = points.filter(p => p.lat && p.lng);
+  if (!v.length) return { lat: 33.6135, lng: 73.1998 };
+  return {
+    lat: v.reduce((s,p) => s+parseFloat(p.lat), 0) / v.length,
+    lng: v.reduce((s,p) => s+parseFloat(p.lng), 0) / v.length,
+  };
+}
+
+// ─── NEAREST-NEIGHBOR SORT ────────────────────────────────────────────────────
+function nearestNeighborSort(passengers) {
+  if (passengers.length <= 1) return [...passengers];
+  const sorted = [], remaining = [...passengers];
+  let cur = remaining.splice(0, 1)[0];
+  sorted.push(cur);
+  while (remaining.length) {
+    let ni = 0, nd = Infinity;
+    remaining.forEach((p, i) => {
+      const d = haversineKm(cur.pickupLat, cur.pickupLng, p.pickupLat, p.pickupLng);
+      if (d < nd) { nd = d; ni = i; }
+    });
+    cur = remaining.splice(ni, 1)[0];
+    sorted.push(cur);
+  }
+  return sorted;
+}
+
+// ─── 2-OPT IMPROVEMENT ────────────────────────────────────────────────────────
+function twoOptImprove(stops) {
+  if (stops.length <= 2) return stops;
+  let improved = true, best = [...stops];
+  while (improved) {
+    improved = false;
+    for (let i = 0; i < best.length-1; i++) {
+      for (let j = i+1; j < best.length; j++) {
+        const p1=best[i], p2=best[(i+1)%best.length], p3=best[j], p4=best[(j+1)%best.length];
+        const before = haversineKm(p1.lat,p1.lng,p2.lat,p2.lng)+haversineKm(p3.lat,p3.lng,p4.lat,p4.lng);
+        const after  = haversineKm(p1.lat,p1.lng,p3.lat,p3.lng)+haversineKm(p2.lat,p2.lng,p4.lat,p4.lng);
+        if (after < before-0.01) {
+          best = [...best.slice(0,i+1), ...best.slice(i+1,j+1).reverse(), ...best.slice(j+1)];
+          improved = true;
+        }
+      }
+    }
+  }
+  return best;
+}
+
+// ─── CLARK-WRIGHT SAVINGS ─────────────────────────────────────────────────────
+function clarkWrightSavings(passengers, depot, maxCap) {
+  if (!passengers.length) return [];
+  let routes = passengers.map((p, i) => ({ id: `r_${i}`, passengers: [p] }));
+  const savings = [];
+  for (let i = 0; i < passengers.length; i++) {
+    for (let j = i+1; j < passengers.length; j++) {
+      const pi = passengers[i], pj = passengers[j];
+      const di  = haversineKm(depot.lat, depot.lng, pi.pickupLat, pi.pickupLng);
+      const dj  = haversineKm(depot.lat, depot.lng, pj.pickupLat, pj.pickupLng);
+      const dij = haversineKm(pi.pickupLat, pi.pickupLng, pj.pickupLat, pj.pickupLng);
+      savings.push({ i, j, saving: di+dj-dij });
+    }
+  }
+  savings.sort((a, b) => b.saving - a.saving);
+  for (const { i, j } of savings) {
+    const rI = routes.find(r => r.passengers.some(p => p.id === passengers[i].id));
+    const rJ = routes.find(r => r.passengers.some(p => p.id === passengers[j].id));
+    if (!rI || !rJ || rI.id === rJ.id) continue;
+    if (rI.passengers.length + rJ.passengers.length > maxCap) continue;
+    const cI = centroid(rI.passengers.map(p => ({ lat: p.pickupLat, lng: p.pickupLng })));
+    const cJ = centroid(rJ.passengers.map(p => ({ lat: p.pickupLat, lng: p.pickupLng })));
+    if (haversineKm(cI.lat, cI.lng, cJ.lat, cJ.lng) > 11) continue;
+    routes = routes.filter(r => r.id !== rI.id && r.id !== rJ.id);
+    routes.push({ id: rI.id, passengers: [...rI.passengers, ...rJ.passengers] });
+  }
+  return routes.map(r => r.passengers);
+}
+
+// ─── DETECT OUTLIERS ─────────────────────────────────────────────────────────
+function detectOutliers(passengers) {
+  if (passengers.length <= 1) return { inliers: passengers, outliers: [] };
+  const cent = centroid(passengers.map(p => ({ lat: p.pickupLat, lng: p.pickupLng })));
+  const distances = passengers.map(p => ({
+    p,
+    dist: haversineKm(cent.lat, cent.lng, p.pickupLat, p.pickupLng),
+  }));
+  const sorted = [...distances].sort((a,b) => a.dist-b.dist);
+  const q3 = sorted[Math.floor(sorted.length*0.75)]?.dist || 18;
+  const threshold = Math.max(q3*1.8, 18);
+  return {
+    inliers:  distances.filter(d => d.dist<=threshold).map(d => d.p),
+    outliers: distances.filter(d => d.dist>threshold).map(d => d.p),
+  };
+}
+
+// ─── FUEL CALCULATION ─────────────────────────────────────────────────────────
+function calculateFuel(distanceKm, vehicleType) {
+  const consumption = PK_FUEL.consumption[vehicleType] || 15;
+  const fuelType    = PK_FUEL.fuelType[vehicleType]    || 'diesel';
+  const pricePerL   = PK_FUEL.pricePerLitre[fuelType];
+  const minFuel     = PK_FUEL.minFuelLitres[vehicleType] || 2.0;
+  const rawFuel     = (distanceKm * consumption) / 100;
+  const fuelLitres  = Math.max(rawFuel, minFuel);
+  return {
+    fuelLitres:  parseFloat(fuelLitres.toFixed(2)),
+    fuelCostPKR: Math.round(fuelLitres * pricePerL),
+    fuelType,
+    consumption,
+  };
+}
+
+// ─── OPTIMIZATION SCORE ───────────────────────────────────────────────────────
+function computeOptimizationScore(distanceKm, durationMins, fuelL, passengerCount) {
+  const n      = Math.max(passengerCount, 1);
+  const dScore = Math.min(100, Math.max(0, 100 - (distanceKm/n-2)*8));
+  const tScore = Math.min(100, Math.max(0, 100 - (durationMins/n-3)*4));
+  const fScore = Math.min(100, Math.max(0, 100 - (fuelL/n-0.5)*40));
+  return Math.round(OPT_WEIGHTS.distance*dScore + OPT_WEIGHTS.time*tScore + OPT_WEIGHTS.fuel*fScore);
+}
+
+// ─── REVERSE GEOCODE via Nominatim (fetch, NOT axios) ─────────────────────────
+// FIX 2: Was using axios which is not imported in React Native — replaced with fetch
+async function reverseGeocode(lat, lng) {
+  try {
+    const url = `${NOMINATIM}/reverse?format=jsonv2&lat=${lat}&lon=${lng}`;
+    const res  = await fetch(url, {
+      headers: { 'User-Agent': 'TransporterApp/1.0' },
+    });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    if (data && data.display_name) {
+      const addr  = data.address || {};
+      const parts = [
+        addr.road || addr.pedestrian || addr.footway || addr.hamlet,
+        addr.suburb || addr.neighbourhood || addr.village || addr.quarter,
+        addr.city || addr.town || addr.county || addr.state,
+      ].filter(Boolean);
+      return parts.length
+        ? parts.join(', ')
+        : data.display_name.split(',').slice(0,3).join(', ');
+    }
+  } catch (e) {
+    console.warn(`reverseGeocode failed (${lat},${lng}):`, e.message);
+  }
+  return `${parseFloat(lat).toFixed(4)}, ${parseFloat(lng).toFixed(4)}`;
+}
+
+// ─── OSRM ROUTE (real road distance, free, no API key) ────────────────────────
+async function getOSRMRoute(waypoints, destination) {
+  try {
+    const allPts = [...waypoints, destination];
+    const coords = allPts.map(w => `${w.lng},${w.lat}`).join(';');
+    const url    = `${OSRM_BASE}/route/v1/driving/${coords}?overview=false`;
+    const res    = await fetch(url);
+    if (!res.ok) throw new Error(`OSRM HTTP ${res.status}`);
+    const data   = await res.json();
+    if (data.code === 'Ok' && data.routes?.[0]) {
+      const r = data.routes[0];
+      return {
+        distanceKm:  r.distance / 1000,
+        durationMins: Math.round(r.duration / 60),
+        source: 'osrm',
+      };
+    }
+  } catch (e) {
+    console.warn('OSRM failed:', e.message);
+  }
+  return null;
+}
+
+// ─── AREA LABEL ───────────────────────────────────────────────────────────────
+function getMostCommonArea(addresses) {
+  if (!addresses.length) return 'Area';
+  const parts = addresses
+    .map(a => { const s = String(a||''), p = s.split(','); return p.length>1?p[1].trim():p[0].trim(); })
+    .filter(Boolean);
+  const freq = {};
+  parts.forEach(p => { freq[p] = (freq[p]||0)+1; });
+  return Object.entries(freq).sort((a,b) => b[1]-a[1])[0]?.[0] || 'Route';
+}
+
+// ══════════════════════════════════════════════════════════════════
+// ─── MAIN OPTIMIZER CLASS ─────────────────────────────────────────
+// FIX 1: Class properly defined with all methods
+// FIX 3: Instantiated as `optimizer` at module level below the class
+// ══════════════════════════════════════════════════════════════════
+class RouteOptimizationEngine {
+  constructor(config = {}) {
+    this.DEFAULT_DEST_LAT  = config.destLat   || 33.6135;
+    this.DEFAULT_DEST_LNG  = config.destLng   || 73.1998;
+    this.DEFAULT_DEST_ADDR = config.destAddr  || 'Riphah International University, Gulberg Greens, Islamabad';
+    this.SOLO_MERGE_RADIUS = 10;  // km
+  }
+
+  getBestVehicleType(count, forced = null) {
+    if (forced) return forced;
+    if (count <= VEHICLE_CAPS.car) return 'car';
+    if (count <= VEHICLE_CAPS.van) return 'van';
+    return 'bus';
+  }
+
+  // ─── MAIN OPTIMIZE METHOD ─────────────────────────────────────────────────
+  async optimize(allPassengers, onProgress) {
+    // Step 1: Normalize passenger data
+    const passengers = allPassengers.map((r, i) => ({
+      id:              r.id || r._id?.$oid || r._id || `p_${i}`,
+      name:            r.name || r.passengerName || `Passenger ${i+1}`,
+      pickupLat:       parseFloat(r.pickupLat || r.latitude || 0),
+      pickupLng:       parseFloat(r.pickupLng || r.longitude || 0),
+      pickupAddress:   r.pickupAddress || r.pickupPoint || r.address || '',
+      dropLat:         parseFloat(r.dropLat || r.destinationLatitude  || this.DEFAULT_DEST_LAT),
+      dropLng:         parseFloat(r.dropLng || r.destinationLongitude || this.DEFAULT_DEST_LNG),
+      dropAddress:     r.dropAddress || r.destination || r.destinationAddress || this.DEFAULT_DEST_ADDR,
+      vehiclePreference: r.vehiclePreference || null,
+      timeSlot:        r.selectedTimeSlot || r.timeSlot || null,
+    }));
+
+    const valid   = passengers.filter(p => p.pickupLat !== 0 || p.pickupLng !== 0);
+    const invalid = passengers.filter(p => p.pickupLat === 0 && p.pickupLng === 0);
+
+    onProgress?.(`Validating ${passengers.length} passengers...`);
+
+    // Step 2: Reverse geocode missing addresses (rate-limited 1/sec for Nominatim)
+    onProgress?.('Fetching pickup addresses from GPS coordinates...');
+    for (let i = 0; i < valid.length; i++) {
+      const p = valid[i];
+      if ((!p.pickupAddress || p.pickupAddress === 'Pickup Point') && p.pickupLat && p.pickupLng) {
+        valid[i] = {
+          ...p,
+          pickupAddress: await reverseGeocode(p.pickupLat, p.pickupLng),
+        };
+        onProgress?.(`Geocoding ${i+1}/${valid.length}: ${valid[i].pickupAddress}`);
+        await new Promise(r => setTimeout(r, 1100)); // Nominatim 1 req/sec limit
+      }
+    }
+
+    // Step 3: Group by vehicle preference
+    const groups = [
+      { passengers: valid.filter(p => p.vehiclePreference === 'car'), forced: 'car', label: 'Car-Only'  },
+      { passengers: valid.filter(p => p.vehiclePreference === 'van'), forced: 'van', label: 'Van-Only'  },
+      { passengers: valid.filter(p => p.vehiclePreference === 'bus'), forced: 'bus', label: 'Bus-Only'  },
+      { passengers: valid.filter(p => !p.vehiclePreference),          forced: null,  label: 'Auto-Assign'},
+    ].filter(g => g.passengers.length > 0);
+
+    onProgress?.(`Building routes for ${valid.length} passengers across ${groups.length} group(s)...`);
+
+    const allRoutes = [];
+    const depot     = { lat: this.DEFAULT_DEST_LAT, lng: this.DEFAULT_DEST_LNG };
+
+    for (const group of groups) {
+      onProgress?.(`Optimising ${group.label} (${group.passengers.length} passengers)...`);
+      const maxCap = group.forced ? VEHICLE_CAPS[group.forced] : VEHICLE_CAPS.bus;
+      const { inliers, outliers } = detectOutliers(group.passengers);
+      const savedRoutes = inliers.length > 0 ? clarkWrightSavings(inliers, depot, maxCap) : [];
+
+      // Merge outliers into nearest existing route or create solo route
+      for (const outlier of outliers) {
+        let merged = false;
+        if (savedRoutes.length > 0) {
+          let bestIdx = -1, bestDist = Infinity;
+          savedRoutes.forEach((route, idx) => {
+            const cap = group.forced
+              ? VEHICLE_CAPS[group.forced]
+              : VEHICLE_CAPS[this.getBestVehicleType(route.length+1)];
+            if (route.length >= cap) return;
+            const cent = centroid(route.map(p => ({ lat: p.pickupLat, lng: p.pickupLng })));
+            const dist = haversineKm(cent.lat, cent.lng, outlier.pickupLat, outlier.pickupLng);
+            if (dist < bestDist) { bestDist = dist; bestIdx = idx; }
+          });
+          if (bestIdx >= 0 && bestDist <= this.SOLO_MERGE_RADIUS) {
+            savedRoutes[bestIdx].push(outlier);
+            merged = true;
+          }
+        }
+        if (!merged) savedRoutes.push([outlier]);
+      }
+
+      // Split routes exceeding capacity
+      for (let i = savedRoutes.length-1; i >= 0; i--) {
+        const route = savedRoutes[i];
+        const cap   = group.forced
+          ? VEHICLE_CAPS[group.forced]
+          : VEHICLE_CAPS[this.getBestVehicleType(route.length)];
+        if (route.length > cap) {
+          const chunks = [];
+          for (let j = 0; j < route.length; j += cap) chunks.push(route.slice(j, j+cap));
+          savedRoutes.splice(i, 1, ...chunks);
+        }
+      }
+
+      savedRoutes.forEach(r => allRoutes.push({ passengers: r, forced: group.forced }));
+    }
+
+    // Add passengers with no GPS as manual routes
+    if (invalid.length > 0) {
+      for (let i = 0; i < invalid.length; i += VEHICLE_CAPS.van) {
+        allRoutes.push({
+          passengers: invalid.slice(i, i + VEHICLE_CAPS.van),
+          forced: null,
+          warning: 'No GPS coordinates — manual pickup required',
+        });
+      }
+    }
+
+    if (!allRoutes.length) return [];
+
+    onProgress?.(`Computing road distances for ${allRoutes.length} routes...`);
+
+    // Step 4: Build final route objects with distances + fuel
+    const routeResults = await Promise.allSettled(
+      allRoutes.map(async ({ passengers: paxList, forced, warning }, idx) => {
+        const vType = forced || this.getBestVehicleType(paxList.length);
+        const cap   = VEHICLE_CAPS[vType];
+        const dest  = {
+          lat:     paxList[0]?.dropLat  || this.DEFAULT_DEST_LAT,
+          lng:     paxList[0]?.dropLng  || this.DEFAULT_DEST_LNG,
+          address: paxList[0]?.dropAddress || this.DEFAULT_DEST_ADDR,
+        };
+
+        // Sort pickups optimally
+        const nnSorted  = nearestNeighborSort(paxList);
+        const optimized = twoOptImprove(
+          nnSorted.map(p => ({ ...p, lat: p.pickupLat, lng: p.pickupLng }))
+        );
+        const waypoints = optimized.map(p => ({
+          lat: parseFloat(p.pickupLat || p.lat),
+          lng: parseFloat(p.pickupLng || p.lng),
+        })).filter(w => w.lat && w.lng);
+
+        let distanceKm = 0, durationMins = 0, matrixSource = 'haversine';
+
+        if (waypoints.length > 0) {
+          // Try OSRM first (free, real road data)
+          const osrm = await getOSRMRoute(waypoints, dest);
+          if (osrm && osrm.distanceKm > 0 && osrm.distanceKm < 300) {
+            distanceKm   = Math.max(osrm.distanceKm, PK_FUEL.minRouteKm[vType] || 12);
+            durationMins = osrm.durationMins;
+            matrixSource = 'osrm';
+          } else {
+            // Haversine fallback with Pakistan road factor
+            let straight = 0;
+            for (let i = 0; i < waypoints.length-1; i++) {
+              straight += haversineKm(waypoints[i].lat, waypoints[i].lng, waypoints[i+1].lat, waypoints[i+1].lng);
+            }
+            straight    += haversineKm(waypoints[waypoints.length-1].lat, waypoints[waypoints.length-1].lng, dest.lat, dest.lng);
+            const roadKm = straight * (PK_FUEL.roadFactor[vType] || 1.32);
+            distanceKm   = Math.max(roadKm, PK_FUEL.minRouteKm[vType] || 12);
+            durationMins = Math.max(10, Math.round((distanceKm / (PK_FUEL.avgSpeedKmh[vType] || 23)) * 60));
+            matrixSource = 'haversine';
+          }
+        } else {
+          distanceKm   = PK_FUEL.minRouteKm[vType] || 12;
+          durationMins = Math.round((distanceKm / (PK_FUEL.avgSpeedKmh[vType] || 23)) * 60);
+        }
+
+        const { fuelLitres, fuelCostPKR, fuelType, consumption } = calculateFuel(distanceKm, vType);
+        const score = computeOptimizationScore(distanceKm, durationMins, fuelLitres, paxList.length);
+        const areaLabel = getMostCommonArea(paxList.map(p => p.pickupAddress));
+
+        const stops = [
+          ...optimized.map(p => ({
+            name:    p.name,
+            address: p.pickupAddress || `${p.pickupLat?.toFixed(4)}, ${p.pickupLng?.toFixed(4)}`,
+            lat:     parseFloat(p.pickupLat || p.lat),
+            lng:     parseFloat(p.pickupLng || p.lng),
+            type:    'pickup',
+          })),
+          {
+            name:    'Destination',
+            address: dest.address,
+            lat:     dest.lat,
+            lng:     dest.lng,
+            type:    'dropoff',
+          },
+        ];
+
+        const warnings = [];
+        if (warning)             warnings.push(warning);
+        if (paxList.length > cap) warnings.push(`Exceeds ${vType} capacity (${paxList.length}/${cap})`);
+        if (matrixSource === 'haversine') warnings.push('Estimated distance — OSRM unavailable');
+        if (paxList.some(p => !p.pickupLat || !p.pickupLng)) warnings.push('Some passengers missing GPS');
+
+        return {
+          id:                  `route_${Date.now()}_${idx}`,
+          vehicleType:         vType,
+          passengerCount:      paxList.length,
+          capacity:            cap,
+          passengers:          paxList,
+          stops,
+          destination:         dest.address,
+          estimatedKm:         fmtKm(distanceKm),
+          estimatedTime:       fmtTime(durationMins),
+          estimatedFuel:       fmtLitres(fuelLitres),
+          fuelCostPKR:         fmtPKR(fuelCostPKR),
+          fuelType,
+          fuelRatePerKm:       parseFloat((fuelLitres / Math.max(distanceKm, 0.1)).toFixed(3)),
+          rawDistanceKm:       parseFloat(distanceKm.toFixed(2)),
+          rawDurationMins:     durationMins,
+          rawFuelLitres:       fuelLitres,
+          rawFuelCostPKR:      fuelCostPKR,
+          matrixSource,
+          optimizationScore:   score,
+          preferenceGroup:     !!forced,
+          areaLabel,
+          warnings,
+        };
+      })
+    );
+
+    const final = routeResults
+      .filter(r => r.status === 'fulfilled')
+      .map(r => r.value);
+
+    // Sort: preference groups first, then by optimization score
+    final.sort((a, b) => {
+      if (a.preferenceGroup && !b.preferenceGroup) return -1;
+      if (!a.preferenceGroup && b.preferenceGroup) return 1;
+      return b.optimizationScore - a.optimizationScore;
+    });
+
+    return final;
+  }
+}
+
+// FIX 3: Instantiate at module level — accessible everywhere in the file
+const optimizer = new RouteOptimizationEngine();
 
 // ─── API SERVICE ──────────────────────────────────────────────────────────────
 class ApiService {
-  
   async getAuthData() {
     try {
       const [token, transporterId, userId, td] = await Promise.all([
@@ -66,11 +537,10 @@ class ApiService {
         AsyncStorage.getItem('userId'),
         AsyncStorage.getItem('transporterData'),
       ]);
-    
       let parsedData = null;
       try { parsedData = td ? JSON.parse(td) : null; } catch (_) {}
-      const resolvedTransporterId = transporterId || userId || parsedData?.id || parsedData?._id || null;
-      return { token, transporterId: resolvedTransporterId, transporterData: parsedData };
+      const resolvedId = transporterId || userId || parsedData?.id || parsedData?._id || null;
+      return { token, transporterId: resolvedId, transporterData: parsedData };
     } catch {
       return { token: null, transporterId: null, transporterData: null };
     }
@@ -81,12 +551,18 @@ class ApiService {
     if (!token) throw new Error('Authentication required');
     const res = await fetch(`${API_BASE}${endpoint}`, {
       ...options,
-      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}`, ...options.headers },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${token}`,
+        ...options.headers,
+      },
     });
     const text = await res.text();
     if (!res.ok) {
-      if (res.status === 401 || res.status === 403) throw new Error('Authentication failed');
-      throw new Error(`API Error ${res.status}`);
+      if (res.status === 401 || res.status === 403) throw new Error('Authentication failed — please login again');
+      let errMsg = `Server Error ${res.status}`;
+      try { const j = JSON.parse(text); errMsg = j.message || j.error || errMsg; } catch {}
+      throw new Error(errMsg);
     }
     return text ? JSON.parse(text) : {};
   }
@@ -95,11 +571,27 @@ class ApiService {
     const { transporterId } = await this.getAuthData();
     if (!transporterId) {
       const r = await this.call('/profile');
-      return { id: r._id||r.id||'', name: r.name||'Transporter', email: r.email||'', phone: r.phone||r.phoneNumber||'N/A', company: r.company||r.companyName||'Transport Co.', address: r.address||'N/A', license: r.license||r.licenseNumber||'N/A', registrationDate: r.registrationDate ? new Date(r.registrationDate).toLocaleDateString() : 'N/A', location: r.location||r.address||'N/A', status: r.status||'active', profileImage: r.profileImage||null };
+      return this._normalizeProfile(r, '');
     }
     const r = await this.call(`/transporter/profile/${transporterId}`);
-    const p = r.data||r.transporter||r;
-    return { id: p._id||p.id||transporterId, name: p.name||'Transporter', email: p.email||'', phone: p.phone||p.phoneNumber||'N/A', company: p.company||p.companyName||'Transport Co.', address: p.address||'N/A', license: p.license||p.licenseNumber||'N/A', registrationDate: p.registrationDate ? new Date(p.registrationDate).toLocaleDateString() : 'N/A', location: p.location||p.address||'N/A', status: p.status||'active', profileImage: p.profileImage||null };
+    const p = r.data || r.transporter || r;
+    return this._normalizeProfile(p, transporterId);
+  }
+
+  _normalizeProfile(p, fallbackId) {
+    return {
+      id:               p._id || p.id || fallbackId,
+      name:             p.name || 'Transporter',
+      email:            p.email || '',
+      phone:            p.phone || p.phoneNumber || 'N/A',
+      company:          p.company || p.companyName || 'Transport Co.',
+      address:          p.address || 'N/A',
+      license:          p.license || p.licenseNumber || 'N/A',
+      registrationDate: p.registrationDate ? new Date(p.registrationDate).toLocaleDateString() : 'N/A',
+      location:         p.location || p.address || 'N/A',
+      status:           p.status || 'active',
+      profileImage:     p.profileImage || null,
+    };
   }
 
   async updateProfile(data) {
@@ -110,14 +602,22 @@ class ApiService {
   async getStats() {
     const { transporterId } = await this.getAuthData();
     const r = await this.call(`/dashboard/stats?transporterId=${transporterId}`);
-    const s = r.stats||r.data||r;
-    return { activeDrivers: +s.activeDrivers||0, totalPassengers: +s.totalPassengers||0, completedTrips: +s.completedTrips||0, ongoingTrips: +s.ongoingTrips||0, complaints: +s.complaints||0, paymentsReceived: +s.paymentsReceived||0, paymentsPending: +s.paymentsPending||0 };
+    const s = r.stats || r.data || r;
+    return {
+      activeDrivers:    +s.activeDrivers    || 0,
+      totalPassengers:  +s.totalPassengers  || 0,
+      completedTrips:   +s.completedTrips   || 0,
+      ongoingTrips:     +s.ongoingTrips     || 0,
+      complaints:       +s.complaints       || 0,
+      paymentsReceived: +s.paymentsReceived || 0,
+      paymentsPending:  +s.paymentsPending  || 0,
+    };
   }
 
   async getPolls() {
     const { transporterId } = await this.getAuthData();
     const r = await this.call(`/polls?transporterId=${transporterId}`);
-    return Array.isArray(r) ? r : (r.polls||r.data||[]);
+    return Array.isArray(r) ? r : (r.polls || r.data || []);
   }
 
   async createPoll(data) {
@@ -125,31 +625,61 @@ class ApiService {
     return this.call('/polls', { method: 'POST', body: JSON.stringify({ ...data, transporterId }) });
   }
 
-  async deletePoll(id) { return this.call(`/polls/${id}`, { method: 'DELETE' }); }
+  async deletePoll(id) {
+    return this.call(`/polls/${id}`, { method: 'DELETE' });
+  }
 
   async getDrivers() {
     const { transporterId } = await this.getAuthData();
     const r = await this.call(`/drivers?transporterId=${transporterId}`);
-    return Array.isArray(r) ? r : (r.drivers||r.data||[]);
+    return Array.isArray(r) ? r : (r.drivers || r.data || []);
   }
 
-  async optimizeRoutes(passengers, drivers, pollId) {
-    return this.call('/smart-routes/optimize', { method: 'POST', body: JSON.stringify({ passengers, drivers, pollId }) });
-  }
-
-  async assignRouteFromPoll(pollId, routeData) {
-    const tomorrow = new Date(); tomorrow.setDate(tomorrow.getDate() + 1);
-    return this.call('/routes/assign', { method: 'POST', body: JSON.stringify({ pollId, driverId: routeData.driverId, routeName: routeData.routeName, startPoint: routeData.startPoint||'Starting Point', destination: routeData.destination||'Destination', timeSlot: routeData.timeSlot, pickupTime: routeData.pickupTime||routeData.timeSlot, date: tomorrow.toISOString(), passengers: routeData.passengers||[], stops: routeData.stops||[], estimatedTime: routeData.estimatedTime, estimatedFuel: routeData.estimatedFuel, estimatedKm: routeData.estimatedKm, vehicleType: routeData.vehicleType }) });
+  async saveUnassignedRoute(routeData) {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    const { transporterId: authTid } = await this.getAuthData();
+    const stopStrings   = (routeData.stops || []).map(s => typeof s === 'string' ? s : (s.address || s.name || 'Stop'));
+    const passengerList = (routeData.passengers || []).map(p => ({
+      passengerId:  p.id || p._id || null,
+      passengerName: p.name || 'Passenger',
+      pickupPoint:  p.pickupAddress || p.pickupPoint || 'Pickup',
+      status:       'pending',
+    }));
+    return this.call('/routes', {
+      method: 'POST',
+      body: JSON.stringify({
+        name:          routeData.routeName,
+        routeName:     routeData.routeName,
+        pollId:        routeData.pollId,
+        startPoint:    routeData.startPoint || stopStrings[0] || 'Multiple Pickup Points',
+        destination:   routeData.destination || 'Riphah International University',
+        timeSlot:      routeData.timeSlot,
+        pickupTime:    routeData.pickupTime || routeData.timeSlot,
+        date:          tomorrow.toISOString(),
+        passengers:    passengerList,
+        stops:         stopStrings,
+        estimatedTime: routeData.estimatedTime,
+        estimatedFuel: routeData.estimatedFuel,
+        estimatedKm:   routeData.estimatedKm,
+        fuelCostPKR:   routeData.fuelCostPKR,
+        fuelType:      routeData.fuelType,
+        fuelRatePerKm: routeData.fuelRatePerKm,
+        vehicleType:   routeData.vehicleType,
+        status:        'unassigned',
+        transporterId: routeData.transporterId || authTid,
+      }),
+    });
   }
 
   async assignDriverToRoute(routeId, driverId) {
-    return this.call(`/routes/${routeId}/assign-driver`, { method: 'PUT', body: JSON.stringify({ driverId }) });
+    return this.call(`/routes/${routeId}/assign-driver`, { method: 'PUT', body: JSON.stringify({ driverId, assignedDriver: driverId }) });
   }
 
   async getDriverRequests() {
     const { transporterId } = await this.getAuthData();
     const r = await this.call(`/join-requests?type=driver&transporterId=${transporterId}`);
-    return (Array.isArray(r) ? r : (r.requests||r.data||[])).filter(x => x.status === 'pending');
+    return (Array.isArray(r) ? r : (r.requests || r.data || [])).filter(x => x.status === 'pending');
   }
 
   async approveDriverRequest(id) {
@@ -157,12 +687,14 @@ class ApiService {
     return this.call(`/join-requests/${id}/accept`, { method: 'PUT', body: JSON.stringify({ transporterId }) });
   }
 
-  async rejectDriverRequest(id) { return this.call(`/join-requests/${id}/reject`, { method: 'PUT' }); }
+  async rejectDriverRequest(id) {
+    return this.call(`/join-requests/${id}/reject`, { method: 'PUT' });
+  }
 
   async getPassengerRequests() {
     const { transporterId } = await this.getAuthData();
     const r = await this.call(`/join-requests?type=passenger&transporterId=${transporterId}`);
-    return (Array.isArray(r) ? r : (r.requests||r.data||[])).filter(x => x.status === 'pending');
+    return (Array.isArray(r) ? r : (r.requests || r.data || [])).filter(x => x.status === 'pending');
   }
 
   async approvePassengerRequest(id) {
@@ -170,89 +702,148 @@ class ApiService {
     return this.call(`/join-requests/${id}/accept`, { method: 'PUT', body: JSON.stringify({ transporterId }) });
   }
 
-  async rejectPassengerRequest(id) { return this.call(`/join-requests/${id}/reject`, { method: 'PUT' }); }
+  async rejectPassengerRequest(id) {
+    return this.call(`/join-requests/${id}/reject`, { method: 'PUT' });
+  }
 
   async getRoutes() {
     const { transporterId } = await this.getAuthData();
     const r = await this.call(`/routes?transporterId=${transporterId}`);
-    return Array.isArray(r) ? r : (r.routes||r.data||[]);
+    return Array.isArray(r) ? r : (r.routes || r.data || []);
   }
 
   async getTrips() {
     const { transporterId } = await this.getAuthData();
     const r = await this.call(`/trips?transporterId=${transporterId}`);
-    return Array.isArray(r) ? r : (r.trips||r.data||[]);
+    return Array.isArray(r) ? r : (r.trips || r.data || []);
   }
 
   async getComplaints() {
     const { transporterId } = await this.getAuthData();
     const r = await this.call(`/complaints?transporterId=${transporterId}`);
-    return Array.isArray(r) ? r : (r.complaints||r.data||[]);
+    return Array.isArray(r) ? r : (r.complaints || r.data || []);
   }
 
   async getNotifications() {
-    const { transporterId } = await this.getAuthData();
-    const r = await this.call(`/notifications?transporterId=${transporterId}`);
-    return Array.isArray(r) ? r : (r.notifications||r.data||[]);
+    const r = await this.call('/notifications');
+    return Array.isArray(r) ? r : (r.notifications || r.data || []);
   }
 
-  async markRead(id) { return this.call(`/notifications/${id}/read`, { method: 'PUT' }); }
+  async markRead(id) {
+    return this.call(`/notifications/${id}/read`, { method: 'PUT' });
+  }
 }
 
 const api = new ApiService();
 
-// ─── TIME PICKER ──────────────────────────────────────────────────────────────
+// ─── CLOCK TIME PICKER ────────────────────────────────────────────────────────
 const TimePicker = ({ visible, onClose, onSelect }) => {
-  const hours = ['01','02','03','04','05','06','07','08','09','10','11','12'];
-  const [h, setH] = useState('07');
-  const [m, setM] = useState('00');
-  const [p, setP] = useState('AM');
+  const [mode, setMode]     = useState('hour');
+  const [hour, setHour]     = useState(7);
+  const [minute, setMinute] = useState(0);
+  const [period, setPeriod] = useState('AM');
+  const CLOCK_SIZE = 240, CENTER = 120, RADIUS = 90, HAND_RADIUS = 80;
+
+  useEffect(() => { if (visible) { setMode('hour'); setHour(7); setMinute(0); setPeriod('AM'); } }, [visible]);
+
+  const hourNumbers   = Array.from({ length: 12 }, (_, i) => i+1);
+  const minuteNumbers = Array.from({ length: 12 }, (_, i) => i*5);
+
+  const getNumPosition = (index, total, r) => {
+    const angle = ((index/total)*2*Math.PI) - (Math.PI/2);
+    return { x: CENTER + r*Math.cos(angle), y: CENTER + r*Math.sin(angle) };
+  };
+
+  const handAngle = mode === 'hour' ? ((hour/12)*360)-90 : ((minute/60)*360)-90;
+  const handRad   = (handAngle*Math.PI)/180;
+  const handX     = CENTER + HAND_RADIUS*Math.cos(handRad);
+  const handY     = CENTER + HAND_RADIUS*Math.sin(handRad);
+
+  const handleClockPress = (evt) => {
+    const { locationX, locationY } = evt.nativeEvent;
+    const dx = locationX - CENTER, dy = locationY - CENTER;
+    let angle = Math.atan2(dy, dx)*(180/Math.PI) + 90;
+    if (angle < 0) angle += 360;
+    if (mode === 'hour') {
+      let h = Math.round(angle/30); if (h===0) h=12; if (h>12) h=12;
+      setHour(h); setTimeout(() => setMode('minute'), 300);
+    } else {
+      let m = Math.round(angle/6); if (m>=60) m=0; setMinute(m);
+    }
+  };
+
+  const dH = String(hour).padStart(2,'0'), dM = String(minute).padStart(2,'0');
+
   return (
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <View style={tp.overlay}>
-        <View style={tp.box}>
-          <View style={tp.hdr}>
-            <Icon name="access-time" size={19} color={C.white} style={{ marginRight: 8 }} />
-            <Text style={tp.hdrTxt}>Select Time</Text>
+      <View style={clk.overlay}>
+        <View style={clk.box}>
+          <View style={clk.hdr}>
+            <Icon name="alarm" size={18} color={C.black} style={{ marginRight:8 }} />
+            <Text style={clk.hdrTxt}>Set Pickup Time</Text>
           </View>
-          <View style={tp.body}>
-            <Text style={tp.lbl}>HOUR</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: 12 }}>
-              {hours.map(x => (
-                <TouchableOpacity key={x} style={[tp.chip, h===x && tp.chipOn]} onPress={() => setH(x)}>
-                  <Text style={[tp.chipTxt, h===x && tp.chipTxtOn]}>{x}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-            <Text style={tp.lbl}>MINUTE</Text>
-            <View style={{ flexDirection:'row', gap:8, marginBottom:12 }}>
-              {['00','15','30','45'].map(x => (
-                <TouchableOpacity key={x} style={[tp.chip,{flex:1,alignItems:'center'},m===x&&tp.chipOn]} onPress={()=>setM(x)}>
-                  <Text style={[tp.chipTxt,m===x&&tp.chipTxtOn]}>{x}</Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-            <Text style={tp.lbl}>PERIOD</Text>
-            <View style={{ flexDirection:'row', gap:8, marginBottom:12 }}>
-              {['AM','PM'].map(x => (
-                <TouchableOpacity key={x} style={[tp.chip,{flex:1,alignItems:'center'},p===x&&tp.chipOn]} onPress={()=>setP(x)}>
-                  <Text style={[tp.chipTxt,p===x&&tp.chipTxtOn]}>{x}</Text>
+          <View style={clk.digitalRow}>
+            <TouchableOpacity onPress={() => setMode('hour')} style={[clk.digitBox, mode==='hour'&&clk.digitBoxOn]}>
+              <Text style={[clk.digitTxt, mode==='hour'&&clk.digitTxtOn]}>{dH}</Text>
+            </TouchableOpacity>
+            <Text style={clk.colon}>:</Text>
+            <TouchableOpacity onPress={() => setMode('minute')} style={[clk.digitBox, mode==='minute'&&clk.digitBoxOn]}>
+              <Text style={[clk.digitTxt, mode==='minute'&&clk.digitTxtOn]}>{dM}</Text>
+            </TouchableOpacity>
+            <View style={clk.ampmCol}>
+              {['AM','PM'].map(p => (
+                <TouchableOpacity key={p} onPress={() => setPeriod(p)} style={[clk.ampmBtn, period===p&&clk.ampmBtnOn]}>
+                  <Text style={[clk.ampmTxt, period===p&&clk.ampmTxtOn]}>{p}</Text>
                 </TouchableOpacity>
               ))}
             </View>
-            <View style={tp.preview}>
-              <Text style={tp.previewTime}>{h}:{m}</Text>
-              <Text style={tp.previewPd}>{p}</Text>
+          </View>
+          <Text style={clk.modeLabel}>{mode==='hour'?'SELECT HOUR':'SELECT MINUTE'}</Text>
+          <View style={clk.clockWrap}>
+            <View
+              style={[clk.clockFace, { width:CLOCK_SIZE, height:CLOCK_SIZE, borderRadius:CLOCK_SIZE/2 }]}
+              onStartShouldSetResponder={() => true}
+              onResponderGrant={handleClockPress}
+              onResponderMove={handleClockPress}>
+              {(mode==='hour' ? hourNumbers : minuteNumbers).map((n, i) => {
+                const pos   = getNumPosition(i, 12, RADIUS);
+                const isSel = mode==='hour' ? n===hour : (minute===n || (i===0&&minute<3));
+                return (
+                  <TouchableOpacity
+                    key={n}
+                    onPress={() => {
+                      if (mode==='hour') { setHour(n); setTimeout(() => setMode('minute'), 300); }
+                      else { setMinute(n); }
+                    }}
+                    style={[clk.clockNum, { left:pos.x-18, top:pos.y-18, backgroundColor:isSel?C.primary:'transparent' }]}>
+                    <Text style={[clk.clockNumTxt, { color:isSel?C.primaryDark:C.textDark, fontSize:mode==='minute'?12:14 }]}>
+                      {mode==='minute' ? String(n).padStart(2,'0') : n}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+              <View style={[clk.centerDot, { left:CENTER-5, top:CENTER-5 }]} />
+              <View style={[clk.handLine, { left:CENTER, top:CENTER, width:HAND_RADIUS, transform:[{translateX:-2},{rotate:`${handAngle+90}deg`},{translateX:-HAND_RADIUS/2}] }]} />
+              <View style={[clk.handDot, { left:handX-10, top:handY-10 }]} />
             </View>
-            <View style={{ flexDirection:'row', gap:10, marginTop:10 }}>
-              <TouchableOpacity style={tp.cancelBtn} onPress={onClose}>
-                <Text style={tp.cancelTxt}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={tp.confirmBtn} onPress={() => { onSelect(`${h}:${m} ${p}`); onClose(); }}>
-                <Icon name="check" size={15} color={C.white} />
-                <Text style={tp.confirmTxt}>Add</Text>
-              </TouchableOpacity>
+          </View>
+          {mode==='minute' && (
+            <View style={clk.quickMin}>
+              {[0,15,30,45].map(m => (
+                <TouchableOpacity key={m} style={[clk.quickMinBtn, minute===m&&clk.quickMinBtnOn]} onPress={() => setMinute(m)}>
+                  <Text style={[clk.quickMinTxt, minute===m&&clk.quickMinTxtOn]}>:{String(m).padStart(2,'0')}</Text>
+                </TouchableOpacity>
+              ))}
             </View>
+          )}
+          <View style={clk.actions}>
+            <TouchableOpacity style={clk.cancelBtn} onPress={onClose}>
+              <Text style={clk.cancelTxt}>Cancel</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={clk.confirmBtn} onPress={() => { onSelect(`${dH}:${dM} ${period}`); onClose(); }}>
+              <Icon name="check" size={15} color={C.primaryDark} />
+              <Text style={clk.confirmTxt}>{dH}:{dM} {period}</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </View>
@@ -260,24 +851,40 @@ const TimePicker = ({ visible, onClose, onSelect }) => {
   );
 };
 
-const tp = StyleSheet.create({
-  overlay:     { flex:1, backgroundColor:'rgba(0,0,0,0.5)', justifyContent:'center', alignItems:'center', padding:20 },
-  box:         { backgroundColor:C.white, borderRadius:18, width:'100%', maxWidth:380, overflow:'hidden', borderWidth:2, borderColor:C.primary },
-  hdr:         { backgroundColor:C.primary, flexDirection:'row', alignItems:'center', padding:16 },
-  hdrTxt:      { fontSize:17, fontWeight:'900', color:C.white, letterSpacing:-0.3 },
-  body:        { padding:16 },
-  lbl:         { fontSize:10, fontWeight:'800', color:C.textLight, letterSpacing:1.5, marginBottom:8 },
-  chip:        { paddingHorizontal:14, paddingVertical:10, borderRadius:8, borderWidth:1.5, borderColor:C.border, backgroundColor:C.white, marginRight:8 },
-  chipOn:      { backgroundColor:C.primary, borderColor:C.primary },
-  chipTxt:     { fontSize:15, fontWeight:'700', color:C.textMid },
-  chipTxtOn:   { color:C.white },
-  preview:     { backgroundColor:C.primaryGhost, borderRadius:12, padding:14, alignItems:'center', flexDirection:'row', justifyContent:'center', gap:8, borderWidth:1.5, borderColor:C.border },
-  previewTime: { fontSize:36, fontWeight:'900', color:C.textDark, letterSpacing:-1 },
-  previewPd:   { fontSize:20, fontWeight:'700', color:C.primary, marginTop:4 },
-  cancelBtn:   { flex:1, padding:13, borderRadius:10, borderWidth:1.5, borderColor:C.border, alignItems:'center', backgroundColor:C.white },
-  cancelTxt:   { fontWeight:'700', color:C.textMid, fontSize:14 },
-  confirmBtn:  { flex:2, padding:13, borderRadius:10, backgroundColor:C.primary, flexDirection:'row', justifyContent:'center', alignItems:'center', gap:6 },
-  confirmTxt:  { color:C.white, fontWeight:'800', fontSize:14 },
+const clk = StyleSheet.create({
+  overlay:       { flex:1, backgroundColor:'rgba(0,0,0,0.65)', justifyContent:'center', alignItems:'center', padding:16 },
+  box:           { backgroundColor:C.white, borderRadius:20, width:'100%', maxWidth:340, overflow:'hidden', elevation:20 },
+  hdr:           { backgroundColor:C.primary, flexDirection:'row', alignItems:'center', padding:16 },
+  hdrTxt:        { fontSize:16, fontWeight:'900', color:C.black },
+  digitalRow:    { flexDirection:'row', alignItems:'center', justifyContent:'center', paddingTop:20, paddingBottom:10, paddingHorizontal:20, gap:4 },
+  digitBox:      { backgroundColor:C.primaryGhost, borderRadius:12, paddingHorizontal:20, paddingVertical:12, borderWidth:2, borderColor:C.border },
+  digitBoxOn:    { backgroundColor:C.primary, borderColor:C.primaryDark },
+  digitTxt:      { fontSize:36, fontWeight:'900', color:C.textDark },
+  digitTxtOn:    { color:C.black },
+  colon:         { fontSize:36, fontWeight:'900', color:C.textDark, marginHorizontal:2 },
+  ampmCol:       { marginLeft:10, gap:5 },
+  ampmBtn:       { paddingHorizontal:12, paddingVertical:7, borderRadius:8, backgroundColor:C.primaryGhost, borderWidth:2, borderColor:C.border },
+  ampmBtnOn:     { backgroundColor:C.primary, borderColor:C.primaryDark },
+  ampmTxt:       { fontSize:12, fontWeight:'800', color:C.textDark },
+  ampmTxtOn:     { color:C.black },
+  modeLabel:     { textAlign:'center', fontSize:10, fontWeight:'800', color:C.textLight, letterSpacing:2, marginBottom:8 },
+  clockWrap:     { alignItems:'center', paddingBottom:10 },
+  clockFace:     { backgroundColor:C.primaryGhost, borderWidth:2, borderColor:C.border, position:'relative' },
+  clockNum:      { position:'absolute', width:36, height:36, borderRadius:18, justifyContent:'center', alignItems:'center' },
+  clockNumTxt:   { fontWeight:'800' },
+  centerDot:     { position:'absolute', width:10, height:10, borderRadius:5, backgroundColor:C.primaryDark },
+  handLine:      { position:'absolute', height:3, backgroundColor:C.primaryDark, borderRadius:2 },
+  handDot:       { position:'absolute', width:20, height:20, borderRadius:10, backgroundColor:C.primary, borderWidth:3, borderColor:C.primaryDark },
+  quickMin:      { flexDirection:'row', gap:8, paddingHorizontal:16, marginBottom:12, justifyContent:'center' },
+  quickMinBtn:   { flex:1, paddingVertical:8, borderRadius:8, backgroundColor:C.primaryGhost, alignItems:'center', borderWidth:2, borderColor:C.border },
+  quickMinBtnOn: { backgroundColor:C.primary, borderColor:C.primaryDark },
+  quickMinTxt:   { fontSize:13, fontWeight:'700', color:C.textDark },
+  quickMinTxtOn: { color:C.black, fontWeight:'900' },
+  actions:       { flexDirection:'row', gap:10, padding:16, paddingTop:4 },
+  cancelBtn:     { flex:1, padding:14, borderRadius:10, borderWidth:2, borderColor:C.border, alignItems:'center' },
+  cancelTxt:     { fontWeight:'700', color:C.textDark, fontSize:14 },
+  confirmBtn:    { flex:2, padding:14, borderRadius:10, backgroundColor:C.primary, flexDirection:'row', justifyContent:'center', alignItems:'center', gap:6 },
+  confirmTxt:    { color:C.black, fontWeight:'900', fontSize:14 },
 });
 
 // ─── AVATAR ───────────────────────────────────────────────────────────────────
@@ -289,70 +896,89 @@ const Avatar = ({ uri, name, size = 60 }) => {
   }, [name]);
   return (
     <View style={{ width:size, height:size, borderRadius:size/2, overflow:'hidden', backgroundColor:C.primary, justifyContent:'center', alignItems:'center', borderWidth:2, borderColor:C.white }}>
-      {uri
-        ? <Image source={{ uri }} style={{ width:size, height:size }} />
-        : <Text style={{ color:C.white, fontSize:size*0.35, fontWeight:'900' }}>{init}</Text>
-      }
+      {uri ? <Image source={{ uri }} style={{ width:size, height:size }} /> : <Text style={{ color:C.black, fontSize:size*0.35, fontWeight:'900' }}>{init}</Text>}
     </View>
   );
 };
 
 // ─── STAT CARD ────────────────────────────────────────────────────────────────
 const StatCard = ({ label, value, iconName, onPress }) => (
-  <TouchableOpacity style={s.statCard} onPress={onPress} activeOpacity={onPress ? 0.75 : 1}>
-    <View style={s.statIconWrap}>
-      <Icon name={iconName} size={20} color={C.primary} />
-    </View>
-    <Text style={s.statValue}>{value}</Text>
+  <TouchableOpacity style={s.statCard} onPress={onPress} activeOpacity={onPress?0.75:1}>
+    <View style={s.statIconWrap}><Icon name={iconName} size={20} color={C.primaryDark} /></View>
+    <Text style={s.statValue}>{value ?? '—'}</Text>
     <Text style={s.statLabel}>{label}</Text>
   </TouchableOpacity>
 );
 
+// ─── FUEL BADGE ───────────────────────────────────────────────────────────────
+const FuelBadge = ({ fuelType, fuelCostPKR, estimatedFuel, estimatedKm, vehicleType }) => {
+  const isDiesel    = fuelType === 'diesel';
+  const consumption = PK_FUEL.consumption[vehicleType] || (isDiesel ? 15 : 12);
+  const pricePerL   = PK_FUEL.pricePerLitre[fuelType]  || (isDiesel ? 283 : 278);
+  return (
+    <View style={s.fuelBadge}>
+      <Text style={{ fontSize:20 }}>{isDiesel ? '🛢️' : '⛽'}</Text>
+      <View style={{ marginLeft:10, flex:1 }}>
+        <Text style={s.fuelBadgeType}>{isDiesel?'Diesel':'Petrol'} · {VEHICLE_INFO[vehicleType]?.label || vehicleType}</Text>
+        <Text style={s.fuelBadgeVal}>{estimatedFuel}{fuelCostPKR ? ` · ${typeof fuelCostPKR==='string'?fuelCostPKR:fmtPKR(fuelCostPKR)}` : ''}</Text>
+        <Text style={s.fuelBadgeNote}>Rs.{pricePerL}/L · {consumption}L per 100km</Text>
+      </View>
+    </View>
+  );
+};
+
 // ─── SMART ROUTE CARD ─────────────────────────────────────────────────────────
 const SmartRouteCard = ({ result, onConfirm, onDiscard, isConfirming }) => {
   const [expanded, setExpanded] = useState(false);
-  const vi = VEHICLE_INFO[result.vehicleType] || VEHICLE_INFO.van;
-  const hasWarnings = result.warnings?.length > 0;
-  const noDriver = result.isNewRoute;
-
+  const vi         = VEHICLE_INFO[result.vehicleType] || VEHICLE_INFO.van;
+  const scoreColor = result.optimizationScore >= 80 ? C.success : result.optimizationScore >= 60 ? C.warning : C.error;
   return (
-    <View style={[s.card, { borderLeftWidth:4, borderLeftColor: noDriver ? C.warning : C.primary }]}>
+    <View style={s.card}>
+      <View style={[s.cardAccentBar, { backgroundColor:C.primary }]} />
+      {/* Header */}
       <View style={{ flexDirection:'row', alignItems:'center', justifyContent:'space-between', marginBottom:12 }}>
-        <View style={{ flexDirection:'row', alignItems:'center', gap:10 }}>
-          <View style={[s.vIconWrap, { backgroundColor: noDriver ? '#FFF8E6' : C.primaryGhost }]}>
-            <Text style={{ fontSize:22 }}>{vi.icon}</Text>
-          </View>
+        <View style={{ flexDirection:'row', alignItems:'center', gap:10, flex:1 }}>
+          <View style={s.vIconWrap}><Text style={{ fontSize:24 }}>{vi.icon}</Text></View>
           <View style={{ flex:1 }}>
             <Text style={s.cardTitle} numberOfLines={1}>
-              {noDriver ? `Needs ${vi.label} Driver` : result.driverName}
+              {vi.label} · {result.areaLabel || 'Route'} ({result.passengerCount}/{result.capacity})
             </Text>
-            <View style={{ flexDirection:'row', alignItems:'center', gap:6, marginTop:3 }}>
-              <View style={s.pillBadge}>
-                <Text style={s.pillBadgeTxt}>{vi.label} · cap {vi.capacity}</Text>
+            <View style={{ flexDirection:'row', flexWrap:'wrap', gap:5, marginTop:4 }}>
+              <View style={s.chip}><Text style={s.chipTxt}>{vi.label} · cap {vi.capacity}</Text></View>
+              <View style={[s.chip, { backgroundColor:C.warningLight, borderColor:C.warning }]}>
+                <Text style={[s.chipTxt, { color:C.warning }]}>⏳ Needs Driver</Text>
               </View>
-              <View style={[s.pillBadge, { backgroundColor: result.preferenceGroup ? '#D4EDDA' : C.primaryGhost }]}>
-                <Text style={[s.pillBadgeTxt, { color: result.preferenceGroup ? '#1A5C2A' : C.textMid }]}>
-                  {result.preferenceGroup ? '🔒 Preference' : '🤖 Auto'}
-                </Text>
-              </View>
+              {result.preferenceGroup && (
+                <View style={[s.chip, { backgroundColor:C.successLight, borderColor:C.success }]}>
+                  <Text style={[s.chipTxt, { color:C.success }]}>🔒 Preference</Text>
+                </View>
+              )}
             </View>
           </View>
         </View>
-        <View style={{ alignItems:'flex-end' }}>
-          <Text style={s.paxBig}>{result.passengerCount}</Text>
-          <Text style={{ fontSize:10, color:C.textLight, fontWeight:'600' }}>passengers</Text>
+        <View style={[s.scoreBubble, { borderColor:scoreColor }]}>
+          <Text style={[s.scoreNum, { color:scoreColor }]}>{result.optimizationScore}</Text>
+          <Text style={s.scoreLbl}>%</Text>
         </View>
       </View>
 
+      {result.destination && (
+        <View style={[s.detailRow, { backgroundColor:C.primaryGhost, borderRadius:8, padding:9, marginBottom:10 }]}>
+          <Icon name="flag" size={14} color={C.primaryDark} />
+          <Text style={[s.detailTxt, { fontWeight:'700' }]} numberOfLines={2}>{result.destination}</Text>
+        </View>
+      )}
+
+      {/* Stats row */}
       <View style={s.statsRow}>
         {[
-          { i:'schedule',          v:result.estimatedTime, l:'Time'  },
-          { i:'local-gas-station', v:result.estimatedFuel, l:'Fuel'  },
-          { i:'straighten',        v:result.estimatedKm,   l:'Dist.' },
+          { i:'straighten',        v:result.estimatedKm,   l:'Road Dist.' },
+          { i:'schedule',          v:result.estimatedTime, l:'Est. Time'  },
+          { i:'local-gas-station', v:result.estimatedFuel, l:'Fuel'       },
         ].map((item, idx, arr) => (
           <React.Fragment key={idx}>
             <View style={s.statBox}>
-              <Icon name={item.i} size={16} color={C.primary} />
+              <Icon name={item.i} size={16} color={C.primaryDark} />
               <Text style={s.statBoxVal}>{item.v}</Text>
               <Text style={s.statBoxLbl}>{item.l}</Text>
             </View>
@@ -361,54 +987,73 @@ const SmartRouteCard = ({ result, onConfirm, onDiscard, isConfirming }) => {
         ))}
       </View>
 
-      {result.matrixSource && (
-        <View style={s.srcBadge}>
-          <Icon name={result.matrixSource === 'osrm' ? 'wifi' : 'offline-bolt'} size={11} color={C.primary} />
-          <Text style={s.srcTxt}>{result.matrixSource === 'osrm' ? 'OSRM (live)' : 'Haversine (offline)'}</Text>
-        </View>
-      )}
+      <FuelBadge
+        fuelType={result.fuelType} fuelCostPKR={result.fuelCostPKR}
+        estimatedFuel={result.estimatedFuel} estimatedKm={result.estimatedKm}
+        vehicleType={result.vehicleType} />
+
+      <View style={s.srcBadge}>
+        <Icon name={result.matrixSource==='osrm'?'map':'offline-bolt'} size={12} color={C.primaryDark} />
+        <Text style={s.srcTxt}>
+          {result.matrixSource==='osrm' ? '🗺 OSRM (real road data, free)' : '📐 Haversine estimate (OSRM unavailable)'}
+        </Text>
+      </View>
+
+      <View style={[s.srcBadge, { marginTop:6, backgroundColor:C.primaryGhost, borderColor:C.border }]}>
+        <Icon name="calculate" size={12} color={C.primaryDark} />
+        <Text style={s.srcTxt}>
+          {result.estimatedKm} × Rs.{result.fuelType==='diesel'?283:278}/L @ {PK_FUEL.consumption[result.vehicleType]||15}L/100km = {result.fuelCostPKR}
+        </Text>
+      </View>
 
       <TouchableOpacity style={s.stopsHeader} onPress={() => setExpanded(!expanded)}>
-        <Text style={s.stopsTitle}>Route Stops ({result.stops.length})</Text>
-        <Icon name={expanded ? 'expand-less' : 'expand-more'} size={20} color={C.primary} />
+        <Text style={s.stopsTitle}>Route Stops ({result.stops?.length || 0})</Text>
+        <Icon name={expanded?'expand-less':'expand-more'} size={22} color={C.primaryDark} />
       </TouchableOpacity>
 
-      {expanded && result.stops.map((stop, i) => (
+      {expanded && (result.stops || []).map((stop, i) => (
         <View key={i} style={s.stopRow}>
-          <View style={[s.stopDot, { backgroundColor: stop.type === 'pickup' ? C.primary : C.primaryDark }]} />
-          <View style={s.stopLineWrap}>
-            {i < result.stops.length-1 && <View style={s.stopLine} />}
-          </View>
+          <View style={[s.stopDot, { backgroundColor:stop.type==='pickup'?C.primary:C.primaryDark }]} />
           <View style={{ flex:1 }}>
             <Text style={s.stopName}>
-              {stop.name}
-              <Text style={{ fontWeight:'700', color: stop.type === 'pickup' ? C.primary : C.primaryDark }}>
-                {' '}{stop.type === 'pickup' ? '↑ Pickup' : '↓ Drop-off'}
-              </Text>
+              {typeof stop==='string' ? stop : stop.name}
+              {typeof stop !== 'string' && (
+                <Text style={{ fontWeight:'700', color:stop.type==='pickup'?C.primaryDark:C.textLight }}>
+                  {' '}{stop.type==='pickup'?'↑ Pickup':'↓ Drop-off'}
+                </Text>
+              )}
             </Text>
-            {stop.address && <Text style={s.stopAddr} numberOfLines={1}>{stop.address}</Text>}
+            {typeof stop!=='string' && stop.address && (
+              <Text style={s.stopAddr} numberOfLines={2}>{stop.address}</Text>
+            )}
+            {typeof stop!=='string' && stop.lat && stop.lng && (
+              <Text style={{ fontSize:10, color:C.textLight, marginTop:1 }}>
+                {stop.lat.toFixed(5)}, {stop.lng.toFixed(5)}
+              </Text>
+            )}
           </View>
         </View>
       ))}
 
       {expanded && result.passengers?.length > 0 && (
-        <View style={{ marginTop:10 }}>
-          <Text style={s.stopsTitle}>Passengers</Text>
+        <View style={{ marginTop:8 }}>
+          <Text style={s.stopsTitle}>Passengers ({result.passengers.length})</Text>
           {result.passengers.map((p, i) => (
             <View key={i} style={s.paxRow}>
               <View style={s.paxAvatar}>
-                <Text style={{ fontSize:11, fontWeight:'800', color:C.primary }}>
+                <Text style={{ fontSize:11, fontWeight:'900', color:C.primaryDark }}>
                   {(p.name||'P').split(' ').map(w=>w[0]).join('').substring(0,2).toUpperCase()}
                 </Text>
               </View>
               <View style={{ flex:1 }}>
                 <Text style={{ fontSize:13, fontWeight:'700', color:C.textDark }}>{p.name}</Text>
-                {p.vehiclePreference && (
-                  <View style={[s.pillBadge, { backgroundColor:'#D4EDDA', alignSelf:'flex-start', marginTop:2 }]}>
-                    <Text style={[s.pillBadgeTxt, { color:'#1A5C2A' }]}>
-                      Prefers {VEHICLE_INFO[p.vehiclePreference]?.icon} {p.vehiclePreference}
-                    </Text>
-                  </View>
+                {p.pickupAddress && (
+                  <Text style={{ fontSize:11, color:C.textLight }} numberOfLines={1}>📍 {p.pickupAddress}</Text>
+                )}
+                {p.pickupLat !== 0 && p.pickupLng !== 0 && (
+                  <Text style={{ fontSize:10, color:C.textLight }}>
+                    🌐 {parseFloat(p.pickupLat).toFixed(5)}, {parseFloat(p.pickupLng).toFixed(5)}
+                  </Text>
                 )}
               </View>
             </View>
@@ -416,23 +1061,27 @@ const SmartRouteCard = ({ result, onConfirm, onDiscard, isConfirming }) => {
         </View>
       )}
 
-      {hasWarnings && result.warnings.map((w, i) => (
+      {(result.warnings || []).map((w, i) => (
         <View key={i} style={s.warnBox}>
           <Icon name="warning" size={13} color={C.warning} />
           <Text style={s.warnTxt}>{w}</Text>
         </View>
       ))}
 
+      <View style={[s.warnBox, { backgroundColor:C.primaryGhost, borderColor:C.border }]}>
+        <Icon name="info-outline" size={13} color={C.primaryDark} />
+        <Text style={[s.warnTxt, { color:C.textMid }]}>Assign a driver via "Assign Driver" screen</Text>
+      </View>
+
       <View style={s.twoBtn}>
         <TouchableOpacity style={s.discardBtn} onPress={onDiscard}>
           <Icon name="delete-outline" size={16} color={C.white} />
           <Text style={s.btnTxt}>Discard</Text>
         </TouchableOpacity>
-        <TouchableOpacity style={[s.confirmBtn2, isConfirming && { opacity:0.6 }]} onPress={onConfirm} disabled={isConfirming}>
+        <TouchableOpacity style={[s.confirmBtnGreen, isConfirming&&{opacity:0.6}]} onPress={onConfirm} disabled={isConfirming}>
           {isConfirming
-            ? <ActivityIndicator size="small" color={C.white} />
-            : <><Icon name="check-circle" size={16} color={C.white} /><Text style={s.btnTxt}>Confirm Route</Text></>
-          }
+            ? <ActivityIndicator size="small" color={C.black} />
+            : <><Icon name="save" size={16} color={C.black} /><Text style={[s.btnTxt,{color:C.black}]}>Save Route</Text></>}
         </TouchableOpacity>
       </View>
     </View>
@@ -441,56 +1090,53 @@ const SmartRouteCard = ({ result, onConfirm, onDiscard, isConfirming }) => {
 
 // ─── REQUEST CARD ─────────────────────────────────────────────────────────────
 const RequestCard = ({ req, onAccept, onReject, isProcessing }) => {
-  const vInfo = VEHICLE_INFO[req.vehicleType || req.vehicle_type] || null;
+  const vInfo = VEHICLE_INFO[req.vehicleType  || req.vehicle_type]   || null;
   const pInfo = VEHICLE_INFO[req.vehiclePreference || req.vehicle_preference] || null;
   return (
     <View style={s.card}>
-      <View style={{ flexDirection:'row', alignItems:'center', gap:10, marginBottom:12 }}>
-        <View style={s.reqAvatar}>
-          <Text style={{ fontSize:22 }}>{req.type === 'driver' ? '🚗' : '👤'}</Text>
-        </View>
+      <View style={[s.cardAccentBar, { backgroundColor:req.type==='driver'?C.primaryDark:C.primary }]} />
+      <View style={{ flexDirection:'row', alignItems:'center', gap:12, marginBottom:12 }}>
+        <View style={s.reqAvatar}><Text style={{ fontSize:24 }}>{req.type==='driver'?'🚗':'👤'}</Text></View>
         <View style={{ flex:1 }}>
           <Text style={s.cardTitle}>{req.name || req.fullName}</Text>
-          <View style={[s.pillBadge, { marginTop:4 }]}>
-            <Text style={s.pillBadgeTxt}>{req.type === 'driver' ? 'Driver Request' : 'Passenger Request'}</Text>
+          <View style={[s.chip,{marginTop:4}]}>
+            <Text style={s.chipTxt}>{req.type==='driver'?'Driver Request':'Passenger Request'}</Text>
           </View>
         </View>
       </View>
-      <View style={{ gap:6, marginBottom:12 }}>
-        {req.email       && <View style={s.detailRow}><Icon name="email"       size={13} color={C.primary} /><Text style={s.detailTxt}>{req.email}</Text></View>}
-        {req.phone       && <View style={s.detailRow}><Icon name="phone"       size={13} color={C.primary} /><Text style={s.detailTxt}>{req.phone}</Text></View>}
-        {req.license     && <View style={s.detailRow}><Icon name="credit-card" size={13} color={C.primary} /><Text style={s.detailTxt}>License: {req.license}</Text></View>}
-        {req.pickupPoint && <View style={s.detailRow}><Icon name="place"       size={13} color={C.primary} /><Text style={s.detailTxt}>{req.pickupPoint}</Text></View>}
-        {req.destination && <View style={s.detailRow}><Icon name="flag"        size={13} color={C.primary} /><Text style={s.detailTxt}>{req.destination}</Text></View>}
+      <View style={{ gap:7, marginBottom:12 }}>
+        {req.email       && <View style={s.detailRow}><Icon name="email"       size={14} color={C.primaryDark}/><Text style={s.detailTxt}>{req.email}</Text></View>}
+        {req.phone       && <View style={s.detailRow}><Icon name="phone"       size={14} color={C.primaryDark}/><Text style={s.detailTxt}>{req.phone}</Text></View>}
+        {req.license     && <View style={s.detailRow}><Icon name="credit-card" size={14} color={C.primaryDark}/><Text style={s.detailTxt}>License: {req.license}</Text></View>}
+        {req.pickupPoint && <View style={s.detailRow}><Icon name="place"       size={14} color={C.primaryDark}/><Text style={s.detailTxt}>{req.pickupPoint}</Text></View>}
+        {req.destination && <View style={s.detailRow}><Icon name="flag"        size={14} color={C.primaryDark}/><Text style={s.detailTxt}>{req.destination}</Text></View>}
       </View>
       {vInfo && (
         <View style={s.vBadge}>
-          <Text style={{ fontSize:20 }}>{vInfo.icon}</Text>
+          <Text style={{ fontSize:22 }}>{vInfo.icon}</Text>
           <View style={{ marginLeft:10 }}>
-            <Text style={s.vBadgeLbl}>Vehicle Type</Text>
+            <Text style={s.vBadgeLbl}>VEHICLE TYPE</Text>
             <Text style={s.vBadgeVal}>{vInfo.label} — {vInfo.desc}</Text>
           </View>
         </View>
       )}
       {pInfo && (
-        <View style={[s.vBadge, { marginTop:8, backgroundColor:'#D4EDDA', borderColor:'#A5D6A7' }]}>
-          <Text style={{ fontSize:20 }}>{pInfo.icon}</Text>
+        <View style={[s.vBadge,{ marginTop:8, backgroundColor:C.successLight, borderColor:C.success }]}>
+          <Text style={{ fontSize:22 }}>{pInfo.icon}</Text>
           <View style={{ marginLeft:10 }}>
-            <Text style={s.vBadgeLbl}>Travel Preference 🔒</Text>
-            <Text style={[s.vBadgeVal, { color:'#1A5C2A' }]}>{pInfo.label} only — {pInfo.desc}</Text>
+            <Text style={[s.vBadgeLbl,{ color:C.success }]}>TRAVEL PREFERENCE 🔒</Text>
+            <Text style={[s.vBadgeVal,{ color:C.success }]}>{pInfo.label} only — {pInfo.desc}</Text>
           </View>
         </View>
       )}
       <View style={s.twoBtn}>
         <TouchableOpacity style={s.rejectBtn} onPress={onReject} disabled={isProcessing}>
-          <Icon name="close" size={16} color={C.white} />
-          <Text style={s.btnTxt}>Reject</Text>
+          <Icon name="close" size={16} color={C.white} /><Text style={s.btnTxt}>Reject</Text>
         </TouchableOpacity>
         <TouchableOpacity style={s.acceptBtn} onPress={onAccept} disabled={isProcessing}>
           {isProcessing
-            ? <ActivityIndicator size="small" color={C.white} />
-            : <><Icon name="check" size={16} color={C.white} /><Text style={s.btnTxt}>Accept</Text></>
-          }
+            ? <ActivityIndicator size="small" color={C.black} />
+            : <><Icon name="check" size={16} color={C.black}/><Text style={[s.btnTxt,{color:C.black}]}>Accept</Text></>}
         </TouchableOpacity>
       </View>
     </View>
@@ -498,35 +1144,35 @@ const RequestCard = ({ req, onAccept, onReject, isProcessing }) => {
 };
 
 // ─── DRIVER CARD ──────────────────────────────────────────────────────────────
-const DriverCard = ({ driver }) => {
+const DriverCard = ({ driver, compact = false }) => {
   const vi   = VEHICLE_INFO[driver.vehicleType || driver.vehicle] || VEHICLE_INFO.van;
   const cap  = vi.capacity || driver.capacity || 8;
   const fill = driver.passengers?.length || 0;
-  const pct  = Math.min((fill / cap) * 100, 100);
+  const pct  = Math.min((fill/cap)*100, 100);
   return (
-    <View style={s.driverCard}>
-      <View style={[s.driverAvatar, { backgroundColor:C.primary }]}>
+    <View style={[s.driverCard, compact && { flex:1, marginBottom:0, borderWidth:0, elevation:0, shadowOpacity:0, padding:0, backgroundColor:'transparent' }]}>
+      <View style={s.driverAvatar}>
         <Text style={s.driverAvatarTxt}>
           {(driver.name||'D').split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase()}
         </Text>
-        <View style={[s.driverDot, { backgroundColor: driver.status==='active' ? '#22C55E' : C.border }]} />
+        <View style={[s.driverDot, { backgroundColor:driver.status==='active'?C.success:C.border }]} />
       </View>
       <View style={{ flex:1 }}>
         <View style={{ flexDirection:'row', justifyContent:'space-between', alignItems:'center' }}>
           <Text style={s.driverName} numberOfLines={1}>{driver.name}</Text>
-          <Text style={{ fontSize:16 }}>{vi.icon}</Text>
+          <Text style={{ fontSize:18 }}>{vi.icon}</Text>
         </View>
-        <Text style={s.driverSub} numberOfLines={1}>{vi.label} · cap {cap}</Text>
+        <Text style={s.driverSub}>{vi.label} · cap {cap}</Text>
         <View style={s.capRow}>
           <Text style={s.capTxt}>{fill}/{cap}</Text>
           <View style={s.capBg}>
-            <View style={[s.capFill, { width:`${pct}%`, backgroundColor: pct>80 ? C.error : C.primary }]} />
+            <View style={[s.capFill, { width:`${pct}%`, backgroundColor:pct>80?C.error:C.primary }]} />
           </View>
         </View>
         {driver.phone && (
-          <View style={{ flexDirection:'row', alignItems:'center', gap:3, marginTop:3 }}>
-            <Icon name="phone" size={10} color={C.textLight} />
-            <Text style={{ fontSize:10, color:C.textLight }}>{driver.phone}</Text>
+          <View style={{ flexDirection:'row', alignItems:'center', gap:4, marginTop:3 }}>
+            <Icon name="phone" size={11} color={C.textLight} />
+            <Text style={{ fontSize:11, color:C.textLight }}>{driver.phone}</Text>
           </View>
         )}
       </View>
@@ -534,144 +1180,225 @@ const DriverCard = ({ driver }) => {
   );
 };
 
-// ─── MAIN DASHBOARD ───────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════
+// MAIN DASHBOARD COMPONENT
+// ══════════════════════════════════════════════════════════════════
 const TransporterDashboard = () => {
-  const navigation   = useNavigation();
-  const [section,    setSection]    = useState('overview');
-  const [sidebar,    setSidebar]    = useState(false);
-  const [loading,    setLoading]    = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const slideAnim = useRef(new Animated.Value(-295)).current;
+  const navigation = useNavigation();
+  const [section,        setSection]        = useState('overview');
+  const [sidebar,        setSidebar]        = useState(false);
+  const [loading,        setLoading]        = useState(true);
+  const [refreshing,     setRefreshing]     = useState(false);
+  const slideAnim = useRef(new Animated.Value(-300)).current;
 
-  const [profile,       setProfile]       = useState(null);
-  const [editProfile,   setEditProfile]   = useState(null);
-  const [isEditingPro,  setIsEditingPro]  = useState(false);
-  const [stats,         setStats]         = useState({ activeDrivers:0, totalPassengers:0, completedTrips:0, ongoingTrips:0, complaints:0, paymentsReceived:0, paymentsPending:0 });
-  const [polls,         setPolls]         = useState([]);
-  const [drivers,       setDrivers]       = useState([]);
-  const [routes,        setRoutes]        = useState([]);
-  const [trips,         setTrips]         = useState([]);
-  const [driverReqs,    setDriverReqs]    = useState([]);
-  const [passReqs,      setPassReqs]      = useState([]);
-  const [complaints,    setComplaints]    = useState([]);
-  const [notifications, setNotifications] = useState([]);
-  const [smartResults,  setSmartResults]  = useState([]);
-  const [optimizing,    setOptimizing]    = useState(false);
-  const [confirmingIdx, setConfirmingIdx] = useState(null);
-  const [activePoll,    setActivePoll]    = useState(null);
-  const [selectedPoll,  setSelectedPoll]  = useState(null);
-  const [lastUpdated,   setLastUpdated]   = useState(new Date());
+  const [profile,        setProfile]        = useState(null);
+  const [editProfile,    setEditProfile]    = useState(null);
+  const [isEditingPro,   setIsEditingPro]   = useState(false);
+  const [stats,          setStats]          = useState({ activeDrivers:0, totalPassengers:0, completedTrips:0, ongoingTrips:0, complaints:0, paymentsReceived:0, paymentsPending:0 });
+  const [polls,          setPolls]          = useState([]);
+  const [drivers,        setDrivers]        = useState([]);
+  const [routes,         setRoutes]         = useState([]);
+  const [trips,          setTrips]          = useState([]);
+  const [driverReqs,     setDriverReqs]     = useState([]);
+  const [passReqs,       setPassReqs]       = useState([]);
+  const [complaints,     setComplaints]     = useState([]);
+  const [notifications,  setNotifications]  = useState([]);
+  const [smartResults,   setSmartResults]   = useState([]);
+  const [optimizing,     setOptimizing]     = useState(false);
+  const [optimizeStatus, setOptimizeStatus] = useState('');
+  const [confirmingIdx,  setConfirmingIdx]  = useState(null);
+  const [activePoll,     setActivePoll]     = useState(null);
+  const [selectedPoll,   setSelectedPoll]   = useState(null);
+  const [lastUpdated,    setLastUpdated]    = useState(new Date());
 
   useEffect(() => { checkAuthAndLoad(); }, []);
 
   useEffect(() => {
-    Animated.spring(slideAnim, { toValue: sidebar ? 0 : -295, useNativeDriver: true, tension: 80, friction: 12 }).start();
+    Animated.spring(slideAnim, {
+      toValue: sidebar ? 0 : -300,
+      useNativeDriver: true,
+      tension: 80,
+      friction: 12,
+    }).start();
   }, [sidebar]);
 
   const checkAuthAndLoad = async () => {
     const { token, transporterId } = await api.getAuthData();
-    if (!token || !transporterId) { navigation.reset({ index:0, routes:[{ name:'TransporterLogin' }] }); return; }
+    if (!token || !transporterId) {
+      navigation.reset({ index:0, routes:[{ name:'TransporterLogin' }] });
+      return;
+    }
     await loadAll();
   };
 
   const loadAll = async () => {
     try {
       setLoading(true);
-      const [p, st, po, dr, req_d, req_p, rt, tr, co, no] = await Promise.allSettled([
+      const [p,st,po,dr,req_d,req_p,rt,tr,co,no] = await Promise.allSettled([
         api.getProfile(), api.getStats(), api.getPolls(), api.getDrivers(),
         api.getDriverRequests(), api.getPassengerRequests(),
         api.getRoutes(), api.getTrips(), api.getComplaints(), api.getNotifications(),
       ]);
-      if (p.status==='fulfilled'   && p.value)    setProfile(p.value);
-      if (st.status==='fulfilled'  && st.value)   setStats(st.value);
-      if (po.status==='fulfilled'  && po.value)   setPolls(po.value);
-      if (dr.status==='fulfilled'  && dr.value)   setDrivers(dr.value);
-      if (req_d.status==='fulfilled') setDriverReqs(req_d.value||[]);
-      if (req_p.status==='fulfilled') setPassReqs(req_p.value||[]);
-      if (rt.status==='fulfilled')    setRoutes(rt.value||[]);
-      if (tr.status==='fulfilled')    setTrips(tr.value||[]);
-      if (co.status==='fulfilled')    setComplaints(co.value||[]);
-      if (no.status==='fulfilled')    setNotifications(no.value||[]);
+      if (p.status==='fulfilled'    && p.value)    setProfile(p.value);
+      if (st.status==='fulfilled'   && st.value)   setStats(st.value);
+      if (po.status==='fulfilled'   && po.value)   setPolls(po.value);
+      if (dr.status==='fulfilled'   && dr.value)   setDrivers(dr.value);
+      if (req_d.status==='fulfilled')              setDriverReqs(req_d.value || []);
+      if (req_p.status==='fulfilled')              setPassReqs(req_p.value || []);
+      if (rt.status==='fulfilled')                 setRoutes(rt.value || []);
+      if (tr.status==='fulfilled')                 setTrips(tr.value || []);
+      if (co.status==='fulfilled')                 setComplaints(co.value || []);
+      if (no.status==='fulfilled')                 setNotifications(no.value || []);
       setLastUpdated(new Date());
     } catch (e) {
       if (e.message?.includes('Authentication')) {
-        Alert.alert('Session Expired', 'Please login again.', [{ text:'OK', onPress:() => navigation.reset({ index:0, routes:[{ name:'TransporterLogin' }] }) }]);
+        Alert.alert('Session Expired', 'Please login again.', [{
+          text: 'OK',
+          onPress: () => navigation.reset({ index:0, routes:[{ name:'TransporterLogin' }] }),
+        }]);
       }
-    } finally { setLoading(false); }
+    } finally {
+      setLoading(false);
+    }
   };
 
-  const onRefresh = useCallback(() => { setRefreshing(true); loadAll().finally(() => setRefreshing(false)); }, []);
-  const unread = useMemo(() => notifications.filter(n => !n.read).length, [notifications]);
-  const totalBadge = driverReqs.length + passReqs.length + unread + smartResults.length;
-  const nav = (sec) => { setSection(sec); setSidebar(false); };
+  const onRefresh = useCallback(() => {
+    setRefreshing(true);
+    loadAll().finally(() => setRefreshing(false));
+  }, []);
 
+  const unread     = useMemo(() => notifications.filter(n => !n.read).length, [notifications]);
+  const totalBadge = driverReqs.length + passReqs.length + unread + smartResults.length;
+  const nav        = (sec) => { setSection(sec); setSidebar(false); };
+
+  // ─── OPTIMIZE ─────────────────────────────────────────────────────────────
+  // FIX 3: `optimizer` is now defined at module level, so this works correctly
   const handleOptimize = async (poll) => {
     if (!poll) { Alert.alert('No Poll', 'Select a poll first.'); return; }
-    setOptimizing(true); setActivePoll(poll); setSmartResults([]);
+    setOptimizing(true);
+    setActivePoll(poll);
+    setSmartResults([]);
+    setOptimizeStatus('Preparing passenger data...');
     try {
-      const passengers = (poll.responses||[]).filter(r => r.response==='yes').map((r,i) => ({
-        id: r.passengerId||r._id||`p_${i}`, name: r.passengerName||'Passenger',
-        vehiclePreference: r.vehiclePreference||null,
-        pickupLocation: r.pickupLocation||null, pickupLat: r.pickupLat||null, pickupLng: r.pickupLng||null,
-        pickupAddress: r.pickupPoint||r.pickupAddress||'Pickup',
-        dropLocation: r.dropLocation||null, dropLat: r.dropLat||null, dropLng: r.dropLng||null,
-        dropAddress: r.destination||r.dropAddress||'Drop-off',
-        timeSlot: r.selectedTimeSlot||r.timeSlot||poll.timeSlots?.[0]||'08:00 AM',
+      const yesResponses = (poll.responses || []).filter(r => r.response === 'yes');
+      if (!yesResponses.length) {
+        Alert.alert('No Passengers', 'No passengers responded "Yes".');
+        return;
+      }
+
+      const passengers = yesResponses.map((r, i) => ({
+        id:                r.passengerId || r._id?.$oid || r._id || `p_${i}`,
+        name:              r.passengerName || r.name || 'Passenger',
+        pickupLat:         parseFloat(r.pickupLat  || r.latitude  || 0),
+        pickupLng:         parseFloat(r.pickupLng  || r.longitude || 0),
+        pickupAddress:     r.pickupPoint || r.pickupAddress || r.address || '',
+        dropLat:           parseFloat(r.dropLat || r.destinationLatitude  || 33.6135),
+        dropLng:           parseFloat(r.dropLng || r.destinationLongitude || 73.1998),
+        dropAddress:       r.destination || r.dropAddress || r.destinationAddress || 'Riphah International University',
+        vehiclePreference: r.vehiclePreference || null,
+        timeSlot:          r.selectedTimeSlot || r.timeSlot || null,
       }));
-      if (!passengers.length) { Alert.alert('No Passengers', 'No passengers responded "Yes".'); setOptimizing(false); return; }
-      const driversPayload = drivers.map(d => ({ id: d._id||d.id, name: d.name, vehicleType: d.vehicleType||d.vehicle||'van', currentLocation: d.currentLocation||null, lat: d.latitude||null, lng: d.longitude||null, capacity: VEHICLE_CAPS[d.vehicleType||d.vehicle||'van']||8 }));
-      const res = await api.optimizeRoutes(passengers, driversPayload, poll._id);
-      if (res.success && Array.isArray(res.routes)) {
-        setSmartResults(res.routes); nav('smart-route');
-        if (res.routes.length === 0) Alert.alert('No Routes', 'No routes could be generated.');
-      } else { Alert.alert('Error', res.error||'Optimization failed'); }
-    } catch (err) { Alert.alert('Error', 'Could not reach the optimizer.'); }
-    finally { setOptimizing(false); }
+
+      // FIX 3: optimizer is the module-level instance of RouteOptimizationEngine
+      const results = await optimizer.optimize(passengers, (msg) => setOptimizeStatus(msg));
+
+      if (!results.length) {
+        Alert.alert('No Routes', 'Could not generate routes from the given passenger data.');
+        return;
+      }
+
+      setSmartResults(results);
+      nav('smart-route');
+
+      const totalPax    = results.reduce((s, r) => s + r.passengerCount, 0);
+      const totalFuel   = results.reduce((s, r) => s + (r.rawFuelCostPKR || 0), 0);
+      const avgScore    = Math.round(results.reduce((s, r) => s + r.optimizationScore, 0) / results.length);
+      const totalLitres = results.reduce((s, r) => s + (r.rawFuelLitres || 0), 0);
+
+      Alert.alert(
+        `✅ ${results.length} Route${results.length!==1?'s':''} Ready!`,
+        `Passengers: ${totalPax}\nFuel: ${totalLitres.toFixed(1)} L\nCost: ${fmtPKR(totalFuel)}\nEfficiency: ${avgScore}%`,
+        [
+          { text: 'View Routes', onPress: () => nav('smart-route') },
+          { text: 'OK', style: 'cancel' },
+        ]
+      );
+    } catch (err) {
+      Alert.alert('Error', `Could not build routes: ${err.message}`);
+      console.error('handleOptimize error:', err);
+    } finally {
+      setOptimizing(false);
+      setOptimizeStatus('');
+    }
   };
 
   const handleConfirmRoute = async (result, idx) => {
     setConfirmingIdx(idx);
     try {
-      if (!activePoll) throw new Error('No active poll');
-      await api.assignRouteFromPoll(activePoll._id, {
-        driverId: result.driverId,
-        routeName: result.driverName ? `${result.driverName} - ${new Date().toLocaleDateString()}` : `Route ${idx+1} - ${new Date().toLocaleDateString()}`,
-        timeSlot: result.passengers?.[0]?.timeSlot||'08:00 AM',
-        vehicleType: result.vehicleType, passengers: result.passengers, stops: result.stops,
-        estimatedTime: result.estimatedTime, estimatedFuel: result.estimatedFuel, estimatedKm: result.estimatedKm,
-      });
-      setSmartResults(prev => prev.filter((_,i) => i !== idx));
-      Alert.alert('Route Confirmed! ✅', `${result.driverName||'Route'} assigned with ${result.passengerCount} passenger(s).\n⏱ ${result.estimatedTime}  ⛽ ${result.estimatedFuel}  📏 ${result.estimatedKm}`);
+      if (!activePoll) throw new Error('No active poll selected');
+      const destination = result.destination
+        || result.passengers?.[0]?.dropAddress
+        || result.stops?.find(s => s.type==='dropoff')?.address
+        || 'Riphah International University';
+
+      const payload = {
+        pollId:       activePoll._id,
+        routeName:    `${VEHICLE_INFO[result.vehicleType]?.label||'Vehicle'} Route — ${result.passengerCount} pax · ${result.areaLabel}`,
+        timeSlot:     result.passengers?.[0]?.timeSlot || '08:00 AM',
+        vehicleType:  result.vehicleType,
+        startPoint:   result.stops?.[0]?.address || 'Multiple Pickup Points',
+        destination,
+        passengers:   result.passengers,
+        stops:        result.stops,
+        estimatedTime: result.estimatedTime,
+        estimatedFuel: result.estimatedFuel,
+        estimatedKm:   result.estimatedKm,
+        fuelCostPKR:   result.fuelCostPKR,
+        fuelType:      result.fuelType,
+        fuelRatePerKm: result.fuelRatePerKm,
+        transporterId: (await api.getAuthData()).transporterId,
+      };
+
+      await api.saveUnassignedRoute(payload);
+      setSmartResults(prev => prev.filter((_, i) => i !== idx));
+
+      Alert.alert(
+        'Route Saved ✅',
+        `${VEHICLE_INFO[result.vehicleType]?.label} · ${result.passengerCount} pax\n⏱ ${result.estimatedTime}  📏 ${result.estimatedKm}\n⛽ ${result.estimatedFuel} (${result.fuelCostPKR})`,
+        [
+          { text: 'Assign Driver', onPress: () => nav('assign') },
+          { text: 'OK', style: 'cancel' },
+        ]
+      );
       await loadAll();
-    } catch (err) { Alert.alert('Error', err.message||'Could not assign route.'); }
-    finally { setConfirmingIdx(null); }
+    } catch (err) {
+      Alert.alert('Error', err.message || 'Could not save route.');
+    } finally {
+      setConfirmingIdx(null);
+    }
   };
 
-  const handleDiscardRoute = (idx) => {
+  const handleDiscardRoute = (idx) =>
     Alert.alert('Discard Route?', 'This suggestion will be removed.', [
-      { text:'Cancel', style:'cancel' },
-      { text:'Discard', style:'destructive', onPress:() => setSmartResults(prev => prev.filter((_,i)=>i!==idx)) },
+      { text: 'Cancel', style: 'cancel' },
+      { text: 'Discard', style: 'destructive', onPress: () => setSmartResults(prev => prev.filter((_,i) => i!==idx)) },
     ]);
-  };
 
-  const logout = () => {
-    Alert.alert('Logout', 'Are you sure?', [
-      { text:'Cancel', style:'cancel' },
-      { text:'Logout', style:'destructive', onPress: async () => {
-        await AsyncStorage.multiRemove(['authToken','transporterId','userId','transporterData']);
-        navigation.reset({ index:0, routes:[{ name:'TransporterLogin' }] });
-      }},
-    ]);
-  };
+  const logout = () => Alert.alert('Logout', 'Are you sure?', [
+    { text: 'Cancel', style: 'cancel' },
+    { text: 'Logout', style: 'destructive', onPress: async () => {
+      await AsyncStorage.multiRemove(['authToken','transporterId','userId','transporterData']);
+      navigation.reset({ index:0, routes:[{ name:'TransporterLogin' }] });
+    }},
+  ]);
 
   // ─── SIDEBAR ──────────────────────────────────────────────────────────────
-  const Sidebar = () => (
+  const SidebarView = () => (
     <Animated.View style={[s.sidebar, { transform:[{ translateX:slideAnim }] }]}>
-      {/* Sidebar Header */}
       <View style={s.sidebarHdr}>
-        <Avatar uri={profile?.profileImage} name={profile?.name} size={48} />
-        <View style={{ marginLeft:12, flex:1 }}>
-          <Text style={s.sidebarName} numberOfLines={1}>{profile?.name || 'Loading...'}</Text>
+        <Avatar uri={profile?.profileImage} name={profile?.name} size={50} />
+        <View style={{ marginLeft:14, flex:1 }}>
+          <Text style={s.sidebarName} numberOfLines={1}>{profile?.name || 'Transporter'}</Text>
           <Text style={s.sidebarCo}   numberOfLines={1}>{profile?.company || 'Transport Co.'}</Text>
           <View style={s.sidebarStatus}>
             <View style={s.sidebarDot} />
@@ -679,775 +1406,669 @@ const TransporterDashboard = () => {
           </View>
         </View>
         <TouchableOpacity onPress={() => setSidebar(false)} style={s.sidebarClose}>
-          <Icon name="close" size={18} color={C.primary} />
+          <Icon name="close" size={20} color={C.white} />
         </TouchableOpacity>
       </View>
-
-      <ScrollView showsVerticalScrollIndicator={false}>
-        {MENU_ITEMS.map(item => {
-          const active = section === item.key;
-          const badge = item.key==='notifications' ? unread : item.key==='driver-req' ? driverReqs.length : item.key==='pass-req' ? passReqs.length : item.key==='smart-route' ? smartResults.length : 0;
-          return (
-            <TouchableOpacity key={item.key} style={[s.menuItem, active && s.menuItemOn]} onPress={() => nav(item.key)}>
-              {active && <View style={s.menuBar} />}
-              <View style={[s.menuIconWrap, active && s.menuIconOn]}>
-                <Icon name={item.icon} size={18} color={active ? C.white : C.textLight} />
-              </View>
-              <Text style={[s.menuTxt, active && s.menuTxtOn]}>{item.label}</Text>
-              {badge > 0 && (
-                <View style={s.menuBadge}>
-                  <Text style={s.menuBadgeTxt}>{badge > 9 ? '9+' : badge}</Text>
+      <ScrollView showsVerticalScrollIndicator={false} style={{ flex:1 }}>
+        <View style={{ paddingVertical:8 }}>
+          {MENU_ITEMS.map(item => {
+            const active = section === item.key;
+            const badge  = item.key==='notifications' ? unread
+              : item.key==='driver-req'  ? driverReqs.length
+              : item.key==='pass-req'    ? passReqs.length
+              : item.key==='smart-route' ? smartResults.length : 0;
+            return (
+              <TouchableOpacity key={item.key} style={[s.menuItem, active&&s.menuItemOn]} onPress={() => nav(item.key)}>
+                {active && <View style={s.menuBar} />}
+                <View style={[s.menuIconWrap, active&&s.menuIconOn]}>
+                  <Icon name={item.icon} size={18} color={active?C.black:C.textLight} />
                 </View>
-              )}
-            </TouchableOpacity>
-          );
-        })}
+                <Text style={[s.menuTxt, active&&s.menuTxtOn]}>{item.label}</Text>
+                {badge > 0 && (
+                  <View style={s.menuBadge}>
+                    <Text style={s.menuBadgeTxt}>{badge>9?'9+':badge}</Text>
+                  </View>
+                )}
+              </TouchableOpacity>
+            );
+          })}
+        </View>
         <View style={s.menuDivider} />
         <TouchableOpacity style={s.logoutItem} onPress={logout}>
-          <View style={[s.menuIconWrap, { backgroundColor:'#FFE8E8' }]}>
+          <View style={[s.menuIconWrap, { backgroundColor:C.errorLight }]}>
             <Icon name="logout" size={18} color={C.error} />
           </View>
           <Text style={[s.menuTxt, { color:C.error, fontWeight:'700' }]}>Logout</Text>
         </TouchableOpacity>
-        <View style={{ height:30 }} />
+        <View style={{ height:40 }} />
       </ScrollView>
     </Animated.View>
   );
 
   // ─── OVERVIEW ─────────────────────────────────────────────────────────────
   const OverviewSection = () => (
-    <ScrollView style={s.section} contentContainerStyle={{ paddingBottom:24 }}
-      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[C.primary]} />}
+    <ScrollView style={s.section} contentContainerStyle={{ paddingBottom:32 }}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[C.primary]} tintColor={C.primary} />}
       showsVerticalScrollIndicator={false}>
-
-      {/* Welcome */}
       <View style={s.welcomeCard}>
-        <View style={{ flex:1 }}>
-          <Text style={s.welcomeGreet}>Good {new Date().getHours() < 12 ? 'Morning' : 'Afternoon'} 👋</Text>
-          <Text style={s.welcomeName}>{profile?.name || 'Transporter'}</Text>
-          <Text style={s.welcomeTime}>Updated {lastUpdated.toLocaleTimeString()}</Text>
+        <View style={s.welcomeCardInner}>
+          <View style={{ flex:1 }}>
+            <Text style={s.welcomeGreet}>Good {new Date().getHours()<12?'Morning':'Afternoon'} 👋</Text>
+            <Text style={s.welcomeName} numberOfLines={1}>{profile?.name || 'Transporter'}</Text>
+            <Text style={s.welcomeTime}>Updated {lastUpdated.toLocaleTimeString()}</Text>
+          </View>
+          <Avatar uri={profile?.profileImage} name={profile?.name} size={56} />
         </View>
-        <Avatar uri={profile?.profileImage} name={profile?.name} size={50} />
+        <View style={s.welcomeStrip}>
+          {[
+            { v:stats.activeDrivers,  l:'Drivers'    },
+            { v:stats.ongoingTrips,   l:'Live Trips'  },
+            { v:stats.completedTrips, l:'Completed'  },
+          ].map((item, i, arr) => (
+            <React.Fragment key={i}>
+              <View style={{ alignItems:'center' }}>
+                <Text style={s.stripVal}>{item.v}</Text>
+                <Text style={s.stripLbl}>{item.l}</Text>
+              </View>
+              {i < arr.length-1 && <View style={s.stripDiv} />}
+            </React.Fragment>
+          ))}
+        </View>
       </View>
 
-      {/* Smart route banner */}
-      {smartResults.length > 0 && (
-        <TouchableOpacity style={s.smartBanner} onPress={() => nav('smart-route')}>
-          <View style={s.smartBannerIcon}><Icon name="auto-awesome" size={18} color={C.white} /></View>
-          <View style={{ flex:1 }}>
-            <Text style={s.smartBannerTitle}>{smartResults.length} Smart Route{smartResults.length!==1?'s':''} Ready!</Text>
-            <Text style={s.smartBannerSub}>Tap to review and confirm</Text>
-          </View>
-          <Icon name="chevron-right" size={20} color={C.textMid} />
+      {totalBadge > 0 && (
+        <TouchableOpacity style={s.alertBanner} onPress={() => nav('notifications')}>
+          <Icon name="notifications-active" size={16} color={C.white} />
+          <Text style={s.alertBannerTxt}>{totalBadge} item{totalBadge!==1?'s':''} need attention</Text>
+          <Icon name="chevron-right" size={16} color={C.white} />
         </TouchableOpacity>
       )}
-      {optimizing && (
-        <View style={s.optimizingRow}>
-          <ActivityIndicator size="small" color={C.primary} />
-          <Text style={s.optimizingTxt}>Building optimized routes via OSRM...</Text>
-        </View>
-      )}
 
-      {/* Stats */}
-      <Text style={s.sectionLbl}>TODAY'S OVERVIEW</Text>
+      <Text style={s.sectionLabel}>Fleet Overview</Text>
       <View style={s.statsGrid}>
-        {[
-          { l:'Active Drivers',  v:stats.activeDrivers,           i:'directions-car',          a:()=>nav('tracking')   },
-          { l:'Passengers',      v:stats.totalPassengers,          i:'people',                  a:null                  },
-          { l:'Trips Done',      v:stats.completedTrips,           i:'check-circle',            a:null                  },
-          { l:'Active Trips',    v:stats.ongoingTrips,             i:'sync',                    a:null                  },
-          { l:'Complaints',      v:stats.complaints,               i:'support-agent',           a:()=>nav('complaints') },
-          { l:'Payments In',     v:`Rs.${stats.paymentsReceived}`, i:'account-balance-wallet',  a:()=>nav('payments')   },
-        ].map((it,i) => <StatCard key={i} label={it.l} value={it.v} iconName={it.i} onPress={it.a} />)}
+        <StatCard label="Active Drivers"   value={stats.activeDrivers}   iconName="people"                 onPress={() => nav('assign')}    />
+        <StatCard label="Total Passengers" value={stats.totalPassengers}  iconName="groups"                 onPress={() => nav('pass-req')}  />
+        <StatCard label="Completed Trips"  value={stats.completedTrips}   iconName="check-circle"           onPress={() => nav('routes')}    />
+        <StatCard label="Ongoing Trips"    value={stats.ongoingTrips}     iconName="directions-bus"         onPress={() => nav('tracking')}  />
+        <StatCard label="Complaints"       value={stats.complaints}       iconName="report-problem"         onPress={() => nav('complaints')}/>
+        <StatCard label="Received (Rs)"    value={stats.paymentsReceived} iconName="account-balance-wallet" onPress={() => nav('payments')}  />
       </View>
 
-      {/* Quick Actions */}
-      <Text style={s.sectionLbl}>QUICK ACTIONS</Text>
+      <Text style={s.sectionLabel}>Quick Actions</Text>
       <View style={s.quickGrid}>
         {[
-          { i:'auto-awesome', l:'Smart\nRoutes',  k:'smart-route', b:smartResults.length },
-          { i:'poll',         l:'Polls',          k:'poll'                               },
-          { i:'map',          l:'Routes',         k:'routes'                             },
-          { i:'my-location',  l:'Tracking',       k:'tracking'                           },
-          { i:'group-add',    l:'Driver\nReq.',   k:'driver-req',  b:driverReqs.length   },
-          { i:'person-add',   l:'Pass.\nReq.',    k:'pass-req',    b:passReqs.length     },
-        ].map((it,idx) => (
-          <TouchableOpacity key={idx} style={s.quickCard} onPress={() => nav(it.k)}>
-            <View style={s.quickIconWrap}>
-              <Icon name={it.i} size={22} color={C.primary} />
-              {it.b > 0 && (
-                <View style={s.quickBadge}>
-                  <Text style={s.quickBadgeTxt}>{it.b>9?'9+':it.b}</Text>
-                </View>
-              )}
-            </View>
-            <Text style={s.quickLabel}>{it.l}</Text>
+          { icon:'poll',           label:'New Poll',      sec:'poll'         },
+          { icon:'auto-awesome',   label:'Smart Routes',  sec:'smart-route'  },
+          { icon:'assignment-ind', label:'Assign Driver', sec:'assign'       },
+          { icon:'my-location',    label:'Live Tracking', sec:'tracking'     },
+        ].map(q => (
+          <TouchableOpacity key={q.sec} style={s.quickBtn} onPress={() => nav(q.sec)} activeOpacity={0.75}>
+            <View style={s.quickIconWrap}><Icon name={q.icon} size={24} color={C.primaryDark} /></View>
+            <Text style={s.quickLabel}>{q.label}</Text>
           </TouchableOpacity>
         ))}
       </View>
 
-      {unread > 0 && (
-        <TouchableOpacity style={s.notifBanner} onPress={() => nav('notifications')}>
-          <Icon name="notifications-active" size={16} color={C.primary} />
-          <Text style={s.notifBannerTxt}>{unread} unread notification{unread!==1?'s':''}</Text>
-          <Icon name="chevron-right" size={16} color={C.textMid} />
+      {driverReqs.length > 0 && (
+        <TouchableOpacity style={s.pendingBanner} onPress={() => nav('driver-req')}>
+          <View style={[s.pendingDot, { backgroundColor:C.warning }]} />
+          <Text style={s.pendingBannerTxt}>{driverReqs.length} pending driver request{driverReqs.length!==1?'s':''}</Text>
+          <Icon name="chevron-right" size={16} color={C.primaryDark} />
         </TouchableOpacity>
       )}
+      {passReqs.length > 0 && (
+        <TouchableOpacity style={s.pendingBanner} onPress={() => nav('pass-req')}>
+          <View style={[s.pendingDot, { backgroundColor:C.primary }]} />
+          <Text style={s.pendingBannerTxt}>{passReqs.length} pending passenger request{passReqs.length!==1?'s':''}</Text>
+          <Icon name="chevron-right" size={16} color={C.primaryDark} />
+        </TouchableOpacity>
+      )}
+
+      <Text style={s.sectionLabel}>Recent Drivers</Text>
+      {drivers.length === 0
+        ? <View style={s.emptyState}><Text style={{ fontSize:32 }}>🚗</Text><Text style={s.emptyTxt}>No drivers registered yet.</Text></View>
+        : drivers.slice(0,4).map((d,i) => <DriverCard key={d._id||i} driver={d} />)
+      }
     </ScrollView>
   );
 
   // ─── PROFILE ──────────────────────────────────────────────────────────────
-  const ProfileSection = () => {
-    const [saving, setSaving] = useState(false);
-    const p = editProfile || profile;
-    const setField = (k, v) => setEditProfile(prev => ({ ...(prev || profile), [k]:v }));
-    if (!p) return <View style={{ flex:1, justifyContent:'center', alignItems:'center' }}><ActivityIndicator size="large" color={C.primary} /></View>;
-    return (
-      <ScrollView style={s.section} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom:30 }}>
-        <View style={s.profileHero}>
-          <View style={s.profileHeroBg} />
-          <Avatar uri={p.profileImage} name={p.name} size={80} />
-          <Text style={s.profileName}>{p.name}</Text>
-          <Text style={s.profileCo}>{p.company}</Text>
-          <View style={s.activeChip}>
-            <View style={[s.activeDot, { backgroundColor: p.status==='active' ? C.primary : C.border }]} />
-            <Text style={s.activeChipTxt}>{p.status==='active' ? 'Active Account' : 'Inactive'}</Text>
+  const ProfileSection = () => (
+    <ScrollView style={s.section} contentContainerStyle={{ paddingBottom:24 }}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[C.primary]} />}
+      showsVerticalScrollIndicator={false}>
+      <View style={s.card}>
+        <View style={{ alignItems:'center', paddingVertical:12 }}>
+          <Avatar uri={profile?.profileImage} name={profile?.name} size={88} />
+          <Text style={[s.cardTitle,{ marginTop:14, fontSize:20 }]}>{profile?.name}</Text>
+          <Text style={{ color:C.textLight, fontSize:13, marginTop:3 }}>{profile?.company}</Text>
+          <View style={[s.chip,{ marginTop:8, backgroundColor:C.successLight, borderColor:C.success }]}>
+            <Text style={[s.chipTxt,{ color:C.success }]}>{profile?.status || 'active'}</Text>
           </View>
         </View>
-        <View style={s.card}>
-          <Text style={s.cardLabel}>Account Information</Text>
-          {isEditingPro ? (
-            <>
-              {[
-                { k:'name',    l:'Full Name',  i:'person'      },
-                { k:'phone',   l:'Phone',      i:'phone'       },
-                { k:'company', l:'Company',    i:'business'    },
-                { k:'address', l:'Address',    i:'place'       },
-                { k:'license', l:'License',    i:'credit-card' },
-              ].map(f => (
-                <View key={f.k} style={{ marginBottom:12 }}>
-                  <Text style={s.inputLabel}>{f.l}</Text>
-                  <View style={s.inputRow}>
-                    <Icon name={f.i} size={16} color={C.primary} style={{ marginRight:8 }} />
-                    <TextInput style={s.inputInner} value={p[f.k]||''} onChangeText={t => setField(f.k, t)} placeholderTextColor={C.textLight} />
-                  </View>
+        <View style={s.profileDivider} />
+        {[
+          { icon:'email',       label:'Email',      val:profile?.email            },
+          { icon:'phone',       label:'Phone',      val:profile?.phone            },
+          { icon:'place',       label:'Address',    val:profile?.address          },
+          { icon:'credit-card', label:'License',    val:profile?.license          },
+          { icon:'business',    label:'Registered', val:profile?.registrationDate },
+          { icon:'location-on', label:'Location',   val:profile?.location         },
+        ].map((row,i) => row.val && row.val !== 'N/A' && (
+          <View key={i} style={[s.detailRow,{ paddingVertical:8, borderBottomWidth:1, borderBottomColor:C.divider }]}>
+            <View style={s.profileIconWrap}><Icon name={row.icon} size={15} color={C.primaryDark} /></View>
+            <Text style={[s.detailTxt,{ flex:0, color:C.textLight, marginRight:8, minWidth:80 }]}>{row.label}</Text>
+            <Text style={[s.detailTxt,{ flex:1, fontWeight:'600', color:C.textDark }]}>{row.val}</Text>
+          </View>
+        ))}
+        {!isEditingPro
+          ? <TouchableOpacity style={[s.confirmBtnGreen,{ marginTop:18 }]} onPress={() => { setEditProfile({...profile}); setIsEditingPro(true); }}>
+              <Icon name="edit" size={16} color={C.black} />
+              <Text style={[s.btnTxt,{color:C.black}]}>Edit Profile</Text>
+            </TouchableOpacity>
+          : <View style={{ marginTop:18 }}>
+              {['name','phone','company','address'].map(field => (
+                <View key={field} style={{ marginBottom:12 }}>
+                  <Text style={s.inputLabel}>{field.charAt(0).toUpperCase()+field.slice(1)}</Text>
+                  <TextInput
+                    style={s.input}
+                    value={editProfile?.[field] || ''}
+                    onChangeText={v => setEditProfile(prev => ({...prev, [field]:v}))}
+                    placeholder={`Enter ${field}`}
+                    placeholderTextColor={C.textLight} />
                 </View>
               ))}
-              <TouchableOpacity style={[s.primaryBtn, saving && { opacity:0.6 }]} disabled={saving}
-                onPress={async () => {
-                  setSaving(true);
-                  try { await api.updateProfile(editProfile); setProfile(editProfile); setEditProfile(null); setIsEditingPro(false); Alert.alert('Saved!', 'Profile updated.'); }
-                  catch { Alert.alert('Error', 'Could not update profile.'); }
-                  finally { setSaving(false); }
+              <View style={s.twoBtn}>
+                <TouchableOpacity style={s.discardBtn} onPress={() => setIsEditingPro(false)}>
+                  <Icon name="close" size={16} color={C.white} /><Text style={s.btnTxt}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={s.confirmBtnGreen} onPress={async () => {
+                  try {
+                    await api.updateProfile(editProfile);
+                    setProfile(editProfile);
+                    setIsEditingPro(false);
+                    Alert.alert('Saved', 'Profile updated successfully.');
+                  } catch (e) { Alert.alert('Error', e.message); }
                 }}>
-                {saving ? <ActivityIndicator color={C.white} /> : <><Icon name="save" size={16} color={C.white} /><Text style={s.primaryBtnTxt}>Save Changes</Text></>}
-              </TouchableOpacity>
-              <TouchableOpacity style={[s.outlineBtn, { marginTop:8 }]} onPress={() => { setEditProfile(null); setIsEditingPro(false); }}>
-                <Text style={s.outlineBtnTxt}>Cancel</Text>
-              </TouchableOpacity>
-            </>
-          ) : (
-            <>
-              {[
-                { l:'Email',        v:p.email,            i:'email'          },
-                { l:'Phone',        v:p.phone,            i:'phone'          },
-                { l:'Company',      v:p.company,          i:'business'       },
-                { l:'Address',      v:p.address,          i:'place'          },
-                { l:'License',      v:p.license,          i:'credit-card'    },
-                { l:'Location',     v:p.location,         i:'location-on'    },
-                { l:'Member Since', v:p.registrationDate, i:'calendar-today' },
-              ].map((r,i) => (
-                <View key={i} style={s.profileRow}>
-                  <View style={s.profileRowIcon}><Icon name={r.i} size={15} color={C.primary} /></View>
-                  <View style={{ flex:1 }}>
-                    <Text style={s.profileRowLabel}>{r.l}</Text>
-                    <Text style={s.profileRowValue}>{r.v||'N/A'}</Text>
-                  </View>
-                </View>
-              ))}
-              <TouchableOpacity style={[s.primaryBtn, { marginTop:12 }]} onPress={() => { setEditProfile({ ...profile }); setIsEditingPro(true); }}>
-                <Icon name="edit" size={16} color={C.white} />
-                <Text style={s.primaryBtnTxt}>Edit Profile</Text>
-              </TouchableOpacity>
-            </>
-          )}
-        </View>
-      </ScrollView>
-    );
-  };
+                  <Icon name="save" size={16} color={C.black} /><Text style={[s.btnTxt,{color:C.black}]}>Save</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+        }
+      </View>
+    </ScrollView>
+  );
 
-  // ─── POLLS ────────────────────────────────────────────────────────────────
+  // ─── POLL SECTION ─────────────────────────────────────────────────────────
   const PollSection = () => {
-    const [newPoll,      setNewPoll]      = useState({ title:'', timeSlots:[], closingTime:'' });
-    const [creatingPoll, setCreatingPoll] = useState(false);
-    const [deletingId,   setDeletingId]   = useState(null);
-    const [tpVis,        setTpVis]        = useState(false);
-    const [cpVis,        setCpVis]        = useState(false);
+    const [newPollTitle,   setNewPollTitle]   = useState('');
+    const [newPollDate,    setNewPollDate]    = useState('');
+    const [newPollTime,    setNewPollTime]    = useState('');
+    const [timePickerOpen, setTimePickerOpen] = useState(false);
+    const [creating,       setCreating]       = useState(false);
 
-    const createPoll = async () => {
-      if (!newPoll.title.trim())     { Alert.alert('Missing','Enter a poll title.');         return; }
-      if (!newPoll.timeSlots.length) { Alert.alert('Missing','Add at least one time slot.'); return; }
-      if (!newPoll.closingTime)      { Alert.alert('Missing','Set a closing time.');          return; }
+    const handleCreate = async () => {
+      if (!newPollTitle.trim()) { Alert.alert('Required', 'Enter a poll title.'); return; }
+      setCreating(true);
       try {
-        setCreatingPoll(true);
-        const res = await api.createPoll({ title: newPoll.title, timeSlots: newPoll.timeSlots, closesAt: newPoll.closingTime, closingDate: new Date(Date.now() + 86400000) });
-        setNewPoll({ title:'', timeSlots:[], closingTime:'' });
-        await api.getPolls().then(setPolls);
-        Alert.alert('Poll Sent! 📋', `Poll created.${res.notificationsSent ? ` ${res.notificationsSent} passengers notified.` : ''}`);
-      } catch { Alert.alert('Error', 'Could not create poll.'); }
-      finally { setCreatingPoll(false); }
-    };
-
-    const confirmDelete = (poll) => {
-      Alert.alert('Delete Poll?', `"${poll.title}" will be removed.`, [
-        { text:'Cancel', style:'cancel' },
-        { text:'Delete', style:'destructive', onPress: async () => {
-          setDeletingId(poll._id);
-          try { await api.deletePoll(poll._id); await api.getPolls().then(setPolls); }
-          catch { Alert.alert('Error','Could not delete.'); }
-          finally { setDeletingId(null); }
-        }},
-      ]);
+        await api.createPoll({ title:newPollTitle, date:newPollDate, timeSlot:newPollTime });
+        setNewPollTitle(''); setNewPollDate(''); setNewPollTime('');
+        await loadAll();
+        Alert.alert('Poll Created', 'Passengers can now respond.');
+      } catch (e) { Alert.alert('Error', e.message); }
+      finally { setCreating(false); }
     };
 
     return (
-      <ScrollView style={s.section} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom:24 }}>
-        <View style={s.pageHeader}>
-          <View style={s.pageHdrIcon}><Icon name="poll" size={20} color={C.white} /></View>
-          <View style={{ flex:1 }}>
-            <Text style={s.pageTitle}>Availability Polls</Text>
-            <Text style={s.pageSub}>Ask passengers if they need a ride</Text>
-          </View>
-        </View>
-
+      <ScrollView style={s.section} contentContainerStyle={{ paddingBottom:24 }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[C.primary]} />}
+        showsVerticalScrollIndicator={false}>
+        <TimePicker visible={timePickerOpen} onClose={() => setTimePickerOpen(false)} onSelect={t => setNewPollTime(t)} />
         <View style={s.card}>
-          <Text style={s.cardLabel}>Create New Poll</Text>
+          <View style={[s.cardAccentBar,{ backgroundColor:C.primary }]} />
+          <Text style={[s.cardTitle,{ marginBottom:14 }]}>Create Availability Poll</Text>
           <Text style={s.inputLabel}>Poll Title</Text>
-          <View style={s.inputRow}>
-            <Icon name="title" size={16} color={C.primary} style={{ marginRight:8 }} />
-            <TextInput style={s.inputInner} placeholder="e.g. Tomorrow Morning Route" placeholderTextColor={C.textLight} value={newPoll.title} onChangeText={t => setNewPoll(p => ({ ...p, title:t }))} />
-          </View>
-
-          <Text style={s.inputLabel}>Time Slots</Text>
-          {newPoll.timeSlots.length > 0 && (
-            <View style={{ flexDirection:'row', flexWrap:'wrap', gap:6, marginBottom:8 }}>
-              {newPoll.timeSlots.map((slot,i) => (
-                <View key={i} style={s.slotTag}>
-                  <Icon name="schedule" size={11} color={C.primary} />
-                  <Text style={s.slotTagTxt}>{slot}</Text>
-                  <TouchableOpacity onPress={() => setNewPoll(p => ({ ...p, timeSlots:p.timeSlots.filter(x=>x!==slot) }))}>
-                    <Icon name="close" size={12} color={C.textLight} />
-                  </TouchableOpacity>
-                </View>
-              ))}
-            </View>
-          )}
-          <TouchableOpacity style={s.addTimeBtn} onPress={() => setTpVis(true)}>
-            <Icon name="add-circle-outline" size={17} color={C.primary} />
-            <Text style={s.addTimeTxt}>Add Time Slot</Text>
-          </TouchableOpacity>
-
-          <Text style={[s.inputLabel, { marginTop:12 }]}>Closing Time</Text>
-          <TouchableOpacity style={s.inputRow} onPress={() => setCpVis(true)}>
-            <Icon name="alarm" size={16} color={C.primary} style={{ marginRight:8 }} />
-            <Text style={[s.inputInner, { flex:1, color: newPoll.closingTime ? C.textDark : C.textLight }]}>
-              {newPoll.closingTime || 'Tap to set closing time'}
+          <TextInput style={s.input} value={newPollTitle} onChangeText={setNewPollTitle}
+            placeholder="e.g. Tomorrow Morning Commute" placeholderTextColor={C.textLight} />
+          <Text style={s.inputLabel}>Date (optional)</Text>
+          <TextInput style={s.input} value={newPollDate} onChangeText={setNewPollDate}
+            placeholder="YYYY-MM-DD" placeholderTextColor={C.textLight} />
+          <Text style={s.inputLabel}>Time Slot</Text>
+          <TouchableOpacity
+            style={[s.input,{ flexDirection:'row', alignItems:'center', justifyContent:'space-between' }]}
+            onPress={() => setTimePickerOpen(true)}>
+            <Text style={{ color:newPollTime?C.textDark:C.textLight, fontWeight:newPollTime?'600':'400' }}>
+              {newPollTime || 'Tap to set time'}
             </Text>
-            <Icon name="chevron-right" size={16} color={C.textLight} />
+            <Icon name="alarm" size={20} color={C.primaryDark} />
           </TouchableOpacity>
-          <TouchableOpacity style={[s.primaryBtn, creatingPoll && { opacity:0.5 }]} onPress={createPoll} disabled={creatingPoll}>
-            {creatingPoll
-              ? <ActivityIndicator color={C.white} />
-              : <><Icon name="send" size={16} color={C.white} /><Text style={s.primaryBtnTxt}>Send to All Passengers</Text></>
-            }
+          <TouchableOpacity style={[s.confirmBtnGreen,{ marginTop:14 }]} onPress={handleCreate} disabled={creating}>
+            {creating
+              ? <ActivityIndicator size="small" color={C.black} />
+              : <><Icon name="add" size={16} color={C.black} /><Text style={[s.btnTxt,{color:C.black}]}>Create Poll</Text></>}
           </TouchableOpacity>
         </View>
 
-        <TimePicker visible={tpVis} onClose={() => setTpVis(false)} onSelect={t => { if (!newPoll.timeSlots.includes(t)) setNewPoll(p => ({ ...p, timeSlots:[...p.timeSlots, t] })); }} />
-        <TimePicker visible={cpVis} onClose={() => setCpVis(false)} onSelect={t => setNewPoll(p => ({ ...p, closingTime:t }))} />
-
-        <Text style={s.sectionLbl}>YOUR POLLS ({polls.length})</Text>
-        {polls.length === 0 ? (
-          <View style={s.emptyState}>
-            <View style={s.emptyIconWrap}><Icon name="poll" size={34} color={C.textLight} /></View>
-            <Text style={s.emptyTxt}>No polls yet</Text>
-            <Text style={s.emptySub}>Create your first poll above</Text>
-          </View>
-        ) : polls.map(poll => {
-          const yes = poll.responses?.filter(r => r.response==='yes').length || 0;
-          const no  = poll.responses?.filter(r => r.response==='no').length  || 0;
-          return (
-            <View key={poll._id} style={s.pollCard}>
-              <View style={{ flexDirection:'row', alignItems:'flex-start' }}>
-                <View style={s.pollIcon}><Icon name="poll" size={16} color={C.white} /></View>
-                <View style={{ flex:1, marginLeft:10 }}>
-                  <Text style={s.pollTitle}>{poll.title}</Text>
-                  <Text style={s.pollMeta}>Closes: {poll.closesAt} · {new Date(poll.createdAt).toLocaleDateString()}</Text>
-                  {poll.timeSlots?.length > 0 && (
-                    <View style={{ flexDirection:'row', flexWrap:'wrap', gap:4, marginTop:6 }}>
-                      {poll.timeSlots.map((sl,i) => <View key={i} style={s.slotMini}><Text style={s.slotMiniTxt}>{sl}</Text></View>)}
+        <Text style={s.sectionLabel}>Active Polls ({polls.length})</Text>
+        {polls.length === 0
+          ? <View style={s.emptyState}><Text style={{ fontSize:32 }}>📋</Text><Text style={s.emptyTxt}>No polls yet. Create one above.</Text></View>
+          : polls.map((poll, i) => {
+              const yes   = (poll.responses||[]).filter(r => r.response==='yes').length;
+              const no    = (poll.responses||[]).filter(r => r.response==='no').length;
+              const total = (poll.responses||[]).length;
+              const isSel = selectedPoll?._id === poll._id;
+              return (
+                <View key={poll._id||i} style={[s.card, isSel&&{ borderColor:C.primary, borderWidth:2 }]}>
+                  <View style={[s.cardAccentBar,{ backgroundColor:isSel?C.primary:C.border }]} />
+                  <View style={{ flexDirection:'row', justifyContent:'space-between', alignItems:'flex-start' }}>
+                    <View style={{ flex:1 }}>
+                      <Text style={s.cardTitle} numberOfLines={2}>{poll.title}</Text>
+                      <View style={{ flexDirection:'row', gap:10, marginTop:6 }}>
+                        {poll.date     && <View style={s.detailRow}><Icon name="event" size={12} color={C.primaryDark}/><Text style={s.detailTxt}>{new Date(poll.date).toLocaleDateString()}</Text></View>}
+                        {poll.timeSlot && <View style={s.detailRow}><Icon name="alarm" size={12} color={C.primaryDark}/><Text style={s.detailTxt}>{poll.timeSlot}</Text></View>}
+                      </View>
                     </View>
-                  )}
-                </View>
-                <TouchableOpacity style={s.deletePollBtn} onPress={() => confirmDelete(poll)} disabled={deletingId===poll._id}>
-                  {deletingId===poll._id ? <ActivityIndicator size="small" color={C.primary} /> : <Icon name="delete-outline" size={18} color={C.primary} />}
-                </TouchableOpacity>
-              </View>
-              <View style={s.respRow}>
-                <View style={[s.respBox, { backgroundColor:C.primaryGhost }]}>
-                  <Text style={[s.respNum, { color:C.primary }]}>{yes}</Text>
-                  <Text style={s.respLbl}>Coming</Text>
-                </View>
-                <View style={[s.respBox, { backgroundColor:'#FFE8E8' }]}>
-                  <Text style={[s.respNum, { color:C.error }]}>{no}</Text>
-                  <Text style={s.respLbl}>Not Coming</Text>
-                </View>
-                <View style={[s.respBox, { backgroundColor:C.primaryPale }]}>
-                  <Text style={[s.respNum, { color:C.textDark }]}>{poll.responses?.length||0}</Text>
-                  <Text style={s.respLbl}>Total</Text>
-                </View>
-              </View>
-              <View style={{ flexDirection:'row', gap:8, marginTop:10 }}>
-                <TouchableOpacity style={[s.outlineBtn,{flex:1,marginBottom:0}]} onPress={() => setSelectedPoll(poll)}>
-                  <Icon name="visibility" size={14} color={C.primary} />
-                  <Text style={s.outlineBtnTxt}>Responses</Text>
-                </TouchableOpacity>
-                {yes > 0 && (
-                  <TouchableOpacity style={[s.primaryBtn,{flex:1,marginTop:0}]} onPress={() => handleOptimize(poll)} disabled={optimizing}>
-                    {optimizing && activePoll?._id===poll._id
-                      ? <ActivityIndicator size="small" color={C.white} />
-                      : <><Icon name="auto-awesome" size={14} color={C.white} /><Text style={s.primaryBtnTxt}>Build Route</Text></>
-                    }
-                  </TouchableOpacity>
-                )}
-              </View>
-            </View>
-          );
-        })}
-
-        <Modal visible={!!selectedPoll} animationType="slide" onRequestClose={() => setSelectedPoll(null)}>
-          <SafeAreaView style={{ flex:1, backgroundColor:C.offWhite }}>
-            <View style={s.modalHdr}>
-              <TouchableOpacity onPress={() => setSelectedPoll(null)} style={s.modalBackBtn}>
-                <Icon name="arrow-back" size={20} color={C.textDark} />
-              </TouchableOpacity>
-              <Text style={s.modalTitle}>Poll Responses</Text>
-              <View style={{ width:40 }} />
-            </View>
-            <ScrollView style={{ padding:16 }}>
-              {(selectedPoll?.responses||[]).length === 0 ? (
-                <View style={s.emptyState}><Text style={s.emptyTxt}>No responses yet</Text></View>
-              ) : (selectedPoll?.responses||[]).map((r,i) => (
-                <View key={i} style={s.card}>
-                  <View style={{ flexDirection:'row', justifyContent:'space-between', alignItems:'center' }}>
-                    <Text style={s.cardTitle}>{r.passengerName}</Text>
-                    <View style={[s.activeChip, { backgroundColor: r.response==='yes' ? C.primaryGhost : '#FFE8E8' }]}>
-                      <View style={[s.activeDot, { backgroundColor: r.response==='yes' ? C.primary : C.error }]} />
-                      <Text style={[s.activeChipTxt, { color: r.response==='yes' ? C.primary : C.error }]}>
-                        {r.response==='yes' ? 'Coming ✓' : 'Not Coming'}
-                      </Text>
-                    </View>
+                    <TouchableOpacity
+                      onPress={() => Alert.alert('Delete Poll?', '', [
+                        { text:'Cancel', style:'cancel' },
+                        { text:'Delete', style:'destructive', onPress: async () => {
+                          try { await api.deletePoll(poll._id); await loadAll(); }
+                          catch (e) { Alert.alert('Error', e.message); }
+                        }},
+                      ])}
+                      style={{ padding:4 }}>
+                      <Icon name="delete-outline" size={22} color={C.error} />
+                    </TouchableOpacity>
                   </View>
-                  {r.selectedTimeSlot && <Text style={s.pollMeta}>Time: {r.selectedTimeSlot}</Text>}
-                  {r.pickupPoint       && <Text style={s.pollMeta}>Pickup: {r.pickupPoint}</Text>}
-                  {r.vehiclePreference && (
-                    <View style={[s.vBadge, { marginTop:6, backgroundColor:'#D4EDDA' }]}>
-                      <Text>{VEHICLE_INFO[r.vehiclePreference]?.icon}</Text>
-                      <Text style={[s.vBadgeVal, { marginLeft:8, color:'#1A5C2A' }]}>Prefers {r.vehiclePreference} 🔒</Text>
-                    </View>
-                  )}
+                  <View style={{ flexDirection:'row', gap:8, marginVertical:12 }}>
+                    <View style={[s.chip,{ backgroundColor:C.successLight, borderColor:C.success }]}><Text style={[s.chipTxt,{ color:C.success }]}>✓ {yes} Yes</Text></View>
+                    <View style={[s.chip,{ backgroundColor:C.errorLight,   borderColor:C.error   }]}><Text style={[s.chipTxt,{ color:C.error   }]}>✗ {no} No</Text></View>
+                    <View style={s.chip}><Text style={s.chipTxt}>{total} Total</Text></View>
+                  </View>
+                  <View style={s.twoBtn}>
+                    <TouchableOpacity
+                      style={[s.discardBtn, isSel&&{ backgroundColor:C.primaryDark }]}
+                      onPress={() => setSelectedPoll(isSel ? null : poll)}>
+                      <Icon name={isSel?'check':'check-box-outline-blank'} size={15} color={C.white} />
+                      <Text style={s.btnTxt}>{isSel?'Selected':'Select'}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[s.confirmBtnGreen, optimizing&&{ opacity:0.6 }]}
+                      onPress={() => handleOptimize(poll)}
+                      disabled={optimizing}>
+                      {optimizing && activePoll?._id === poll._id
+                        ? <ActivityIndicator size="small" color={C.black} />
+                        : <><Icon name="auto-awesome" size={15} color={C.black} /><Text style={[s.btnTxt,{color:C.black}]}>Optimize</Text></>}
+                    </TouchableOpacity>
+                  </View>
                 </View>
-              ))}
-            </ScrollView>
-          </SafeAreaView>
-        </Modal>
+              );
+            })
+        }
       </ScrollView>
     );
   };
 
   // ─── SMART ROUTES ─────────────────────────────────────────────────────────
-  const SmartRouteSection = () => {
-    const pollsWithYes = polls.filter(p => (p.responses?.filter(r => r.response==='yes').length||0) > 0);
-    return (
-      <ScrollView style={s.section} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom:24 }}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[C.primary]} />}>
-        <View style={s.pageHeader}>
-          <View style={s.pageHdrIcon}><Icon name="auto-awesome" size={20} color={C.white} /></View>
-          <View style={{ flex:1 }}>
-            <Text style={s.pageTitle}>Smart Routes</Text>
-            <Text style={s.pageSub}>AI-powered OSRM route optimization</Text>
-          </View>
+  const SmartRouteSection = () => (
+    <ScrollView style={s.section} contentContainerStyle={{ paddingBottom:24 }}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[C.primary]} />}
+      showsVerticalScrollIndicator={false}>
+      {optimizing && (
+        <View style={s.optimizingBanner}>
+          <ActivityIndicator size="small" color={C.black} />
+          <Text style={[s.optimizingTxt,{color:C.black}]}>{optimizeStatus || 'Optimizing routes...'}</Text>
         </View>
-
-        <View style={s.howCard}>
-          <Text style={s.howTitle}>🧠 HOW THE ALGORITHM WORKS</Text>
-          {[
-            { n:'1', t:'Vehicle Preference 🔒',   d:'Car passengers → car only. Van passengers → van only. Never mixed.'          },
-            { n:'2', t:'Capacity-Based Selection', d:'≤4 passengers → Car  |  5-12 → Van  |  13+ → Bus'                           },
-            { n:'3', t:'Solo Passenger Merge',     d:'A passenger alone never gets their own vehicle — merged into nearest route.' },
-            { n:'4', t:'OSRM Route Matrix',        d:'Real road distances via OSRM API. Falls back to Haversine if offline.'       },
-            { n:'5', t:'Cheapest Insertion',       d:'Each pickup/drop-off inserted at optimal position to minimize fuel & time.'  },
-          ].map((step,i) => (
-            <View key={i} style={s.howStep}>
-              <View style={s.howNum}><Text style={s.howNumTxt}>{step.n}</Text></View>
-              <View style={{ flex:1 }}>
-                <Text style={{ fontSize:12, fontWeight:'800', color:C.textDark }}>{step.t}</Text>
-                <Text style={s.howStepTxt}>{step.d}</Text>
-              </View>
-            </View>
-          ))}
-        </View>
-
-        {pollsWithYes.length > 0 && (
-          <View style={s.card}>
-            <Text style={s.cardLabel}>SELECT POLL TO OPTIMIZE</Text>
-            {pollsWithYes.map(poll => {
-              const yes = poll.responses?.filter(r=>r.response==='yes').length||0;
-              const isActive = activePoll?._id === poll._id;
-              return (
-                <TouchableOpacity key={poll._id} style={[s.selectItem, isActive && s.selectItemOn]} onPress={() => setActivePoll(poll)}>
-                  <Icon name={isActive ? 'radio-button-checked' : 'radio-button-unchecked'} size={20} color={isActive ? C.primary : C.textLight} />
-                  <View style={{ marginLeft:10, flex:1 }}>
-                    <Text style={s.selectItemTitle}>{poll.title}</Text>
-                    <Text style={s.selectItemSub}>{yes} passenger{yes!==1?'s':''} traveling · {poll.closesAt}</Text>
-                  </View>
-                  <View style={s.pillBadge}><Text style={s.pillBadgeTxt}>{yes} ✓</Text></View>
-                </TouchableOpacity>
-              );
-            })}
-            <TouchableOpacity style={[s.primaryBtn, (!activePoll||optimizing) && { opacity:0.5 }]} onPress={() => handleOptimize(activePoll)} disabled={!activePoll||optimizing}>
-              {optimizing
-                ? <><ActivityIndicator size="small" color={C.white} style={{ marginRight:8 }} /><Text style={s.primaryBtnTxt}>Calculating via OSRM...</Text></>
-                : <><Icon name="auto-awesome" size={16} color={C.white} /><Text style={s.primaryBtnTxt}>Build Optimal Routes</Text></>
-              }
+      )}
+      {smartResults.length === 0 && !optimizing
+        ? <View style={[s.card,{ alignItems:'center', paddingVertical:44 }]}>
+            <Text style={{ fontSize:52, marginBottom:14 }}>🗺️</Text>
+            <Text style={[s.cardTitle,{ textAlign:'center', marginBottom:8 }]}>No Smart Routes Yet</Text>
+            <Text style={[s.emptyTxt,{ textAlign:'center' }]}>Go to Availability Polls and tap "Optimize" to generate routes.</Text>
+            <TouchableOpacity
+              style={[s.confirmBtnGreen,{ marginTop:18, alignSelf:'center', flex:0, paddingHorizontal:24 }]}
+              onPress={() => nav('poll')}>
+              <Icon name="poll" size={16} color={C.black}/><Text style={[s.btnTxt,{color:C.black}]}>Go to Polls</Text>
             </TouchableOpacity>
           </View>
-        )}
+        : <>
+            <View style={[s.card,{ backgroundColor:C.primaryGhost, borderColor:C.border }]}>
+              <View style={{ flexDirection:'row', alignItems:'center', gap:10 }}>
+                <Icon name="auto-awesome" size={20} color={C.primaryDark} />
+                <Text style={[s.cardTitle,{ color:C.primaryDark }]}>
+                  {smartResults.length} Route{smartResults.length!==1?'s':''} Ready
+                </Text>
+              </View>
+              <Text style={{ fontSize:12, color:C.textLight, marginTop:5 }}>
+                {smartResults.reduce((s,r) => s+r.passengerCount, 0)} passengers · {fmtPKR(smartResults.reduce((s,r) => s+(r.rawFuelCostPKR||0), 0))} est. fuel
+              </Text>
+            </View>
+            {smartResults.map((result, idx) => (
+              <SmartRouteCard
+                key={result.id || idx}
+                result={result}
+                onConfirm={() => handleConfirmRoute(result, idx)}
+                onDiscard={() => handleDiscardRoute(idx)}
+                isConfirming={confirmingIdx === idx} />
+            ))}
+          </>
+      }
+    </ScrollView>
+  );
 
-        {optimizing && (
-          <View style={[s.card, { alignItems:'center', paddingVertical:40 }]}>
-            <ActivityIndicator size="large" color={C.primary} />
-            <Text style={[s.emptyTxt, { marginTop:14 }]}>Calculating routes...</Text>
-            <Text style={s.emptySub}>Fetching OSRM road matrix · applying preferences · solving insertion</Text>
+  // ─── ROUTES ───────────────────────────────────────────────────────────────
+  const RoutesSection = () => (
+    <ScrollView style={s.section} contentContainerStyle={{ paddingBottom:24 }}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[C.primary]} />}
+      showsVerticalScrollIndicator={false}>
+      <Text style={s.sectionLabel}>All Routes ({routes.length})</Text>
+      {routes.length === 0
+        ? <View style={s.emptyState}><Text style={{ fontSize:32 }}>🗺️</Text><Text style={s.emptyTxt}>No routes found. Generate via Smart Routes.</Text></View>
+        : routes.map((route, i) => {
+            const vi          = VEHICLE_INFO[route.vehicleType] || VEHICLE_INFO.van;
+            const statusColor = route.status==='active'?C.success:route.status==='unassigned'?C.warning:C.textLight;
+            const statusBg    = route.status==='active'?C.successLight:route.status==='unassigned'?C.warningLight:C.primaryGhost;
+            return (
+              <View key={route._id||i} style={s.card}>
+                <View style={[s.cardAccentBar,{ backgroundColor:statusColor }]} />
+                <View style={{ flexDirection:'row', alignItems:'center', gap:10, marginBottom:10 }}>
+                  <Text style={{ fontSize:24 }}>{vi.icon}</Text>
+                  <View style={{ flex:1 }}>
+                    <Text style={s.cardTitle} numberOfLines={2}>{route.name || route.routeName || `Route ${i+1}`}</Text>
+                    <View style={[s.chip,{ marginTop:5, backgroundColor:statusBg }]}>
+                      <Text style={[s.chipTxt,{ color:statusColor }]}>{route.status || 'unassigned'}</Text>
+                    </View>
+                  </View>
+                </View>
+                <View style={{ gap:5 }}>
+                  {route.startPoint  && <View style={s.detailRow}><Icon name="place"      size={14} color={C.primaryDark}/><Text style={s.detailTxt} numberOfLines={1}>{route.startPoint}</Text></View>}
+                  {route.destination && <View style={s.detailRow}><Icon name="flag"       size={14} color={C.primaryDark}/><Text style={s.detailTxt} numberOfLines={1}>{route.destination}</Text></View>}
+                  {route.pickupTime  && <View style={s.detailRow}><Icon name="alarm"      size={14} color={C.primaryDark}/><Text style={s.detailTxt}>{route.pickupTime}</Text></View>}
+                  {route.estimatedKm && <View style={s.detailRow}><Icon name="straighten" size={14} color={C.primaryDark}/><Text style={s.detailTxt}>{route.estimatedKm} · {route.estimatedTime}</Text></View>}
+                </View>
+                {route.estimatedFuel && (
+                  <FuelBadge
+                    fuelType={route.fuelType || PK_FUEL.fuelType[route.vehicleType] || 'petrol'}
+                    fuelCostPKR={route.fuelCostPKR}
+                    estimatedFuel={route.estimatedFuel}
+                    estimatedKm={route.estimatedKm}
+                    vehicleType={route.vehicleType || 'van'} />
+                )}
+                {route.status === 'unassigned' && (
+                  <TouchableOpacity style={[s.confirmBtnGreen,{ marginTop:10 }]} onPress={() => nav('assign')}>
+                    <Icon name="assignment-ind" size={15} color={C.black}/><Text style={[s.btnTxt,{color:C.black}]}>Assign Driver</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            );
+          })
+      }
+    </ScrollView>
+  );
+
+  // ─── ASSIGN DRIVER ────────────────────────────────────────────────────────
+  const AssignSection = () => {
+    const unassigned = routes.filter(r => r.status==='unassigned' || !r.assignedDriver);
+    const [selectedRoute,  setSelectedRoute]  = useState(null);
+    const [selectedDriver, setSelectedDriver] = useState(null);
+    const [assigning,      setAssigning]      = useState(false);
+
+    const doAssign = async () => {
+      if (!selectedRoute || !selectedDriver) { Alert.alert('Select Both', 'Please select a route and a driver.'); return; }
+      setAssigning(true);
+      try {
+        await api.assignDriverToRoute(selectedRoute._id, selectedDriver._id);
+        Alert.alert('Driver Assigned ✅', `${selectedDriver.name} assigned to route.`);
+        setSelectedRoute(null); setSelectedDriver(null);
+        await loadAll();
+      } catch (e) { Alert.alert('Error', e.message); }
+      finally { setAssigning(false); }
+    };
+
+    return (
+      <ScrollView style={s.section} contentContainerStyle={{ paddingBottom:24 }} showsVerticalScrollIndicator={false}>
+        <Text style={s.sectionLabel}>Unassigned Routes ({unassigned.length})</Text>
+        {unassigned.length === 0
+          ? <View style={s.emptyState}><Text style={{ fontSize:32 }}>🎉</Text><Text style={s.emptyTxt}>All routes have drivers!</Text></View>
+          : unassigned.map((route, i) => {
+              const vi  = VEHICLE_INFO[route.vehicleType] || VEHICLE_INFO.van;
+              const sel = selectedRoute?._id === route._id;
+              return (
+                <TouchableOpacity key={route._id||i} style={[s.card, sel&&{ borderColor:C.primary, borderWidth:2 }]} onPress={() => setSelectedRoute(sel?null:route)}>
+                  <View style={{ flexDirection:'row', alignItems:'center', gap:10 }}>
+                    <Text style={{ fontSize:22 }}>{vi.icon}</Text>
+                    <View style={{ flex:1 }}>
+                      <Text style={s.cardTitle} numberOfLines={1}>{route.name || route.routeName}</Text>
+                      <Text style={[s.detailTxt,{ marginTop:3 }]}>{route.passengers?.length||0} pax · {route.estimatedKm||'—'} · {route.pickupTime||route.timeSlot||'—'}</Text>
+                    </View>
+                    <Icon name={sel?'check-circle':'radio-button-unchecked'} size={24} color={sel?C.primary:C.border} />
+                  </View>
+                </TouchableOpacity>
+              );
+            })
+        }
+
+        <Text style={s.sectionLabel}>Available Drivers ({drivers.length})</Text>
+        {drivers.length === 0
+          ? <View style={s.emptyState}><Text style={s.emptyTxt}>No drivers registered yet.</Text></View>
+          : drivers.map((driver, i) => {
+              const sel = selectedDriver?._id === driver._id;
+              return (
+                <TouchableOpacity key={driver._id||i} style={[s.card, sel&&{ borderColor:C.primary, borderWidth:2 }]} onPress={() => setSelectedDriver(sel?null:driver)}>
+                  <View style={{ flexDirection:'row', alignItems:'center', gap:8 }}>
+                    <View style={{ flex:1 }}><DriverCard driver={driver} compact /></View>
+                    <Icon name={sel?'check-circle':'radio-button-unchecked'} size={24} color={sel?C.primary:C.border} />
+                  </View>
+                </TouchableOpacity>
+              );
+            })
+        }
+
+        {(selectedRoute || selectedDriver) && (
+          <View style={[s.card,{ backgroundColor:C.primaryGhost, borderColor:C.primary, borderWidth:2, marginTop:4 }]}>
+            <Text style={[s.cardTitle,{ color:C.primaryDark, marginBottom:10 }]}>Assignment Preview</Text>
+            <View style={s.detailRow}>
+              <Icon name="map"    size={14} color={C.primaryDark}/>
+              <Text style={s.detailTxt}>{selectedRoute ? (selectedRoute.name||'Selected Route') : '— Select a route —'}</Text>
+            </View>
+            <View style={[s.detailRow,{marginTop:6}]}>
+              <Icon name="person" size={14} color={C.primaryDark}/>
+              <Text style={s.detailTxt}>{selectedDriver ? selectedDriver.name : '— Select a driver —'}</Text>
+            </View>
+            <TouchableOpacity
+              style={[s.confirmBtnGreen,{ marginTop:14 }, (!selectedRoute||!selectedDriver||assigning)&&{ opacity:0.5 }]}
+              onPress={doAssign}
+              disabled={!selectedRoute || !selectedDriver || assigning}>
+              {assigning
+                ? <ActivityIndicator size="small" color={C.black} />
+                : <><Icon name="assignment-ind" size={16} color={C.black}/><Text style={[s.btnTxt,{color:C.black}]}>Confirm Assignment</Text></>}
+            </TouchableOpacity>
           </View>
-        )}
-
-        {!optimizing && smartResults.length === 0 && (
-          <View style={s.emptyState}>
-            <View style={s.emptyIconWrap}><Icon name="auto-awesome" size={34} color={C.textLight} /></View>
-            <Text style={s.emptyTxt}>No routes ready</Text>
-            <Text style={s.emptySub}>{pollsWithYes.length > 0 ? 'Select a poll above and tap "Build Optimal Routes"' : 'Create a poll and wait for passenger responses first'}</Text>
-            {pollsWithYes.length === 0 && (
-              <TouchableOpacity style={[s.outlineBtn, { marginTop:16 }]} onPress={() => nav('poll')}>
-                <Icon name="poll" size={16} color={C.primary} />
-                <Text style={s.outlineBtnTxt}>Go to Polls</Text>
-              </TouchableOpacity>
-            )}
-          </View>
-        )}
-
-        {!optimizing && smartResults.map((result, idx) => (
-          <SmartRouteCard key={idx} result={result} onConfirm={() => handleConfirmRoute(result, idx)} onDiscard={() => handleDiscardRoute(idx)} isConfirming={confirmingIdx===idx} />
-        ))}
-
-        {!optimizing && smartResults.length > 0 && (
-          <TouchableOpacity style={s.outlineBtn} onPress={() => { setSmartResults([]); if (activePoll) handleOptimize(activePoll); }}>
-            <Icon name="refresh" size={16} color={C.primary} />
-            <Text style={s.outlineBtnTxt}>Recalculate Routes</Text>
-          </TouchableOpacity>
         )}
       </ScrollView>
     );
   };
 
   // ─── TRACKING ─────────────────────────────────────────────────────────────
-  const TrackingSection = () => (
-    <View style={s.section}>
-      <View style={[s.pageHeader, { marginBottom:0 }]}>
-        <View style={s.pageHdrIcon}><Icon name="my-location" size={20} color={C.white} /></View>
-        <View style={{ flex:1 }}>
-          <Text style={s.pageTitle}>Live Tracking</Text>
-          <Text style={s.pageSub}>{drivers.length} driver{drivers.length!==1?'s':''} registered</Text>
-        </View>
-      </View>
-      <View style={s.mapWrap}>
-        <MapView style={StyleSheet.absoluteFillObject} provider={PROVIDER_GOOGLE}
-          initialRegion={{ latitude:33.6844, longitude:73.0479, latitudeDelta:0.08, longitudeDelta:0.08 }}>
-          {trips.map(t => t.currentLocation && (
-            <Marker key={t._id} coordinate={{ latitude:t.currentLocation.latitude||33.6844, longitude:t.currentLocation.longitude||73.0479 }}
-              title={t.driverName||'Driver'} description={t.routeName||''} />
+  const TrackingSection = () => {
+    const activeTrips = trips.filter(t => t.status==='ongoing' || t.status==='active');
+    return (
+      <View style={{ flex:1 }}>
+        <MapView
+          style={{ flex:1 }}
+          provider={PROVIDER_GOOGLE}
+          initialRegion={{ latitude:33.6135, longitude:73.1998, latitudeDelta:0.15, longitudeDelta:0.15 }}
+          showsUserLocation
+          showsMyLocationButton>
+          {activeTrips.map((trip, i) => trip.currentLat && trip.currentLng && (
+            <Marker
+              key={i}
+              coordinate={{ latitude:parseFloat(trip.currentLat), longitude:parseFloat(trip.currentLng) }}
+              title={trip.driverName || 'Driver'}
+              description={`${trip.passengerCount || 0} passengers`}
+              pinColor={C.primary} />
           ))}
         </MapView>
-      </View>
-      <ScrollView style={{ flex:1 }} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom:16 }}>
-        <Text style={s.sectionLbl}>ALL DRIVERS ({drivers.length})</Text>
-        {drivers.length === 0 ? (
-          <View style={s.emptyState}>
-            <View style={s.emptyIconWrap}><Icon name="directions-car" size={34} color={C.textLight} /></View>
-            <Text style={s.emptyTxt}>No drivers yet</Text>
-          </View>
-        ) : <View style={s.driverGrid}>{drivers.map((d,i) => <DriverCard key={d._id||i} driver={d} />)}</View>}
-      </ScrollView>
-    </View>
-  );
-
-  // ─── ROUTES ───────────────────────────────────────────────────────────────
-  const RoutesSection = () => (
-    <ScrollView style={s.section} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom:24 }}>
-      <View style={s.pageHeader}>
-        <View style={s.pageHdrIcon}><Icon name="map" size={20} color={C.white} /></View>
-        <View style={{ flex:1 }}>
-          <Text style={s.pageTitle}>Routes</Text>
-          <Text style={s.pageSub}>{routes.length} route{routes.length!==1?'s':''}</Text>
+        <View style={s.trackingOverlay}>
+          <Icon name="my-location" size={16} color={C.white} />
+          <Text style={s.trackingOverlayTxt}>
+            {activeTrips.length === 0 ? 'No active trips right now' : `${activeTrips.length} active trip${activeTrips.length!==1?'s':''} on map`}
+          </Text>
         </View>
       </View>
-      {routes.length === 0 ? (
-        <View style={s.emptyState}>
-          <View style={s.emptyIconWrap}><Icon name="map" size={34} color={C.textLight} /></View>
-          <Text style={s.emptyTxt}>No routes yet</Text>
-          <Text style={s.emptySub}>Use Smart Routes to create and assign routes</Text>
-          <TouchableOpacity style={[s.primaryBtn, { marginTop:16 }]} onPress={() => nav('smart-route')}>
-            <Icon name="auto-awesome" size={16} color={C.white} />
-            <Text style={s.primaryBtnTxt}>Go to Smart Routes</Text>
-          </TouchableOpacity>
-        </View>
-      ) : routes.map(r => {
-        const vi = VEHICLE_INFO[r.vehicleType] || null;
-        return (
-          <View key={r._id||r.id} style={s.card}>
-            <View style={{ flexDirection:'row', alignItems:'center', marginBottom:10 }}>
-              <View style={s.vIconWrap}><Text style={{ fontSize:22 }}>{vi?.icon||'🚗'}</Text></View>
-              <View style={{ flex:1, marginLeft:10 }}>
-                <Text style={s.cardTitle}>{r.routeName||r.name}</Text>
-                <View style={s.activeChip}>
-                  <View style={[s.activeDot, { backgroundColor: r.status==='active'?C.primary:C.border }]} />
-                  <Text style={s.activeChipTxt}>{(r.status||'pending').toUpperCase()}</Text>
-                </View>
-              </View>
-            </View>
-            {[
-              { i:'person',            t:r.driverName||'Unassigned' },
-              { i:'place',             t:r.startPoint               },
-              { i:'flag',              t:r.destination              },
-              { i:'schedule',          t:r.timeSlot||r.pickupTime   },
-              ...(r.estimatedTime ? [{ i:'timer',             t:r.estimatedTime }] : []),
-              ...(r.estimatedFuel ? [{ i:'local-gas-station', t:r.estimatedFuel }] : []),
-              ...(r.estimatedKm   ? [{ i:'straighten',        t:r.estimatedKm   }] : []),
-            ].map((it,i) => it.t && (
-              <View key={i} style={[s.detailRow, { marginBottom:5 }]}>
-                <Icon name={it.i} size={12} color={C.primary} />
-                <Text style={s.detailTxt}>{it.t}</Text>
-              </View>
-            ))}
-          </View>
-        );
-      })}
-    </ScrollView>
-  );
-
-  // ─── ASSIGN ───────────────────────────────────────────────────────────────
-  const AssignSection = () => {
-    const [selD, setSelD] = useState(null);
-    const [selR, setSelR] = useState(null);
-    const [assigning, setAssigning] = useState(false);
-    return (
-      <ScrollView style={s.section} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom:24 }}>
-        <View style={s.pageHeader}>
-          <View style={s.pageHdrIcon}><Icon name="assignment-ind" size={20} color={C.white} /></View>
-          <View style={{ flex:1 }}>
-            <Text style={s.pageTitle}>Assign Driver</Text>
-            <Text style={s.pageSub}>Manual driver-to-route assignment</Text>
-          </View>
-        </View>
-        <View style={s.tipCard}>
-          <Icon name="lightbulb-outline" size={18} color={C.primary} />
-          <View style={{ flex:1, marginLeft:10 }}>
-            <Text style={s.tipTitle}>Use Smart Routes Instead!</Text>
-            <Text style={s.tipTxt}>Smart Routes automatically picks the best vehicle type and driver. This screen is for manual overrides only.</Text>
-          </View>
-        </View>
-        <TouchableOpacity style={s.primaryBtn} onPress={() => nav('smart-route')}>
-          <Icon name="auto-awesome" size={16} color={C.white} />
-          <Text style={s.primaryBtnTxt}>Open Smart Routes</Text>
-        </TouchableOpacity>
-        <Text style={[s.sectionLbl, { marginTop:20 }]}>MANUAL ASSIGNMENT</Text>
-        <Text style={s.inputLabel}>Select Route</Text>
-        <View style={s.card}>
-          {routes.length === 0 ? <Text style={{ color:C.textLight, fontSize:13 }}>No routes available</Text>
-            : routes.map(r => (
-              <TouchableOpacity key={r._id} style={[s.selectItem, selR?._id===r._id && s.selectItemOn]} onPress={() => setSelR(r)}>
-                <Icon name={selR?._id===r._id ? 'radio-button-checked' : 'radio-button-unchecked'} size={20} color={selR?._id===r._id ? C.primary : C.textLight} />
-                <View style={{ marginLeft:10, flex:1 }}>
-                  <Text style={s.selectItemTitle}>{r.routeName||r.name}</Text>
-                  <Text style={s.selectItemSub}>{r.timeSlot} · {r.startPoint} → {r.destination}</Text>
-                </View>
-              </TouchableOpacity>
-            ))
-          }
-        </View>
-        <Text style={s.inputLabel}>Select Driver</Text>
-        <View style={s.card}>
-          {drivers.length === 0 ? <Text style={{ color:C.textLight, fontSize:13 }}>No drivers available</Text>
-            : drivers.map(d => {
-              const vi = VEHICLE_INFO[d.vehicleType||d.vehicle] || VEHICLE_INFO.van;
-              return (
-                <TouchableOpacity key={d._id} style={[s.selectItem, selD?._id===d._id && s.selectItemOn]} onPress={() => setSelD(d)}>
-                  <Icon name={selD?._id===d._id ? 'radio-button-checked' : 'radio-button-unchecked'} size={20} color={selD?._id===d._id ? C.primary : C.textLight} />
-                  <View style={{ marginLeft:10, flex:1 }}>
-                    <Text style={s.selectItemTitle}>{d.name} {vi.icon}</Text>
-                    <Text style={s.selectItemSub}>{vi.label} · cap {vi.capacity}</Text>
-                  </View>
-                </TouchableOpacity>
-              );
-            })
-          }
-        </View>
-        <TouchableOpacity style={[s.primaryBtn, (!selR||!selD||assigning) && { opacity:0.4 }]} disabled={!selR||!selD||assigning}
-          onPress={async () => {
-            setAssigning(true);
-            try { await api.assignDriverToRoute(selR._id, selD._id); Alert.alert('Assigned!', `${selD.name} assigned to ${selR.routeName||selR.name}.`); setSelD(null); setSelR(null); await api.getRoutes().then(setRoutes); }
-            catch { Alert.alert('Error','Could not assign.'); }
-            finally { setAssigning(false); }
-          }}>
-          {assigning ? <ActivityIndicator color={C.white} /> : <><Icon name="assignment-ind" size={16} color={C.white} /><Text style={s.primaryBtnTxt}>Assign Now</Text></>}
-        </TouchableOpacity>
-      </ScrollView>
     );
   };
 
   // ─── REQUESTS ─────────────────────────────────────────────────────────────
-  const RequestsSection = ({ type }) => {
-    const list    = type==='driver' ? driverReqs : passReqs;
-    const approve = type==='driver' ? api.approveDriverRequest.bind(api)   : api.approvePassengerRequest.bind(api);
-    const reject  = type==='driver' ? api.rejectDriverRequest.bind(api)    : api.rejectPassengerRequest.bind(api);
-    const reload  = type==='driver' ? () => api.getDriverRequests().then(setDriverReqs) : () => api.getPassengerRequests().then(setPassReqs);
-    const [proc, setProc] = useState(null);
+  const RequestSection = ({ type }) => {
+    const list = type==='driver' ? driverReqs : passReqs;
+    const [processing, setProcessing] = useState(null);
+
+    const accept = async (req) => {
+      setProcessing(req._id);
+      try {
+        type==='driver' ? await api.approveDriverRequest(req._id) : await api.approvePassengerRequest(req._id);
+        await loadAll();
+        Alert.alert('Accepted', `${req.name || req.fullName || 'Request'} approved.`);
+      } catch (e) { Alert.alert('Error', e.message); }
+      finally { setProcessing(null); }
+    };
+
+    const reject = (req) => Alert.alert('Reject?', `Reject ${req.name || req.fullName}?`, [
+      { text:'Cancel', style:'cancel' },
+      { text:'Reject', style:'destructive', onPress: async () => {
+        setProcessing(req._id);
+        try {
+          type==='driver' ? await api.rejectDriverRequest(req._id) : await api.rejectPassengerRequest(req._id);
+          await loadAll();
+        } catch (e) { Alert.alert('Error', e.message); }
+        finally { setProcessing(null); }
+      }},
+    ]);
+
     return (
-      <ScrollView style={s.section} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom:24 }}>
-        <View style={s.pageHeader}>
-          <View style={s.pageHdrIcon}><Icon name={type==='driver'?'group-add':'person-add'} size={20} color={C.white} /></View>
-          <View style={{ flex:1 }}>
-            <Text style={s.pageTitle}>{type==='driver'?'Driver':'Passenger'} Requests</Text>
-            <Text style={s.pageSub}>{list.length} pending</Text>
-          </View>
-        </View>
-        {list.length === 0 ? (
-          <View style={s.emptyState}>
-            <View style={s.emptyIconWrap}><Icon name={type==='driver'?'group-add':'person-add'} size={34} color={C.textLight} /></View>
-            <Text style={s.emptyTxt}>No pending requests</Text>
-            <Text style={s.emptySub}>New requests will appear here</Text>
-          </View>
-        ) : list.map(req => (
-          <RequestCard key={req._id} req={{ ...req, type }} isProcessing={proc===req._id}
-            onAccept={async () => {
-              setProc(req._id);
-              try { await approve(req._id); await reload(); Alert.alert('Accepted!', `${req.name} approved.`); }
-              catch { Alert.alert('Error','Could not approve.'); }
-              finally { setProc(null); }
-            }}
-            onReject={async () => {
-              setProc(req._id);
-              try { await reject(req._id); await reload(); Alert.alert('Rejected', `${req.name} rejected.`); }
-              catch { Alert.alert('Error','Could not reject.'); }
-              finally { setProc(null); }
-            }}
-          />
-        ))}
+      <ScrollView style={s.section} contentContainerStyle={{ paddingBottom:24 }}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[C.primary]} />}
+        showsVerticalScrollIndicator={false}>
+        <Text style={s.sectionLabel}>Pending {type==='driver'?'Driver':'Passenger'} Requests ({list.length})</Text>
+        {list.length === 0
+          ? <View style={s.emptyState}><Text style={{ fontSize:32 }}>✅</Text><Text style={s.emptyTxt}>No pending {type} requests.</Text></View>
+          : list.map((req, i) => (
+              <RequestCard
+                key={req._id||i}
+                req={{...req, type}}
+                onAccept={() => accept(req)}
+                onReject={() => reject(req)}
+                isProcessing={processing === req._id} />
+            ))
+        }
       </ScrollView>
     );
   };
 
   // ─── PAYMENTS ─────────────────────────────────────────────────────────────
   const PaymentsSection = () => (
-    <ScrollView style={s.section} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom:24 }}>
-      <View style={s.pageHeader}>
-        <View style={s.pageHdrIcon}><Icon name="account-balance-wallet" size={20} color={C.white} /></View>
-        <View style={{ flex:1 }}>
-          <Text style={s.pageTitle}>Payments</Text>
-          <Text style={s.pageSub}>Track your earnings</Text>
-        </View>
-      </View>
+    <ScrollView style={s.section} contentContainerStyle={{ paddingBottom:24 }}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[C.primary]} />}
+      showsVerticalScrollIndicator={false}>
       <View style={s.statsGrid}>
-        <StatCard label="Received" value={`Rs. ${stats.paymentsReceived}`} iconName="check-circle" />
-        <StatCard label="Pending"  value={`Rs. ${stats.paymentsPending}`}  iconName="hourglass-empty" />
+        <StatCard label="Received" value={`Rs. ${stats.paymentsReceived?.toLocaleString?.()||0}`} iconName="account-balance-wallet" />
+        <StatCard label="Pending"  value={`Rs. ${stats.paymentsPending?.toLocaleString?.()||0}`}   iconName="pending" />
       </View>
       <View style={s.emptyState}>
-        <View style={s.emptyIconWrap}><Icon name="account-balance-wallet" size={34} color={C.textLight} /></View>
-        <Text style={s.emptyTxt}>Detailed history coming soon</Text>
+        <Text style={{ fontSize:32 }}>💳</Text>
+        <Text style={s.emptyTxt}>Detailed payment history coming soon.</Text>
       </View>
     </ScrollView>
   );
 
   // ─── COMPLAINTS ───────────────────────────────────────────────────────────
   const ComplaintsSection = () => (
-    <ScrollView style={s.section} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom:24 }}>
-      <View style={s.pageHeader}>
-        <View style={s.pageHdrIcon}><Icon name="support-agent" size={20} color={C.white} /></View>
-        <View style={{ flex:1 }}>
-          <Text style={s.pageTitle}>Complaints</Text>
-          <Text style={s.pageSub}>{complaints.length} total</Text>
-        </View>
-      </View>
-      {complaints.length === 0 ? (
-        <View style={s.emptyState}>
-          <View style={s.emptyIconWrap}><Icon name="check-circle" size={34} color={C.primary} /></View>
-          <Text style={s.emptyTxt}>No complaints!</Text>
-          <Text style={s.emptySub}>Your passengers are happy 🎉</Text>
-        </View>
-      ) : complaints.map((c,i) => (
-        <View key={c._id||i} style={[s.card, { borderLeftWidth:3, borderLeftColor: c.status==='Resolved' ? C.primary : C.warning }]}>
-          <View style={{ flexDirection:'row', justifyContent:'space-between', marginBottom:6 }}>
-            <Text style={[s.cardTitle, { flex:1 }]}>{c.title||'Complaint'}</Text>
-            <View style={[s.activeChip, { backgroundColor: c.status==='Resolved' ? C.primaryGhost : '#FFF3CD' }]}>
-              <View style={[s.activeDot, { backgroundColor: c.status==='Resolved' ? C.primary : C.warning }]} />
-              <Text style={[s.activeChipTxt, { color: c.status==='Resolved' ? C.primary : C.warning }]}>{(c.status||'Open').toUpperCase()}</Text>
+    <ScrollView style={s.section} contentContainerStyle={{ paddingBottom:24 }}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[C.primary]} />}
+      showsVerticalScrollIndicator={false}>
+      <Text style={s.sectionLabel}>Complaints ({complaints.length})</Text>
+      {complaints.length === 0
+        ? <View style={s.emptyState}><Text style={{ fontSize:32 }}>🎉</Text><Text style={s.emptyTxt}>No complaints filed. Keep it up!</Text></View>
+        : complaints.map((c, i) => (
+            <View key={c._id||i} style={s.card}>
+              <View style={[s.cardAccentBar,{ backgroundColor:c.status==='resolved'?C.success:C.error }]} />
+              <View style={{ flexDirection:'row', alignItems:'center', gap:8, marginBottom:8 }}>
+                <Icon name="report-problem" size={18} color={C.error} />
+                <Text style={s.cardTitle} numberOfLines={1}>{c.subject || c.title || 'Complaint'}</Text>
+              </View>
+              <Text style={{ fontSize:13, color:C.textMid, marginBottom:10 }}>{c.description || c.message}</Text>
+              {c.passengerName && <View style={s.detailRow}><Icon name="person" size={13} color={C.primaryDark}/><Text style={s.detailTxt}>{c.passengerName}</Text></View>}
+              {c.createdAt     && <View style={[s.detailRow,{marginTop:4}]}><Icon name="event" size={13} color={C.primaryDark}/><Text style={s.detailTxt}>{new Date(c.createdAt).toLocaleString()}</Text></View>}
+              <View style={[s.chip,{ marginTop:8, backgroundColor:c.status==='resolved'?C.successLight:C.warningLight }]}>
+                <Text style={[s.chipTxt,{ color:c.status==='resolved'?C.success:C.warning }]}>{c.status || 'open'}</Text>
+              </View>
             </View>
-          </View>
-          <Text style={s.pollMeta}>From: {c.byName||'Unknown'}</Text>
-          {c.description && <Text style={[s.pollMeta, { marginTop:4, color:C.textMid }]}>{c.description}</Text>}
-        </View>
-      ))}
+          ))
+      }
     </ScrollView>
   );
 
   // ─── NOTIFICATIONS ────────────────────────────────────────────────────────
   const NotificationsSection = () => (
-    <ScrollView style={s.section} showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom:24 }}>
-      <View style={s.pageHeader}>
-        <View style={s.pageHdrIcon}><Icon name="notifications-active" size={20} color={C.white} /></View>
-        <View style={{ flex:1 }}>
-          <Text style={s.pageTitle}>Notifications</Text>
-          <Text style={s.pageSub}>{unread} unread</Text>
-        </View>
-      </View>
-      {notifications.length === 0 ? (
-        <View style={s.emptyState}>
-          <View style={s.emptyIconWrap}><Icon name="notifications-none" size={34} color={C.textLight} /></View>
-          <Text style={s.emptyTxt}>No notifications</Text>
-        </View>
-      ) : notifications.map((n,i) => (
-        <TouchableOpacity key={n._id||i}
-          style={[s.card, !n.read && { borderLeftWidth:3, borderLeftColor:C.primary, backgroundColor:C.primaryGhost }]}
-          onPress={async () => { if (!n.read) { await api.markRead(n._id); await api.getNotifications().then(setNotifications); } }}>
-          <View style={{ flexDirection:'row', justifyContent:'space-between', alignItems:'flex-start' }}>
-            <Text style={[s.cardTitle, { fontSize:14, flex:1 }]}>{n.title}</Text>
-            {!n.read && <View style={{ width:8, height:8, borderRadius:4, backgroundColor:C.primary, marginLeft:8, marginTop:3 }} />}
-          </View>
-          {n.message && <Text style={[s.pollMeta, { marginTop:3, color:C.textMid }]}>{n.message}</Text>}
-          <Text style={[s.pollMeta, { marginTop:3 }]}>{n.createdAt ? new Date(n.createdAt).toLocaleString() : ''}</Text>
-        </TouchableOpacity>
-      ))}
+    <ScrollView style={s.section} contentContainerStyle={{ paddingBottom:24 }}
+      refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[C.primary]} />}
+      showsVerticalScrollIndicator={false}>
+      <Text style={s.sectionLabel}>Notifications ({notifications.length})</Text>
+      {notifications.length === 0
+        ? <View style={s.emptyState}><Text style={{ fontSize:32 }}>🔔</Text><Text style={s.emptyTxt}>No notifications yet.</Text></View>
+        : notifications.map((n, i) => (
+            <TouchableOpacity
+              key={n._id||i}
+              style={[s.card, !n.read&&{ borderLeftWidth:4, borderLeftColor:C.primary }]}
+              onPress={async () => {
+                if (!n.read) {
+                  try { await api.markRead(n._id); await loadAll(); } catch {}
+                }
+              }}
+              activeOpacity={0.8}>
+              <View style={{ flexDirection:'row', alignItems:'flex-start', gap:12 }}>
+                <View style={[s.menuIconWrap,{ backgroundColor:n.read?C.primaryGhost:C.primary, width:38, height:38, borderRadius:10 }]}>
+                  <Icon name="notifications" size={18} color={n.read?C.primaryDark:C.black} />
+                </View>
+                <View style={{ flex:1 }}>
+                  <Text style={[s.cardTitle,{ fontSize:14, fontWeight:n.read?'600':'800' }]}>
+                    {n.title || 'Notification'}
+                  </Text>
+                  <Text style={{ fontSize:13, color:C.textMid, marginTop:4, lineHeight:18 }}>
+                    {n.message || n.body || 'No message content'}
+                  </Text>
+                  {n.createdAt && (
+                    <Text style={{ fontSize:11, color:C.textLight, marginTop:6 }}>
+                      {new Date(n.createdAt).toLocaleString('en-PK',{ dateStyle:'medium', timeStyle:'short' })}
+                    </Text>
+                  )}
+                </View>
+                {!n.read && <View style={{ width:10, height:10, borderRadius:5, backgroundColor:C.primary, marginTop:6 }} />}
+              </View>
+            </TouchableOpacity>
+          ))
+      }
     </ScrollView>
   );
 
-  // ─── RENDER ───────────────────────────────────────────────────────────────
+  // ─── SECTION TITLES ───────────────────────────────────────────────────────
+  const SECTION_TITLES = {
+    'overview':       'Dashboard',
+    'profile':        'My Profile',
+    'poll':           'Availability Polls',
+    'smart-route':    'Smart Routes',
+    'routes':         'Routes',
+    'assign':         'Assign Driver',
+    'tracking':       'Live Tracking',
+    'driver-req':     'Driver Requests',
+    'pass-req':       'Passenger Requests',
+    'payments':       'Payments',
+    'complaints':     'Complaints',
+    'notifications':  'Notifications',
+  };
+
   const renderSection = () => {
-    if (loading) return (
-      <View style={{ flex:1, justifyContent:'center', alignItems:'center', backgroundColor:C.white }}>
-        <ActivityIndicator size="large" color={C.primary} />
-        <Text style={{ marginTop:14, color:C.textMid, fontSize:15, fontWeight:'700' }}>Loading dashboard...</Text>
-      </View>
-    );
     switch (section) {
       case 'overview':      return <OverviewSection />;
       case 'profile':       return <ProfileSection />;
@@ -1456,8 +2077,8 @@ const TransporterDashboard = () => {
       case 'routes':        return <RoutesSection />;
       case 'assign':        return <AssignSection />;
       case 'tracking':      return <TrackingSection />;
-      case 'driver-req':    return <RequestsSection type="driver" />;
-      case 'pass-req':      return <RequestsSection type="passenger" />;
+      case 'driver-req':    return <RequestSection type="driver" />;
+      case 'pass-req':      return <RequestSection type="passenger" />;
       case 'payments':      return <PaymentsSection />;
       case 'complaints':    return <ComplaintsSection />;
       case 'notifications': return <NotificationsSection />;
@@ -1465,230 +2086,182 @@ const TransporterDashboard = () => {
     }
   };
 
+  // ─── LOADING SCREEN ───────────────────────────────────────────────────────
+  if (loading) return (
+    <SafeAreaView style={s.loaderScreen}>
+      <View style={{ alignItems:'center' }}>
+        <View style={s.loaderLogo}><Text style={{ fontSize:32 }}>🚐</Text></View>
+        <ActivityIndicator size="large" color={C.primary} style={{ marginTop:24 }} />
+        <Text style={{ marginTop:14, color:C.textLight, fontWeight:'600', fontSize:14 }}>Loading dashboard...</Text>
+      </View>
+    </SafeAreaView>
+  );
+
   return (
-    <SafeAreaView style={s.container}>
-      {sidebar && <TouchableOpacity style={s.overlay} onPress={() => setSidebar(false)} activeOpacity={1} />}
-      <Sidebar />
+    <SafeAreaView style={s.root}>
+      <StatusBar barStyle="light-content" backgroundColor={C.headerBg} />
+
       {/* Header */}
       <View style={s.header}>
-        <TouchableOpacity onPress={() => setSidebar(true)} style={s.menuBtn}>
-          <Icon name="menu" size={24} color={C.white} />
+        <TouchableOpacity onPress={() => setSidebar(!sidebar)} style={s.headerBtn}>
+          <Icon name="menu" size={26} color={C.headerText} />
           {totalBadge > 0 && (
             <View style={s.headerBadge}>
-              <Text style={s.headerBadgeTxt}>{Math.min(totalBadge, 9)}</Text>
+              <Text style={s.headerBadgeTxt}>{totalBadge>9?'9+':totalBadge}</Text>
             </View>
           )}
         </TouchableOpacity>
-        <Text style={s.headerTitle}>{MENU_ITEMS.find(m => m.key===section)?.label || 'Dashboard'}</Text>
-        <TouchableOpacity onPress={() => nav('profile')}>
-          <Avatar uri={profile?.profileImage} name={profile?.name} size={32} />
+        <View style={{ flex:1, alignItems:'center' }}>
+          <Text style={s.headerTitle}>{SECTION_TITLES[section] || 'Dashboard'}</Text>
+        </View>
+        <TouchableOpacity onPress={() => nav('notifications')} style={s.headerBtn}>
+          <Icon name="notifications" size={24} color={C.headerText} />
+          {unread > 0 && (
+            <View style={s.headerBadge}>
+              <Text style={s.headerBadgeTxt}>{unread>9?'9+':unread}</Text>
+            </View>
+          )}
         </TouchableOpacity>
       </View>
-      <View style={{ flex:1 }}>{renderSection()}</View>
+
+      {/* Main Content */}
+      <View style={{ flex:1, backgroundColor:C.offWhite }}>
+        {renderSection()}
+      </View>
+
+      {/* Sidebar Overlay */}
+      {sidebar && (
+        <TouchableOpacity
+          style={s.sidebarOverlay}
+          activeOpacity={1}
+          onPress={() => setSidebar(false)} />
+      )}
+
+      {/* Sidebar */}
+      <SidebarView />
     </SafeAreaView>
   );
 };
 
-// ─── STYLES ───────────────────────────────────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════
+// STYLESHEET
+// ══════════════════════════════════════════════════════════════════
 const s = StyleSheet.create({
-  container:        { flex:1, backgroundColor:C.offWhite },
-  overlay:          { ...StyleSheet.absoluteFillObject, backgroundColor:'rgba(0,0,0,0.4)', zIndex:10 },
-
-  // Header — solid #A1D826 background, white text & icons
-  header:           { flexDirection:'row', alignItems:'center', paddingHorizontal:16, paddingVertical:13, backgroundColor:C.primary, elevation:6, shadowColor:'#000', shadowOffset:{width:0,height:3}, shadowOpacity:0.15, shadowRadius:8 },
-  menuBtn:          { width:38, height:38, justifyContent:'center', alignItems:'center', position:'relative' },
-  headerTitle:      { flex:1, textAlign:'center', fontSize:17, fontWeight:'900', color:C.white, letterSpacing:-0.3 },
-  headerBadge:      { position:'absolute', top:0, right:0, backgroundColor:C.white, width:16, height:16, borderRadius:8, justifyContent:'center', alignItems:'center', borderWidth:2, borderColor:C.primary },
-  headerBadgeTxt:   { color:C.primary, fontSize:8, fontWeight:'900' },
-
-  // Sidebar — white bg, black text, green accents
-  sidebar:          { position:'absolute', top:0, left:0, width:295, height:'100%', backgroundColor:C.white, zIndex:20, elevation:16, borderRightWidth:1, borderRightColor:C.border },
-  sidebarHdr:       { backgroundColor:C.primary, paddingTop:Platform.OS==='ios'?54:42, paddingBottom:18, paddingHorizontal:18, flexDirection:'row', alignItems:'center' },
-  sidebarName:      { color:C.white, fontWeight:'900', fontSize:15 },
-  sidebarCo:        { color:'rgba(255,255,255,0.8)', fontSize:12, marginTop:2 },
-  sidebarStatus:    { flexDirection:'row', alignItems:'center', gap:5, marginTop:5 },
-  sidebarDot:       { width:7, height:7, borderRadius:4, backgroundColor:'rgba(255,255,255,0.9)' },
-  sidebarStatusTxt: { color:'rgba(255,255,255,0.85)', fontSize:11, fontWeight:'600' },
-  sidebarClose:     { position:'absolute', top:14, right:14, width:30, height:30, borderRadius:8, backgroundColor:'rgba(255,255,255,0.2)', justifyContent:'center', alignItems:'center' },
-
-  menuItem:         { flexDirection:'row', alignItems:'center', paddingHorizontal:16, paddingVertical:13, position:'relative' },
-  menuItemOn:       { backgroundColor:C.primaryGhost },
-  menuBar:          { position:'absolute', left:0, top:10, bottom:10, width:3, backgroundColor:C.primary, borderRadius:2 },
-  menuIconWrap:     { width:34, height:34, borderRadius:9, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center' },
-  menuIconOn:       { backgroundColor:C.primary },
-  menuTxt:          { flex:1, marginLeft:11, fontSize:13, color:C.textLight, fontWeight:'500' },
-  menuTxtOn:        { color:C.textDark, fontWeight:'800' },
-  menuBadge:        { backgroundColor:C.primary, borderRadius:10, paddingHorizontal:6, paddingVertical:2, minWidth:20, alignItems:'center' },
-  menuBadgeTxt:     { color:C.white, fontSize:10, fontWeight:'900' },
-  menuDivider:      { height:1, backgroundColor:C.divider, marginHorizontal:16, marginVertical:5 },
-  logoutItem:       { flexDirection:'row', alignItems:'center', paddingHorizontal:16, paddingVertical:13 },
-
-  section:          { flex:1, paddingHorizontal:14 },
-  sectionLbl:       { fontSize:10, fontWeight:'800', color:C.textLight, letterSpacing:1.5, marginBottom:9, marginTop:4 },
-
-  // Page headers — green icon box
-  pageHeader:       { flexDirection:'row', alignItems:'center', paddingTop:16, paddingBottom:12, gap:12 },
-  pageHdrIcon:      { width:44, height:44, borderRadius:12, backgroundColor:C.primary, justifyContent:'center', alignItems:'center' },
-  pageTitle:        { fontSize:20, fontWeight:'900', color:C.textDark, letterSpacing:-0.5 },
-  pageSub:          { fontSize:12, color:C.textLight, marginTop:1 },
-
-  // Welcome card — green bg
-  welcomeCard:      { backgroundColor:C.primary, borderRadius:18, padding:16, flexDirection:'row', alignItems:'center', marginTop:14, marginBottom:12, elevation:4 },
-  welcomeGreet:     { fontSize:12, color:'rgba(255,255,255,0.85)', fontWeight:'600' },
-  welcomeName:      { fontSize:19, fontWeight:'900', color:C.white, letterSpacing:-0.4, marginTop:2 },
-  welcomeTime:      { fontSize:10, color:'rgba(255,255,255,0.7)', marginTop:2 },
-
-  // Smart banner — light green bg, black text
-  smartBanner:      { backgroundColor:C.primaryGhost, borderRadius:14, padding:13, flexDirection:'row', alignItems:'center', marginBottom:12, borderWidth:1.5, borderColor:C.border, gap:10 },
-  smartBannerIcon:  { width:38, height:38, borderRadius:10, backgroundColor:C.primary, justifyContent:'center', alignItems:'center' },
-  smartBannerTitle: { fontSize:14, fontWeight:'800', color:C.textDark },
-  smartBannerSub:   { fontSize:11, color:C.textLight, marginTop:1 },
-  optimizingRow:    { flexDirection:'row', backgroundColor:C.primaryGhost, borderRadius:10, padding:11, alignItems:'center', gap:9, marginBottom:10, borderWidth:1, borderColor:C.border },
-  optimizingTxt:    { color:C.textDark, fontWeight:'700', fontSize:13, flex:1 },
-
-  // Stats grid — white cards, green icon bg
-  statsGrid:        { flexDirection:'row', flexWrap:'wrap', gap:9, marginBottom:6 },
-  statCard:         { backgroundColor:C.white, borderRadius:14, padding:13, width:(width-50)/2, borderWidth:1.5, borderColor:C.divider },
-  statIconWrap:     { width:40, height:40, borderRadius:10, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center', marginBottom:8 },
-  statValue:        { fontSize:20, fontWeight:'900', color:C.textDark, letterSpacing:-0.5 },
-  statLabel:        { fontSize:11, color:C.textLight, marginTop:1, fontWeight:'600' },
-
-  // Quick grid — white cards
-  quickGrid:        { flexDirection:'row', flexWrap:'wrap', gap:9, marginBottom:12 },
-  quickCard:        { backgroundColor:C.white, borderRadius:13, paddingVertical:14, paddingHorizontal:6, width:(width-50)/3, alignItems:'center', borderWidth:1.5, borderColor:C.divider },
-  quickIconWrap:    { width:46, height:46, borderRadius:12, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center', marginBottom:7, position:'relative' },
-  quickLabel:       { fontSize:10, color:C.textDark, fontWeight:'700', textAlign:'center', lineHeight:14 },
-  quickBadge:       { position:'absolute', top:-3, right:-3, backgroundColor:C.primary, width:17, height:17, borderRadius:9, justifyContent:'center', alignItems:'center', borderWidth:2, borderColor:C.white },
-  quickBadgeTxt:    { color:C.white, fontSize:8, fontWeight:'900' },
-
-  notifBanner:      { flexDirection:'row', backgroundColor:C.primaryGhost, borderRadius:12, padding:12, alignItems:'center', marginBottom:12, gap:9, borderWidth:1, borderColor:C.border },
-  notifBannerTxt:   { flex:1, color:C.textDark, fontWeight:'700', fontSize:12 },
-
-  // Cards — white bg, black text
-  card:             { backgroundColor:C.white, borderRadius:14, padding:15, marginBottom:11, borderWidth:1.5, borderColor:C.divider },
-  cardTitle:        { fontSize:15, fontWeight:'800', color:C.textDark, letterSpacing:-0.3 },
-  cardLabel:        { fontSize:10, fontWeight:'800', color:C.textLight, textTransform:'uppercase', letterSpacing:1.2, marginBottom:13 },
-
-  vIconWrap:        { width:44, height:44, borderRadius:12, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center' },
-  pillBadge:        { borderRadius:16, paddingHorizontal:8, paddingVertical:3, backgroundColor:C.primaryPale, alignSelf:'flex-start' },
-  pillBadgeTxt:     { fontSize:10, fontWeight:'700', color:C.textMid },
-  paxBig:           { fontSize:24, fontWeight:'900', color:C.primary, letterSpacing:-1 },
-
-  statsRow:         { flexDirection:'row', backgroundColor:C.primaryGhost, borderRadius:12, padding:12, marginBottom:10, alignItems:'center', borderWidth:1, borderColor:C.divider },
-  statBox:          { flex:1, alignItems:'center', gap:3 },
-  statBoxVal:       { fontSize:13, fontWeight:'800', color:C.textDark },
-  statBoxLbl:       { fontSize:10, color:C.textLight },
-  statDiv:          { width:1, height:32, backgroundColor:C.border },
-
-  srcBadge:         { flexDirection:'row', alignItems:'center', gap:4, marginBottom:8, backgroundColor:C.primaryGhost, alignSelf:'flex-start', paddingHorizontal:8, paddingVertical:3, borderRadius:6 },
-  srcTxt:           { fontSize:10, color:C.textDark, fontWeight:'600' },
-
-  stopsHeader:      { flexDirection:'row', justifyContent:'space-between', alignItems:'center', marginBottom:8 },
-  stopsTitle:       { fontSize:10, fontWeight:'800', color:C.textLight, textTransform:'uppercase', letterSpacing:0.8 },
-  stopRow:          { flexDirection:'row', alignItems:'flex-start', marginBottom:7 },
-  stopDot:          { width:10, height:10, borderRadius:5, marginTop:3, marginRight:8 },
-  stopLineWrap:     { position:'absolute', left:4, top:13, bottom:-7, width:2, backgroundColor:C.divider },
-  stopLine:         { flex:1 },
-  stopName:         { fontSize:12, color:C.textDark, fontWeight:'600' },
-  stopAddr:         { fontSize:11, color:C.textLight, marginTop:1 },
-
-  paxRow:           { flexDirection:'row', alignItems:'center', gap:10, marginBottom:7 },
-  paxAvatar:        { width:34, height:34, borderRadius:10, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center' },
-
-  warnBox:          { flexDirection:'row', backgroundColor:'#FFFBEB', borderRadius:8, padding:9, alignItems:'center', gap:5, marginBottom:5, borderWidth:1, borderColor:'#FCD34D' },
-  warnTxt:          { flex:1, fontSize:11, fontWeight:'600', color:C.warning },
-
-  // Buttons — green primary, outline secondary
-  twoBtn:           { flexDirection:'row', gap:9, marginTop:13 },
-  discardBtn:       { flex:1, flexDirection:'row', justifyContent:'center', alignItems:'center', gap:5, padding:12, borderRadius:10, backgroundColor:C.error },
-  confirmBtn2:      { flex:2, flexDirection:'row', justifyContent:'center', alignItems:'center', gap:5, padding:12, borderRadius:10, backgroundColor:C.primary },
-  rejectBtn:        { flex:1, flexDirection:'row', justifyContent:'center', alignItems:'center', gap:5, padding:12, borderRadius:10, backgroundColor:C.error },
-  acceptBtn:        { flex:1.5, flexDirection:'row', justifyContent:'center', alignItems:'center', gap:5, padding:12, borderRadius:10, backgroundColor:C.primary },
-  btnTxt:           { color:C.white, fontWeight:'800', fontSize:13 },
-
-  primaryBtn:       { backgroundColor:C.primary, borderRadius:12, padding:14, flexDirection:'row', justifyContent:'center', alignItems:'center', gap:7, marginTop:5 },
-  primaryBtnTxt:    { color:C.white, fontWeight:'800', fontSize:14 },
-  outlineBtn:       { borderWidth:2, borderColor:C.primary, borderRadius:12, padding:12, flexDirection:'row', justifyContent:'center', alignItems:'center', gap:5, marginBottom:7, backgroundColor:C.white },
-  outlineBtnTxt:    { color:C.primary, fontWeight:'700', fontSize:13 },
-
-  howCard:          { backgroundColor:C.primaryGhost, borderRadius:14, padding:15, marginBottom:12, borderWidth:1, borderColor:C.border },
-  howTitle:         { fontSize:10, fontWeight:'800', color:C.textDark, marginBottom:11, letterSpacing:1.2 },
-  howStep:          { flexDirection:'row', alignItems:'flex-start', marginBottom:10, gap:10 },
-  howNum:           { width:26, height:26, borderRadius:13, backgroundColor:C.primary, justifyContent:'center', alignItems:'center', flexShrink:0, marginTop:2 },
-  howNumTxt:        { color:C.white, fontWeight:'900', fontSize:11 },
-  howStepTxt:       { fontSize:11, color:C.textLight, lineHeight:16, marginTop:2 },
-
-  tipCard:          { flexDirection:'row', backgroundColor:C.primaryGhost, borderRadius:12, padding:13, alignItems:'flex-start', marginBottom:9, borderWidth:1.5, borderColor:C.border },
-  tipTitle:         { fontSize:12, fontWeight:'800', color:C.textDark, marginBottom:2 },
-  tipTxt:           { fontSize:12, color:C.textLight, lineHeight:17 },
-
-  driverGrid:       { flexDirection:'row', flexWrap:'wrap', gap:9, marginBottom:7 },
-  driverCard:       { backgroundColor:C.white, borderRadius:14, padding:11, width:(width-40)/2, flexDirection:'row', gap:9, borderWidth:1.5, borderColor:C.divider },
-  driverAvatar:     { width:40, height:40, borderRadius:10, justifyContent:'center', alignItems:'center', position:'relative' },
-  driverAvatarTxt:  { color:C.white, fontWeight:'900', fontSize:13 },
-  driverDot:        { position:'absolute', bottom:-1, right:-1, width:10, height:10, borderRadius:5, borderWidth:2, borderColor:C.white },
-  driverName:       { fontSize:12, fontWeight:'800', color:C.textDark, flex:1 },
-  driverSub:        { fontSize:10, color:C.textLight, marginTop:1, marginBottom:3 },
-  capRow:           { flexDirection:'row', alignItems:'center', gap:4, marginBottom:3 },
-  capTxt:           { fontSize:9, color:C.textLight, width:26 },
-  capBg:            { flex:1, height:4, backgroundColor:C.divider, borderRadius:2 },
-  capFill:          { height:4, borderRadius:2 },
-
-  profileHero:      { alignItems:'center', paddingTop:22, paddingBottom:22, marginTop:8, marginBottom:11, backgroundColor:C.white, borderRadius:16, borderWidth:1.5, borderColor:C.divider, overflow:'hidden' },
-  profileHeroBg:    { position:'absolute', top:0, left:0, right:0, height:70, backgroundColor:C.primary },
-  profileName:      { fontSize:20, fontWeight:'900', color:C.textDark, marginTop:10, letterSpacing:-0.4 },
-  profileCo:        { fontSize:13, color:C.textLight, marginTop:3 },
-  activeChip:       { flexDirection:'row', alignItems:'center', gap:5, backgroundColor:C.primaryGhost, borderRadius:16, paddingHorizontal:9, paddingVertical:4, marginTop:7, alignSelf:'flex-start', borderWidth:1, borderColor:C.border },
-  activeDot:        { width:6, height:6, borderRadius:3, backgroundColor:C.primary },
-  activeChipTxt:    { fontSize:10, fontWeight:'800', color:C.primary },
-  profileRow:       { flexDirection:'row', alignItems:'center', paddingVertical:10, borderBottomWidth:1, borderBottomColor:C.divider },
-  profileRowIcon:   { width:32, height:32, borderRadius:9, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center', marginRight:11 },
-  profileRowLabel:  { fontSize:10, color:C.textLight, fontWeight:'600' },
-  profileRowValue:  { fontSize:13, color:C.textDark, fontWeight:'600', marginTop:1 },
-
-  inputLabel:       { fontSize:12, fontWeight:'700', color:C.textMid, marginBottom:5 },
-  inputRow:         { flexDirection:'row', alignItems:'center', borderWidth:1.5, borderColor:C.border, borderRadius:10, padding:11, backgroundColor:C.white, marginBottom:11 },
-  inputInner:       { flex:1, fontSize:14, color:C.textDark, padding:0 },
-
-  slotTag:          { flexDirection:'row', alignItems:'center', gap:4, backgroundColor:C.primaryGhost, borderRadius:16, paddingHorizontal:9, paddingVertical:6, borderWidth:1.5, borderColor:C.border },
-  slotTagTxt:       { fontSize:12, color:C.textDark, fontWeight:'700' },
-  addTimeBtn:       { flexDirection:'row', alignItems:'center', gap:7, padding:11, borderRadius:10, borderWidth:1.5, borderColor:C.primary, borderStyle:'dashed', backgroundColor:C.primaryGhost, marginBottom:3 },
-  addTimeTxt:       { color:C.primary, fontWeight:'700', fontSize:13 },
-
-  pollCard:         { backgroundColor:C.white, borderRadius:14, padding:15, marginBottom:11, borderWidth:1.5, borderColor:C.divider },
-  pollIcon:         { width:36, height:36, borderRadius:10, backgroundColor:C.primary, justifyContent:'center', alignItems:'center' },
-  pollTitle:        { fontSize:14, fontWeight:'800', color:C.textDark },
-  pollMeta:         { fontSize:11, color:C.textLight, marginTop:1 },
-  slotMini:         { backgroundColor:C.primaryPale, borderRadius:6, paddingHorizontal:7, paddingVertical:2 },
-  slotMiniTxt:      { fontSize:10, color:C.textDark, fontWeight:'700' },
-  deletePollBtn:    { width:34, height:34, borderRadius:9, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center' },
-  respRow:          { flexDirection:'row', gap:7, marginTop:11 },
-  respBox:          { flex:1, borderRadius:10, padding:9, alignItems:'center' },
-  respNum:          { fontSize:20, fontWeight:'900', letterSpacing:-0.5 },
-  respLbl:          { fontSize:10, color:C.textLight, marginTop:2, fontWeight:'500' },
-
-  reqAvatar:        { width:44, height:44, borderRadius:12, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center' },
-  detailRow:        { flexDirection:'row', alignItems:'center', gap:6 },
-  detailTxt:        { fontSize:12, color:C.textMid, flex:1 },
-  vBadge:           { flexDirection:'row', alignItems:'center', backgroundColor:C.primaryGhost, borderRadius:10, padding:9, marginTop:7, borderWidth:1, borderColor:C.border },
-  vBadgeLbl:        { fontSize:10, color:C.textLight, fontWeight:'600' },
-  vBadgeVal:        { fontSize:12, color:C.textDark, fontWeight:'700', marginTop:1 },
-
-  selectItem:       { flexDirection:'row', alignItems:'center', padding:11, borderRadius:10, borderWidth:1.5, borderColor:C.border, marginBottom:7 },
-  selectItemOn:     { borderColor:C.primary, backgroundColor:C.primaryGhost },
-  selectItemTitle:  { fontSize:13, fontWeight:'700', color:C.textDark },
-  selectItemSub:    { fontSize:11, color:C.textLight, marginTop:1 },
-
-  mapWrap:          { height:175, borderRadius:14, overflow:'hidden', marginBottom:11, marginTop:7, borderWidth:1.5, borderColor:C.border },
-
-  modalHdr:         { flexDirection:'row', justifyContent:'space-between', alignItems:'center', padding:15, backgroundColor:C.white, borderBottomWidth:1, borderBottomColor:C.divider },
-  modalBackBtn:     { width:36, height:36, borderRadius:9, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center' },
-  modalTitle:       { fontSize:17, fontWeight:'800', color:C.textDark },
-
-  emptyState:       { alignItems:'center', paddingVertical:40, paddingHorizontal:20 },
-  emptyIconWrap:    { width:72, height:72, borderRadius:20, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center', marginBottom:12, borderWidth:2, borderColor:C.border },
-  emptyTxt:         { fontSize:15, fontWeight:'700', color:C.textMid },
-  emptySub:         { fontSize:12, color:C.textLight, textAlign:'center', marginTop:5, lineHeight:18 },
+  root:              { flex:1, backgroundColor:C.offWhite },
+  loaderScreen:      { flex:1, backgroundColor:C.white, justifyContent:'center', alignItems:'center' },
+  loaderLogo:        { width:80, height:80, borderRadius:20, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center', borderWidth:2, borderColor:C.border },
+  header:            { backgroundColor:C.headerBg, flexDirection:'row', alignItems:'center', paddingHorizontal:12, paddingVertical:14, elevation:4, shadowColor:'#000', shadowOffset:{width:0,height:2}, shadowOpacity:0.15, shadowRadius:4 },
+  headerTitle:       { fontSize:17, fontWeight:'900', color:C.white, letterSpacing:0.2 },
+  headerBtn:         { padding:6, position:'relative' },
+  headerBadge:       { position:'absolute', top:2, right:2, backgroundColor:C.error, borderRadius:9, minWidth:18, height:18, justifyContent:'center', alignItems:'center', borderWidth:1.5, borderColor:C.white },
+  headerBadgeTxt:    { fontSize:9, color:C.white, fontWeight:'900' },
+  section:           { flex:1, paddingHorizontal:14, paddingTop:14 },
+  sectionLabel:      { fontSize:12, fontWeight:'900', color:C.textLight, letterSpacing:1.5, textTransform:'uppercase', marginBottom:10, marginTop:6 },
+  sidebar:           { position:'absolute', left:0, top:0, bottom:0, width:280, backgroundColor:C.white, elevation:20, shadowColor:'#000', shadowOffset:{width:2,height:0}, shadowOpacity:0.15, shadowRadius:8, zIndex:100 },
+  sidebarOverlay:    { position:'absolute', left:0, top:0, right:0, bottom:0, backgroundColor:'rgba(0,0,0,0.45)', zIndex:99 },
+  sidebarHdr:        { backgroundColor:C.headerBg, padding:20, paddingTop:44, flexDirection:'row', alignItems:'center' },
+  sidebarName:       { fontSize:15, fontWeight:'900', color:C.white },
+  sidebarCo:         { fontSize:12, color:'rgba(255,255,255,0.8)', marginTop:2 },
+  sidebarStatus:     { flexDirection:'row', alignItems:'center', gap:5, marginTop:5 },
+  sidebarDot:        { width:7, height:7, borderRadius:4, backgroundColor:C.primary },
+  sidebarStatusTxt:  { fontSize:11, color:C.primaryLight, fontWeight:'700' },
+  sidebarClose:      { padding:6, marginLeft:'auto' },
+  menuItem:          { flexDirection:'row', alignItems:'center', paddingHorizontal:16, paddingVertical:12, gap:12, position:'relative' },
+  menuItemOn:        { backgroundColor:C.primaryGhost },
+  menuBar:           { position:'absolute', left:0, top:8, bottom:8, width:3, backgroundColor:C.primary, borderRadius:2 },
+  menuIconWrap:      { width:34, height:34, borderRadius:9, backgroundColor:C.offWhite, justifyContent:'center', alignItems:'center' },
+  menuIconOn:        { backgroundColor:C.primary },
+  menuTxt:           { flex:1, fontSize:14, fontWeight:'600', color:C.textMid },
+  menuTxtOn:         { color:C.black, fontWeight:'800' },
+  menuBadge:         { backgroundColor:C.error, borderRadius:10, minWidth:20, height:20, justifyContent:'center', alignItems:'center', paddingHorizontal:4 },
+  menuBadgeTxt:      { fontSize:10, color:C.white, fontWeight:'900' },
+  menuDivider:       { height:1, backgroundColor:C.divider, marginHorizontal:16, marginVertical:8 },
+  logoutItem:        { flexDirection:'row', alignItems:'center', paddingHorizontal:16, paddingVertical:12, gap:12 },
+  welcomeCard:       { backgroundColor:C.primary, borderRadius:16, padding:18, marginBottom:14, elevation:3, shadowColor:'#000', shadowOffset:{width:0,height:2}, shadowOpacity:0.1, shadowRadius:4 },
+  welcomeCardInner:  { flexDirection:'row', alignItems:'center', justifyContent:'space-between', marginBottom:16 },
+  welcomeGreet:      { fontSize:13, color:C.black, fontWeight:'600', opacity:0.7 },
+  welcomeName:       { fontSize:20, fontWeight:'900', color:C.black, marginTop:2 },
+  welcomeTime:       { fontSize:11, color:C.black, opacity:0.55, marginTop:3 },
+  welcomeStrip:      { flexDirection:'row', justifyContent:'space-around', borderTopWidth:1, borderTopColor:'rgba(0,0,0,0.1)', paddingTop:14 },
+  stripVal:          { fontSize:22, fontWeight:'900', color:C.black, textAlign:'center' },
+  stripLbl:          { fontSize:11, color:C.black, opacity:0.6, textAlign:'center', marginTop:2 },
+  stripDiv:          { width:1, backgroundColor:'rgba(0,0,0,0.12)' },
+  alertBanner:       { backgroundColor:C.error, borderRadius:10, flexDirection:'row', alignItems:'center', padding:12, gap:8, marginBottom:10 },
+  alertBannerTxt:    { flex:1, color:C.white, fontWeight:'700', fontSize:13 },
+  pendingBanner:     { backgroundColor:C.white, borderRadius:10, flexDirection:'row', alignItems:'center', padding:12, gap:10, marginBottom:8, borderWidth:1, borderColor:C.border, elevation:1 },
+  pendingDot:        { width:9, height:9, borderRadius:5 },
+  pendingBannerTxt:  { flex:1, fontSize:13, fontWeight:'600', color:C.textDark },
+  statsGrid:         { flexDirection:'row', flexWrap:'wrap', gap:10, marginBottom:16 },
+  statCard:          { flex:1, minWidth:(width-52)/2, backgroundColor:C.white, borderRadius:12, padding:14, borderWidth:1.5, borderColor:C.border, elevation:1 },
+  statIconWrap:      { width:32, height:32, borderRadius:8, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center', marginBottom:8 },
+  statValue:         { fontSize:22, fontWeight:'900', color:C.black },
+  statLabel:         { fontSize:11, color:C.textLight, marginTop:2, fontWeight:'600' },
+  quickGrid:         { flexDirection:'row', flexWrap:'wrap', gap:10, marginBottom:16 },
+  quickBtn:          { flex:1, minWidth:(width-52)/2, backgroundColor:C.white, borderRadius:12, padding:14, alignItems:'center', borderWidth:1.5, borderColor:C.border, elevation:1 },
+  quickIconWrap:     { width:44, height:44, borderRadius:12, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center', marginBottom:8 },
+  quickLabel:        { fontSize:12, fontWeight:'700', color:C.textDark, textAlign:'center' },
+  card:              { backgroundColor:C.white, borderRadius:14, padding:14, marginBottom:12, borderWidth:1.5, borderColor:C.border, elevation:2, shadowColor:'#000', shadowOffset:{width:0,height:1}, shadowOpacity:0.06, shadowRadius:3, overflow:'hidden', position:'relative' },
+  cardAccentBar:     { position:'absolute', left:0, top:0, bottom:0, width:4, borderTopLeftRadius:14, borderBottomLeftRadius:14 },
+  cardTitle:         { fontSize:15, fontWeight:'800', color:C.textDark, paddingLeft:8 },
+  chip:              { flexDirection:'row', alignItems:'center', paddingHorizontal:8, paddingVertical:3, borderRadius:6, backgroundColor:C.primaryGhost, borderWidth:1.5, borderColor:C.border, alignSelf:'flex-start' },
+  chipTxt:           { fontSize:11, fontWeight:'700', color:C.primaryDark },
+  detailRow:         { flexDirection:'row', alignItems:'center', gap:7 },
+  detailTxt:         { fontSize:12, color:C.textMid, flex:1 },
+  fuelBadge:         { flexDirection:'row', alignItems:'center', backgroundColor:C.primaryGhost, borderRadius:10, padding:10, marginTop:10, borderWidth:1.5, borderColor:C.border },
+  fuelBadgeType:     { fontSize:13, fontWeight:'800', color:C.black },
+  fuelBadgeVal:      { fontSize:13, fontWeight:'700', color:C.primaryDark, marginTop:1 },
+  fuelBadgeNote:     { fontSize:11, color:C.textLight, marginTop:2 },
+  statsRow:          { flexDirection:'row', backgroundColor:C.primaryGhost, borderRadius:10, padding:10, marginBottom:10, borderWidth:1.5, borderColor:C.border },
+  statBox:           { flex:1, alignItems:'center', gap:3 },
+  statBoxVal:        { fontSize:13, fontWeight:'800', color:C.textDark },
+  statBoxLbl:        { fontSize:10, color:C.textLight, fontWeight:'600' },
+  statDiv:           { width:1, backgroundColor:C.border },
+  scoreBubble:       { width:50, height:50, borderRadius:25, borderWidth:2.5, justifyContent:'center', alignItems:'center', backgroundColor:C.white },
+  scoreNum:          { fontSize:16, fontWeight:'900', lineHeight:18 },
+  scoreLbl:          { fontSize:9, fontWeight:'700', color:C.textLight },
+  vIconWrap:         { width:44, height:44, borderRadius:10, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center', borderWidth:1.5, borderColor:C.border },
+  srcBadge:          { flexDirection:'row', alignItems:'center', gap:6, backgroundColor:C.offWhite, borderRadius:8, padding:8, marginTop:8, borderWidth:1, borderColor:C.divider },
+  srcTxt:            { fontSize:11, color:C.textLight, flex:1 },
+  stopsHeader:       { flexDirection:'row', alignItems:'center', justifyContent:'space-between', paddingVertical:10, marginTop:6, borderTopWidth:1, borderTopColor:C.divider },
+  stopsTitle:        { fontSize:13, fontWeight:'800', color:C.textDark, paddingLeft:8 },
+  stopRow:           { flexDirection:'row', alignItems:'flex-start', gap:10, paddingVertical:6, paddingLeft:8 },
+  stopDot:           { width:10, height:10, borderRadius:5, marginTop:3 },
+  stopName:          { fontSize:13, fontWeight:'700', color:C.textDark },
+  stopAddr:          { fontSize:11, color:C.textLight, marginTop:1 },
+  paxRow:            { flexDirection:'row', alignItems:'center', gap:10, paddingVertical:5, paddingLeft:8 },
+  paxAvatar:         { width:30, height:30, borderRadius:15, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center', borderWidth:1.5, borderColor:C.border },
+  warnBox:           { flexDirection:'row', alignItems:'flex-start', gap:6, backgroundColor:C.warningLight, borderRadius:8, padding:8, marginTop:6, borderWidth:1, borderColor:C.warning },
+  warnTxt:           { fontSize:11, color:C.warning, flex:1, fontWeight:'600' },
+  optimizingBanner:  { flexDirection:'row', alignItems:'center', gap:10, backgroundColor:C.primary, borderRadius:10, padding:12, marginBottom:12 },
+  optimizingTxt:     { fontSize:13, fontWeight:'700', flex:1 },
+  twoBtn:            { flexDirection:'row', gap:10, marginTop:14 },
+  btnTxt:            { fontSize:13, fontWeight:'800', color:C.white },
+  discardBtn:        { flex:1, flexDirection:'row', alignItems:'center', justifyContent:'center', gap:6, backgroundColor:C.error, borderRadius:10, padding:12 },
+  rejectBtn:         { flex:1, flexDirection:'row', alignItems:'center', justifyContent:'center', gap:6, backgroundColor:C.error, borderRadius:10, padding:12 },
+  acceptBtn:         { flex:2, flexDirection:'row', alignItems:'center', justifyContent:'center', gap:6, backgroundColor:C.primary, borderRadius:10, padding:12 },
+  confirmBtnGreen:   { flex:2, flexDirection:'row', alignItems:'center', justifyContent:'center', gap:6, backgroundColor:C.primary, borderRadius:10, padding:12 },
+  driverCard:        { flexDirection:'row', alignItems:'center', gap:12, backgroundColor:C.white, borderRadius:12, padding:12, marginBottom:8, borderWidth:1.5, borderColor:C.border, elevation:1 },
+  driverAvatar:      { width:44, height:44, borderRadius:22, backgroundColor:C.primary, justifyContent:'center', alignItems:'center', position:'relative' },
+  driverAvatarTxt:   { fontSize:14, fontWeight:'900', color:C.black },
+  driverDot:         { position:'absolute', bottom:1, right:1, width:10, height:10, borderRadius:5, borderWidth:1.5, borderColor:C.white },
+  driverName:        { fontSize:14, fontWeight:'800', color:C.textDark, flex:1 },
+  driverSub:         { fontSize:11, color:C.textLight, marginTop:1 },
+  capRow:            { flexDirection:'row', alignItems:'center', gap:8, marginTop:5 },
+  capTxt:            { fontSize:11, fontWeight:'700', color:C.textMid, width:30 },
+  capBg:             { flex:1, height:5, backgroundColor:C.primaryGhost, borderRadius:3 },
+  capFill:           { height:5, borderRadius:3 },
+  reqAvatar:         { width:48, height:48, borderRadius:24, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center', borderWidth:1.5, borderColor:C.border },
+  vBadge:            { flexDirection:'row', alignItems:'center', backgroundColor:C.primaryGhost, borderRadius:10, padding:10, borderWidth:1.5, borderColor:C.border },
+  vBadgeLbl:         { fontSize:9, fontWeight:'900', color:C.textLight, letterSpacing:0.8 },
+  vBadgeVal:         { fontSize:13, fontWeight:'700', color:C.textDark, marginTop:2 },
+  profileDivider:    { height:1, backgroundColor:C.divider, marginVertical:14 },
+  profileIconWrap:   { width:28, height:28, borderRadius:7, backgroundColor:C.primaryGhost, justifyContent:'center', alignItems:'center', marginRight:4 },
+  input:             { borderWidth:1.5, borderColor:C.border, borderRadius:10, padding:12, fontSize:14, color:C.textDark, backgroundColor:C.white, marginBottom:4 },
+  inputLabel:        { fontSize:12, fontWeight:'700', color:C.textMid, marginBottom:6, marginTop:8 },
+  trackingOverlay:   { position:'absolute', bottom:20, left:20, right:20, backgroundColor:'rgba(0,0,0,0.7)', borderRadius:12, flexDirection:'row', alignItems:'center', gap:8, padding:12 },
+  trackingOverlayTxt:{ color:C.white, fontSize:13, fontWeight:'600', flex:1 },
+  emptyState:        { alignItems:'center', paddingVertical:40, gap:10 },
+  emptyTxt:          { fontSize:14, color:C.textLight, textAlign:'center', fontWeight:'500', maxWidth:260 },
 });
 
 export default TransporterDashboard;
